@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Pulumi
+.pulumi/
+Pulumi.*.yaml.bak
+
+# Environment files (NEVER commit secrets)
+.env
+.env.*
+!.env.template
+docker/.env
+
+# TypeScript
+*.js
+*.js.map
+*.d.ts
+!pulumi/*.ts
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary
+tmp/
+temp/

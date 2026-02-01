@@ -1,0 +1,6 @@
+name: openclaw-infra
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: OpenClaw Gateway Infrastructure - Secure deployment on Hetzner VPS with Tailscale

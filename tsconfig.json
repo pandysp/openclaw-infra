@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": "./pulumi",
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["pulumi/**/*"],
+  "exclude": ["node_modules"]
+}

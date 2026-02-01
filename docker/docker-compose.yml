@@ -1,0 +1,40 @@
+# OpenClaw Docker Compose Configuration
+#
+# This file is a REFERENCE - the actual compose file is generated
+# by cloud-init on the server. Use this for local testing only.
+#
+# Security notes:
+# - Binds to localhost ONLY (Tailscale Serve handles external access)
+# - no-new-privileges prevents privilege escalation
+# - All capabilities dropped except those needed
+
+services:
+  openclaw:
+    image: ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
+    container_name: openclaw
+    restart: unless-stopped
+    ports:
+      # CRITICAL: Bind to localhost ONLY
+      # Tailscale Serve proxies external access
+      - "127.0.0.1:18789:8080"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - openclaw-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Don't set read_only:true - the container needs to write
+    tmpfs:
+      - /tmp:mode=1777
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  openclaw-data:
+    driver: local
