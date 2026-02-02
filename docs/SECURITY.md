@@ -262,6 +262,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-open
 - [ ] **Hetzner Project is dedicated to OpenClaw** (not shared with other infra)
 - [ ] Hetzner API token is unique to this project
 - [ ] Hetzner firewall has NO inbound rules
+- [ ] UFW enabled with default deny incoming, allow tailscale0
 - [ ] SSH keys are Pulumi-generated (no password auth)
 - [ ] Tailscale auth key is ephemeral/reusable
 - [ ] Setup token is set via `pulumi config set --secret`
@@ -270,16 +271,38 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-open
 ### Verification
 
 - [ ] `./scripts/verify.sh` passes all checks
-- [ ] No ports are publicly accessible
+- [ ] No ports are publicly accessible (check with `nmap`)
 - [ ] Tailscale Serve is configured correctly
 - [ ] Service runs as unprivileged user
+- [ ] `openclaw security audit --deep` shows 0 critical issues
+- [ ] UFW status shows only tailscale0 allowed
 
-### Ongoing
+### Ongoing Monitoring
 
-- [ ] Monitor Tailscale admin console for unexpected devices
-- [ ] Rotate setup token periodically
-- [ ] OS updates applied automatically via unattended-upgrades
-- [ ] Review npm package updates
+**Weekly:**
+- [ ] Check Tailscale admin console for unexpected devices: https://login.tailscale.com/admin/machines
+- [ ] Review paired OpenClaw devices: `openclaw devices list`
+- [ ] Check for OpenClaw updates: `npm outdated -g openclaw`
+
+**Monthly:**
+- [ ] Review Tailscale ACLs if using shared tailnet
+- [ ] Check unattended-upgrades logs for failed updates
+- [ ] Run `openclaw security audit --deep`
+
+**Quarterly:**
+- [ ] Rotate Tailscale auth key (generate new, update Pulumi config)
+- [ ] Rotate Claude setup token (`claude setup-token`)
+- [ ] Review and remove unused paired devices
+- [ ] Check Hetzner project for unexpected resources
+
+### Key Rotation Schedule
+
+| Secret | Rotation Frequency | How to Rotate |
+|--------|-------------------|---------------|
+| Tailscale auth key | Quarterly | Generate at tailscale.com, `pulumi config set tailscaleAuthKey --secret` |
+| Claude setup token | Quarterly | `claude setup-token`, `pulumi config set claudeSetupToken --secret` |
+| Gateway token | On compromise only | `pulumi up` (auto-generates new token) |
+| Pulumi passphrase | On compromise only | Cannot rotate - must redeploy from scratch |
 
 ## Incident Response
 

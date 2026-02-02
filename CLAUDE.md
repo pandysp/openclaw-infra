@@ -200,6 +200,34 @@ pulumi stack import --file state.json  # Import to cloud backend
 
 For a single personal server, local state is fine.
 
+### Pulumi ESC (for CI/CD)
+
+For CI/CD pipelines or team deployments, consider using **Pulumi ESC** (Environments, Secrets, and Configuration) instead of local passphrase encryption:
+
+| Approach | Best For | How Secrets Are Stored |
+|----------|----------|----------------------|
+| **Local passphrase** (current) | Personal use, single machine | Encrypted locally with passphrase |
+| **Pulumi ESC** | CI/CD, teams, multiple machines | Cloud-hosted, accessed via Pulumi Cloud |
+
+**Benefits of ESC:**
+- No passphrase to manage in CI/CD pipelines
+- Centralized secrets management across environments
+- Audit logging for secret access
+- Dynamic secrets (e.g., short-lived cloud credentials)
+
+**Migration to ESC:**
+```bash
+# Create ESC environment
+pulumi env init <your-org>/openclaw-secrets
+
+# Add secrets to environment (via Pulumi Cloud console or CLI)
+# Then reference in Pulumi.prod.yaml:
+# environment:
+#   - <your-org>/openclaw-secrets
+```
+
+See [Pulumi ESC documentation](https://www.pulumi.com/docs/esc/) for details.
+
 ## Directory Structure
 
 ```
@@ -308,6 +336,9 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 - Check that no public ports are exposed
 - Store your Pulumi passphrase in a password manager
 - **Clean up cloud-init log after deployment** (contains secrets)
+- **Monitor Tailscale admin console** for unauthorized devices: https://login.tailscale.com/admin/machines
+- **Rotate Tailscale auth keys periodically** (see [Key Rotation](#key-rotation) below)
+- **Review paired OpenClaw devices** regularly: `openclaw devices list`
 
 ### DON'T
 
@@ -316,6 +347,22 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 - Never bind OpenClaw to 0.0.0.0
 - Never commit `.env` files, API keys, or Pulumi passphrase
 - Never use password SSH authentication
+
+### Key Rotation
+
+**Tailscale auth key:**
+1. Generate new key at https://login.tailscale.com/admin/settings/keys
+2. Update Pulumi config: `pulumi config set tailscaleAuthKey --secret`
+3. Redeploy: `pulumi up` (or update manually on server)
+
+**Claude setup token:**
+1. Run `claude setup-token` locally
+2. Update Pulumi config: `pulumi config set claudeSetupToken --secret`
+3. Redeploy or update on server: `openclaw auth login`
+
+**Gateway token** (auto-generated, rarely needs rotation):
+1. Redeploy with `pulumi up` (generates new token)
+2. Re-pair browser devices after rotation
 
 ## Secrets Reference
 
