@@ -42,7 +42,7 @@ export function createFirewall(name: string): hcloud.Firewall {
             // NO INBOUND RULES - This is intentional!
             // Tailscale uses NAT traversal (hole punching) which doesn't
             // require inbound firewall rules. All connections are established
-            // outbound first.
+            // outbound first. SSH access is via Tailscale SSH (--ssh flag).
         ],
         labels: {
             project: "openclaw",

@@ -2,6 +2,50 @@
 
 Common issues and solutions for OpenClaw deployment.
 
+## Local Setup Issues
+
+### Pulumi "passphrase must be set" error
+
+**Symptom**: `pulumi stack init` fails with passphrase error.
+
+**Solution**: Set the passphrase environment variable:
+```bash
+# Option 1: Set per-command
+PULUMI_CONFIG_PASSPHRASE="your-passphrase" pulumi stack init prod
+
+# Option 2: Export for session
+export PULUMI_CONFIG_PASSPHRASE="your-passphrase"
+```
+
+### Tailscale stuck on "VPN starting..."
+
+**Symptom**: macOS Tailscale app shows "VPN starting..." indefinitely.
+
+**Solutions**:
+1. Check System Settings → Privacy & Security for pending approvals
+2. Look for "Tailscale" blocked message and click "Allow"
+3. Quit and reopen Tailscale (menu bar icon → Quit Tailscale)
+4. If still stuck, restart your Mac
+
+### Tailscale System Extension blocked
+
+**Symptom**: macOS blocks Tailscale kernel extension.
+
+**Solution**:
+1. Open System Settings → Privacy & Security
+2. Scroll down to see blocked extension message
+3. Click "Allow" next to Tailscale
+4. May require restart
+
+### brew install tailscale requires password
+
+**Symptom**: `brew install --cask tailscale` prompts for sudo password.
+
+**Solution**: Run in an interactive terminal (not from an IDE or script):
+```bash
+brew install --cask tailscale
+```
+
 ## Deployment Issues
 
 ### Pulumi fails with "unauthorized"
@@ -24,10 +68,23 @@ pulumi config set hcloud:token --secret
 # SSH via Hetzner console (fallback)
 # Check cloud-init status
 cloud-init status
+
 # View the log
 sudo cat /var/log/cloud-init-openclaw.log
-# Common issue: Docker pull is slow
-docker pull ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
+
+# Common issue: npm install is slow on first run
+# Check if Node.js is installed
+source ~/.nvm/nvm.sh && node --version
+```
+
+### Missing @pulumi/random module
+
+**Symptom**: `pulumi preview` fails with "Cannot find module '@pulumi/random'".
+
+**Solution**:
+```bash
+cd ~/projects/openclaw-infra
+npm install
 ```
 
 ## Connectivity Issues
@@ -39,7 +96,7 @@ docker pull ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
 **Causes & Solutions**:
 
 1. **Cloud-init not complete**
-   - Wait 3-5 minutes after deployment
+   - Wait 5 minutes after deployment
    - Check Tailscale admin console for the device
 
 2. **Auth key expired**
@@ -64,47 +121,125 @@ ssh -o ProxyCommand="tailscale nc %h %p" ubuntu@openclaw-vps
 # https://tailscale.com/kb/1193/tailscale-ssh
 ```
 
-## Container Issues
+## OpenClaw Service Issues
 
-### Container not starting
+### Service not running
 
-**Symptom**: `docker ps` shows no openclaw container.
+**Symptom**: Gateway not responding, service inactive.
 
 **Diagnosis**:
 ```bash
-# Check service status
-sudo systemctl status openclaw
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net
+
+# Check service status (user service requires XDG_RUNTIME_DIR)
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway
 
 # Check logs
-sudo journalctl -u openclaw -n 100
+XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100
 
-# Check docker directly
-cd /opt/openclaw
-docker compose logs
+# Check if the service file exists
+ls -la ~/.config/systemd/user/openclaw.service
 ```
 
 **Common causes**:
-- Missing API key in `.env`
-- Image pull failed (check network)
-- Disk full (check `df -h`)
+- Setup token invalid or expired
+- Node.js not in PATH (NVM not sourced)
+- User lingering not enabled
 
-### Container keeps restarting
+**Fixes**:
+```bash
+# Re-enable user lingering
+sudo loginctl enable-linger ubuntu
 
-**Symptom**: Container status shows "Restarting" loop.
+# Restart user systemd
+systemctl start user@1000.service
+
+# Reinstall daemon
+source ~/.nvm/nvm.sh
+XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway
+```
+
+### Service keeps restarting
+
+**Symptom**: Service shows "activating (auto-restart)" or crash loop.
 
 **Diagnosis**:
 ```bash
-# Check container logs
-docker logs openclaw --tail 100
+# Check recent logs for errors
+XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 200
 
-# Check for crash reasons
-docker inspect openclaw | jq '.[0].State'
+# Check if OpenClaw is installed
+source ~/.nvm/nvm.sh
+which openclaw
+openclaw --version
 ```
 
 **Common causes**:
-- Invalid API key format
+- Invalid setup token format
 - Port conflict (something else on 18789)
-- Resource limits hit
+- Node.js version mismatch (needs v22+)
+
+### Node.js not found
+
+**Symptom**: Service fails with "node: command not found".
+
+**Solution**: NVM needs to be sourced in the service environment.
+```bash
+# Verify Node.js is installed
+source ~/.nvm/nvm.sh
+node --version  # Should show v22.x.x
+
+# If missing, reinstall
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.nvm/nvm.sh
+nvm install 22
+nvm alias default 22
+
+# Reinstall OpenClaw
+npm install -g openclaw@latest
+
+# Reinstall daemon
+XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
+```
+
+## Setup Token Issues
+
+### Token expired or invalid
+
+**Symptom**: OpenClaw fails to authenticate, logs show auth errors.
+
+**Solution**:
+```bash
+# Generate new setup token locally
+claude setup-token
+
+# Update on server
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net
+source ~/.nvm/nvm.sh
+
+# Re-run onboarding with new token
+openclaw onboard --non-interactive --accept-risk \
+    --mode local \
+    --auth-choice setup-token \
+    --token "YOUR_NEW_TOKEN" \
+    --gateway-port 18789 \
+    --gateway-bind loopback \
+    --skip-daemon \
+    --skip-skills
+
+# Restart service
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
+```
+
+### /status shows no usage tracking
+
+**Symptom**: OpenClaw works but /status endpoint doesn't show usage.
+
+**Cause**: This is expected behavior. Setup tokens only have `user:inference` scope (missing `user:profile`), so usage tracking isn't available. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
+
+**Workaround**: None currently. This is a limitation of setup tokens.
 
 ## Tailscale Serve Issues
 
@@ -119,16 +254,16 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 # Check serve status
 tailscale serve status
 
-# Check if container is listening
+# Check if gateway is listening
 curl http://127.0.0.1:18789/
 
 # Check if serve is running
-sudo netstat -tlnp | grep tailscale
+sudo ss -tlnp | grep tailscale
 ```
 
 **Fix if serve not configured**:
 ```bash
-tailscale serve --bg https / http://127.0.0.1:18789
+tailscale serve --bg 18789
 ```
 
 ### HTTPS certificate errors
@@ -150,12 +285,12 @@ tailscale serve --bg https / http://127.0.0.1:18789
    - Consider different Hetzner location
 
 2. **Resource constraints**
-   - CAX11 has 2 vCPU, 4GB RAM
-   - Upgrade to CAX21 for more resources
+   - CAX21 has 4 vCPU, 8GB RAM
+   - Check resource usage: `htop`
 
-3. **Docker resource limits**
-   - Check: `docker stats`
-   - Increase limits in docker-compose.yml if needed
+3. **NVM overhead**
+   - Node.js via NVM adds slight startup overhead
+   - Not significant for running service
 
 ### High CPU usage
 
@@ -163,13 +298,15 @@ tailscale serve --bg https / http://127.0.0.1:18789
 ```bash
 # On server
 htop
-docker stats
+
+# Check OpenClaw specifically
+ps aux | grep openclaw
 ```
 
 **Solutions**:
 - OpenClaw is CPU-intensive during browser automation
 - Consider larger instance type
-- Check for runaway processes in container
+- Check for runaway processes
 
 ## Recovery Procedures
 
@@ -187,34 +324,42 @@ pulumi destroy
 # Redeploy
 pulumi up
 
-# Wait for cloud-init (~3 min)
+# Wait for cloud-init (~5 min)
 ./scripts/verify.sh
+
+# Clean up cloud-init log
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
 ```
 
-### Restore from backup
+### Manual service restart
 
 ```bash
-# Run backup script to download data
-./scripts/backup.sh
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
-# Extract
-tar xzf backups/openclaw-backup-*.tar.gz
+# Set environment and restart
+export XDG_RUNTIME_DIR=/run/user/1000
+source ~/.nvm/nvm.sh
 
-# After fresh deployment, copy data back
-scp volume-data.tar.gz ubuntu@openclaw-vps.<tailnet>.ts.net:/tmp/
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net << 'EOF'
-cd /opt/openclaw
-docker compose down
-docker run --rm -v openclaw-data:/data -v /tmp:/backup alpine \
-    sh -c "rm -rf /data/* && tar xzf /backup/volume-data.tar.gz -C /data"
-docker compose up -d
-rm /tmp/volume-data.tar.gz
-EOF
+systemctl --user restart openclaw-gateway
+systemctl --user status openclaw-gateway
+```
+
+### Update OpenClaw manually
+
+```bash
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net
+source ~/.nvm/nvm.sh
+
+# Update to latest version
+npm update -g openclaw
+
+# Restart service
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
 
 ## Getting Help
 
 1. Check cloud-init log: `sudo cat /var/log/cloud-init-openclaw.log`
-2. Check service log: `sudo journalctl -u openclaw`
-3. Check container log: `docker logs openclaw`
+2. Check service log: `XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway`
+3. Check gateway directly: `curl http://127.0.0.1:18789/`
 4. Verify deployment: `./scripts/verify.sh`

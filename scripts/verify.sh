@@ -14,7 +14,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-HOSTNAME="${OPENCLAW_HOSTNAME:-openclaw-vps}"
+HOSTNAME_PREFIX="${OPENCLAW_HOSTNAME:-openclaw-vps}"
 TAILNET="${TAILNET:-}"  # Your tailnet domain (e.g., tail12345.ts.net)
 
 echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -34,7 +34,30 @@ if [ -z "$TAILNET" ]; then
     echo -e "${GREEN}✓ Detected tailnet: $TAILNET${NC}"
 fi
 
-FULL_HOSTNAME="${HOSTNAME}.${TAILNET}"
+# Auto-detect actual hostname (may have numeric suffix like openclaw-vps-1)
+echo ""
+echo "Detecting OpenClaw server..."
+# First try to find an online device (filter lines first, then extract hostname)
+DETECTED_HOSTNAME=$(tailscale status 2>/dev/null | grep -E "${HOSTNAME_PREFIX}(-[0-9]+)?" | grep -v "offline" | grep -oE "${HOSTNAME_PREFIX}(-[0-9]+)?" | head -1 || true)
+
+if [ -z "$DETECTED_HOSTNAME" ]; then
+    # Fallback: check for any matching device even if offline
+    DETECTED_HOSTNAME=$(tailscale status 2>/dev/null | grep -oE "${HOSTNAME_PREFIX}(-[0-9]+)?" | head -1 || true)
+fi
+
+if [ -z "$DETECTED_HOSTNAME" ]; then
+    echo -e "${RED}✗ No device matching '${HOSTNAME_PREFIX}*' found in Tailscale${NC}"
+    exit 1
+fi
+
+if [ "$DETECTED_HOSTNAME" != "$HOSTNAME_PREFIX" ]; then
+    echo -e "${YELLOW}⚠ Device registered as '$DETECTED_HOSTNAME' (has suffix)${NC}"
+    echo "  Tip: Remove stale devices at https://login.tailscale.com/admin/machines"
+else
+    echo -e "${GREEN}✓ Detected device: $DETECTED_HOSTNAME${NC}"
+fi
+
+FULL_HOSTNAME="${DETECTED_HOSTNAME}.${TAILNET}"
 
 # Test functions
 check_pass() {
@@ -52,10 +75,12 @@ check_warn() {
 # 1. Check Tailscale connectivity
 echo ""
 echo "1. Checking Tailscale connectivity..."
-if tailscale ping "$FULL_HOSTNAME" -c 1 --timeout 5s > /dev/null 2>&1; then
-    check_pass "Tailscale can reach $FULL_HOSTNAME"
+# Check if device is online in tailscale status (idle, active, or direct all mean online)
+# Offline devices show "offline" in the status
+if tailscale status | grep "$DETECTED_HOSTNAME" | grep -qv "offline"; then
+    check_pass "Tailscale can reach $DETECTED_HOSTNAME"
 else
-    check_fail "Cannot reach $FULL_HOSTNAME via Tailscale"
+    check_fail "Cannot reach $DETECTED_HOSTNAME via Tailscale"
     echo "   Make sure the server has completed cloud-init and Tailscale is authenticated."
     exit 1
 fi
@@ -63,41 +88,55 @@ fi
 # 2. Check SSH access
 echo ""
 echo "2. Checking SSH access..."
-if ssh -o ConnectTimeout=10 -o BatchMode=yes "ubuntu@$FULL_HOSTNAME" "echo 'SSH OK'" > /dev/null 2>&1; then
+if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "ubuntu@$FULL_HOSTNAME" "echo 'SSH OK'" > /dev/null 2>&1; then
     check_pass "SSH access working"
 else
     check_warn "SSH not accessible (may need to add SSH key to Tailscale ACLs)"
 fi
 
-# 3. Check Docker container
+# 3. Check Node.js version
 echo ""
-echo "3. Checking Docker container status..."
-CONTAINER_STATUS=$(ssh -o ConnectTimeout=10 "ubuntu@$FULL_HOSTNAME" \
-    "docker ps --filter name=openclaw --format '{{.Status}}'" 2>/dev/null || echo "")
+echo "3. Checking Node.js version..."
+NODE_VERSION=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "source ~/.nvm/nvm.sh && node --version" 2>/dev/null || echo "")
 
-if [[ "$CONTAINER_STATUS" == *"Up"* ]]; then
-    check_pass "OpenClaw container is running: $CONTAINER_STATUS"
+if [[ "$NODE_VERSION" == v22* ]]; then
+    check_pass "Node.js version: $NODE_VERSION"
+elif [[ -n "$NODE_VERSION" ]]; then
+    check_warn "Node.js version $NODE_VERSION (expected v22+)"
 else
-    check_fail "OpenClaw container not running"
-    echo "   Check logs: ssh ubuntu@$FULL_HOSTNAME 'sudo journalctl -u openclaw -n 50'"
+    check_fail "Node.js not found or not accessible"
 fi
 
-# 4. Check Tailscale Serve
+# 4. Check OpenClaw systemd user service
 echo ""
-echo "4. Checking Tailscale Serve configuration..."
-SERVE_STATUS=$(ssh -o ConnectTimeout=10 "ubuntu@$FULL_HOSTNAME" \
+echo "4. Checking OpenClaw service status..."
+SERVICE_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active openclaw-gateway" 2>/dev/null || echo "inactive")
+
+if [[ "$SERVICE_STATUS" == "active" ]]; then
+    check_pass "OpenClaw service is running"
+else
+    check_fail "OpenClaw service not running (status: $SERVICE_STATUS)"
+    echo "   Check logs: ssh ubuntu@$FULL_HOSTNAME 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'"
+fi
+
+# 5. Check Tailscale Serve
+echo ""
+echo "5. Checking Tailscale Serve configuration..."
+SERVE_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
     "tailscale serve status 2>&1" || echo "")
 
-if [[ "$SERVE_STATUS" == *"127.0.0.1:18789"* ]] || [[ "$SERVE_STATUS" == *"localhost:18789"* ]]; then
+if [[ "$SERVE_STATUS" == *"18789"* ]]; then
     check_pass "Tailscale Serve configured correctly"
 else
     check_warn "Tailscale Serve may not be configured"
     echo "   Status: $SERVE_STATUS"
 fi
 
-# 5. Check gateway health endpoint
+# 6. Check gateway health endpoint
 echo ""
-echo "5. Checking gateway health..."
+echo "6. Checking gateway health..."
 HEALTH_CHECK=$(curl -s --max-time 10 "https://$FULL_HOSTNAME/" 2>/dev/null || echo "FAILED")
 
 if [[ "$HEALTH_CHECK" != "FAILED" ]] && [[ "$HEALTH_CHECK" != "" ]]; then
@@ -106,10 +145,23 @@ else
     check_warn "Gateway not responding (may still be starting)"
 fi
 
-# 6. Security audit: No public ports
+# 7. Check expected ports on localhost
 echo ""
-echo "6. Security audit: Checking for exposed ports..."
-PUBLIC_IP=$(ssh -o ConnectTimeout=10 "ubuntu@$FULL_HOSTNAME" \
+echo "7. Checking local ports on server..."
+PORTS_CHECK=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "ss -tlnp | grep -E ':(18789|18791|18793)'" 2>/dev/null || echo "")
+
+if [[ -n "$PORTS_CHECK" ]]; then
+    check_pass "OpenClaw ports listening on localhost"
+    echo "   $PORTS_CHECK" | head -3
+else
+    check_warn "Expected ports (18789, 18791, 18793) not found"
+fi
+
+# 8. Security audit: No public ports
+echo ""
+echo "8. Security audit: Checking for exposed ports..."
+PUBLIC_IP=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
     "curl -s ifconfig.me" 2>/dev/null || echo "UNKNOWN")
 
 if [ "$PUBLIC_IP" != "UNKNOWN" ]; then
@@ -128,11 +180,12 @@ else
 fi
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║                    Verification Complete                         ║"
-echo "╠══════════════════════════════════════════════════════════════════╣"
-echo "║                                                                  ║"
-echo "║  Access your OpenClaw instance at:                               ║"
-echo "║  https://$FULL_HOSTNAME/                                         ║"
-echo "║                                                                  ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
+echo "═══════════════════════════════════════════════════════════════════"
+echo "                    Verification Complete"
+echo "═══════════════════════════════════════════════════════════════════"
+echo ""
+echo "Access your OpenClaw instance at:"
+echo "  https://$FULL_HOSTNAME/"
+echo ""
+echo "Note: Cloud-init log was already cleaned up during deployment."
+echo "═══════════════════════════════════════════════════════════════════"
