@@ -35,6 +35,8 @@ OpenClaw is a self-hosted Anthropic Computer Use gateway deployed on a Hetzner V
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
 
+For the full threat model, see [docs/SECURITY.md](./docs/SECURITY.md).
+
 ### Why Not Docker?
 
 The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs the gateway in Docker. We use systemd instead because:
@@ -62,343 +64,6 @@ This deployment uses **Tailscale identity auth** with device pairing:
 **Q: What if device pairing doesn't work?**
 **A: Use the tokenized URL as fallback:** `pulumi stack output tailscaleUrlWithToken --show-secrets`
 
-## Prerequisites
-
-Before deploying, you need:
-
-1. **Hetzner Cloud API Token**
-   - Go to https://console.hetzner.cloud/
-   - **Create a dedicated project for OpenClaw** (don't reuse existing projects)
-   - Inside the project: Security → API Tokens → Generate (Read & Write)
-   - Why separate? OpenClaw runs autonomous AI agents - if compromised, a shared token could affect your other infrastructure
-
-2. **Tailscale Account & Auth Key**
-   - If new to Tailscale, see [First-Time Tailscale Setup](#first-time-tailscale-setup) below
-   - If you have Tailscale: https://login.tailscale.com/admin/settings/keys
-   - Generate auth key with: **Reusable**, **Ephemeral**
-   - Note your tailnet name (e.g., `tail12345.ts.net`)
-
-3. **Claude Max Setup Token**
-   - Uses your Claude Max subscription (flat-fee) instead of pay-per-token
-   - Run `claude setup-token` in your terminal
-   - Authorize in browser, get token starting with `sk-ant-oat01-...`
-   - **Note**: Setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
-
-4. **Local Tools**
-   - Node.js 18+
-   - Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`)
-   - Tailscale app (for accessing your server after deployment)
-
-## First-Time Tailscale Setup
-
-If you've never used Tailscale before:
-
-1. **Create account**: Go to https://tailscale.com/start
-   - Sign up with GitHub (recommended for infra projects), Google, or email
-   - Free tier supports up to 100 devices
-
-2. **Install on your Mac**:
-   ```bash
-   brew install --cask tailscale
-   ```
-   - Open Tailscale from Applications
-   - Click "Allow" for System Extension and VPN Configuration prompts
-   - Click menu bar icon → Log in → Authorize in browser
-
-3. **Generate auth key for server**:
-   - Go to https://login.tailscale.com/admin/settings/keys
-   - Click "Generate auth key"
-   - Enable: **Reusable**, **Ephemeral**
-   - Copy the key (starts with `tskey-auth-...`)
-
-## First-Time Setup
-
-```bash
-# 1. Clone and install dependencies
-cd ~/projects/openclaw-infra
-npm install
-
-# 2. Initialize Pulumi stack (you'll be prompted to set a passphrase)
-cd pulumi
-pulumi stack init prod
-# SAVE YOUR PASSPHRASE - you'll need it for all future pulumi commands
-
-# 3. Configure Hetzner token
-pulumi config set hcloud:token --secret
-
-# 4. Configure secrets
-pulumi config set tailscaleAuthKey --secret
-pulumi config set claudeSetupToken --secret
-
-# 5. Preview deployment
-pulumi preview
-
-# 6. Deploy
-pulumi up
-
-# 7. Wait ~5 minutes for cloud-init, then verify
-cd ..
-./scripts/verify.sh
-
-# 8. SECURITY: Clean up cloud-init log (contains secrets)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
-```
-
-### First-Time Access (Device Pairing)
-
-After deployment, you need to approve your browser as a trusted device (one-time):
-
-1. **Open the gateway URL** in your browser:
-   ```
-   https://openclaw-vps.<tailnet>.ts.net/chat
-   ```
-
-2. **You'll see "pairing required"** - this is expected for first-time access
-
-3. **Approve the device** via SSH:
-   ```bash
-   # List pending devices
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
-
-   # Approve the pending request (use the Request ID from the list)
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
-   ```
-
-4. **Refresh the browser** - you're now authenticated via Tailscale identity
-
-**For subsequent access:** Just use the plain URL. Your device is paired and Tailscale identity handles auth.
-
-**New browser/device?** Repeat the pairing process above.
-
-**Fallback (if pairing doesn't work):** Use the tokenized URL:
-```bash
-pulumi stack output tailscaleUrlWithToken --show-secrets
-```
-
-### Pulumi Passphrase
-
-Pulumi encrypts your secrets locally using a passphrase. You must set the `PULUMI_CONFIG_PASSPHRASE` environment variable for every Pulumi command:
-
-```bash
-# Option 1: Set per-command
-PULUMI_CONFIG_PASSPHRASE="your-passphrase" pulumi up
-
-# Option 2: Export for session
-export PULUMI_CONFIG_PASSPHRASE="your-passphrase"
-pulumi up
-
-# Option 3: Use a password manager / .envrc (don't commit!)
-```
-
-**Store your passphrase securely** - without it, you cannot manage or destroy your infrastructure.
-
-### Pulumi State Backend
-
-By default, this project uses **local state storage** (in `.pulumi/` directory, gitignored).
-
-| Backend | Pros | Cons |
-|---------|------|------|
-| **Local** (current) | Simple, no account needed, free | State only on this machine, no CI/CD |
-| **Pulumi Cloud** | CI/CD ready, team collaboration, free tier | Requires account |
-| **S3/GCS** | Self-hosted, CI/CD ready | Extra setup, ~$1/mo |
-
-**For CI/CD deployment**, migrate to Pulumi Cloud:
-```bash
-pulumi login                           # Switch to Pulumi Cloud
-pulumi stack export --file state.json  # Export current state
-pulumi stack import --file state.json  # Import to cloud backend
-```
-
-For a single personal server, local state is fine.
-
-### Pulumi ESC (for CI/CD)
-
-For CI/CD pipelines or team deployments, consider using **Pulumi ESC** (Environments, Secrets, and Configuration) instead of local passphrase encryption:
-
-| Approach | Best For | How Secrets Are Stored |
-|----------|----------|----------------------|
-| **Local passphrase** (current) | Personal use, single machine | Encrypted locally with passphrase |
-| **Pulumi ESC** | CI/CD, teams, multiple machines | Cloud-hosted, accessed via Pulumi Cloud |
-
-**Benefits of ESC:**
-- No passphrase to manage in CI/CD pipelines
-- Centralized secrets management across environments
-- Audit logging for secret access
-- Dynamic secrets (e.g., short-lived cloud credentials)
-
-**Migration to ESC:**
-```bash
-# Create ESC environment
-pulumi env init <your-org>/openclaw-secrets
-
-# Add secrets to environment (via Pulumi Cloud console or CLI)
-# Then reference in Pulumi.prod.yaml:
-# environment:
-#   - <your-org>/openclaw-secrets
-```
-
-See [Pulumi ESC documentation](https://www.pulumi.com/docs/esc/) for details.
-
-## Workspace Git Sync (Optional)
-
-The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills, and prompts. Syncing it to a private GitHub repo gives you version history, visibility into agent changes, and continuous backup.
-
-### Setup Steps
-
-1. **Create a private GitHub repo** (e.g., `openclaw-workspace`)
-
-2. **Get the deploy key** (generated by Pulumi):
-   ```bash
-   cd pulumi
-   pulumi stack output workspaceDeployPublicKey
-   ```
-
-3. **Add the deploy key to your GitHub repo**:
-   ```bash
-   # Via CLI (if gh is installed):
-   pulumi stack output workspaceDeployPublicKey | gh repo deploy-key add --repo YOUR_USER/openclaw-workspace --title "OpenClaw VPS" -w -
-
-   # Or via GitHub UI:
-   # Go to your repo → Settings → Deploy keys → Add deploy key
-   # Paste the public key, check "Allow write access"
-   ```
-
-4. **Configure the repo URL**:
-   ```bash
-   pulumi config set workspaceRepoUrl "git@github.com:YOUR_USER/openclaw-workspace.git"
-   ```
-
-5. **Deploy**:
-   ```bash
-   pulumi up
-   ```
-
-### How It Works
-
-- A systemd timer runs every hour on the VPS
-- It commits any workspace changes and pushes to the remote
-- Commits are automatic with timestamps: `Auto-sync: 2026-02-03T14:00:00Z`
-- If nothing changed, no commit is created
-- Uses an ED25519 deploy key (scoped to this single repo)
-
-### Verification
-
-```bash
-# Check timer is running
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.timer'
-
-# Trigger a manual sync
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync.service'
-
-# Check git log
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd ~/.openclaw/workspace && git log --oneline -5'
-```
-
-### Without Workspace Git Sync
-
-If you don't configure `workspaceRepoUrl`:
-- The deployment completes normally
-- No git sync is set up
-- Workspace is still backed up by `scripts/backup.sh` (manual snapshots)
-
-## Telegram Integration (Optional)
-
-OpenClaw can send scheduled messages to you via Telegram. This is **optional** - if you don't configure it, the deployment works fine without it.
-
-### Why Telegram?
-
-- Receive daily digests, evening reviews, and weekly planning prompts
-- Get notifications from scheduled autonomous tasks
-- Interact with OpenClaw from your phone
-
-### Setup Steps
-
-#### 1. Create a Telegram Bot
-
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot`
-3. Choose a display name (e.g., "OpenClaw Assistant")
-4. Choose a username (must end in "bot", e.g., `openclaw_assistant_bot`)
-5. **Copy the bot token** (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-
-#### 2. Get Your Telegram User ID
-
-1. Search for **@userinfobot** on Telegram
-2. Send `/start`
-3. **Copy your numeric user ID** (e.g., `123456789`)
-
-#### 3. Configure Pulumi
-
-```bash
-cd pulumi
-pulumi config set telegramBotToken --secret   # Paste the bot token
-pulumi config set telegramUserId "123456789"  # Your numeric user ID
-```
-
-#### 4. Deploy
-
-```bash
-pulumi up
-```
-
-### Scheduled Tasks
-
-When Telegram is configured, these cron jobs are automatically created:
-
-| Job | Schedule | Purpose |
-|-----|----------|---------|
-| **Morning Digest** | 09:30 daily | Summarize what needs your attention today |
-| **Evening Review** | 19:30 daily | Review accomplishments and pending items |
-| **Night Shift** | 23:00 daily | Deep work: review notes, organize, triage tasks |
-| **Weekly Planning** | 18:00 Sunday | Review past week, plan upcoming priorities |
-
-All times are in **Europe/Berlin** timezone. Each job runs in an isolated session for fresh context.
-
-### Verification
-
-After deployment, verify Telegram is configured:
-
-```bash
-# Check Telegram channel status
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
-
-# List scheduled jobs
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
-
-# Test a job manually
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
-```
-
-### Customizing Schedules
-
-To modify schedules after deployment, SSH to the server and use `openclaw cron`:
-
-```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-
-# List current jobs
-openclaw cron list
-
-# Remove a job
-openclaw cron remove "Night Shift"
-
-# Add a custom job
-openclaw cron add \
-    --name "Custom Task" \
-    --cron "0 14 * * *" \
-    --tz "Europe/Berlin" \
-    --session isolated \
-    --message "Your custom prompt here" \
-    --deliver --channel telegram --to "YOUR_USER_ID"
-```
-
-### Without Telegram
-
-If you don't configure Telegram:
-- The deployment completes normally
-- No cron jobs are created
-- You can add Telegram later by setting the config and redeploying
-
 ## Directory Structure
 
 ```
@@ -410,7 +75,7 @@ openclaw-infra/
 │
 ├── pulumi/
 │   ├── Pulumi.yaml     # Project definition
-│   ├── Pulumi.prod.yaml# Stack config (non-secrets)
+│   ├── Pulumi.prod.yaml  # Stack config (non-secrets)
 │   ├── index.ts        # Main entrypoint
 │   ├── server.ts       # Hetzner server resource
 │   ├── firewall.ts     # Security rules (no inbound!)
@@ -421,9 +86,10 @@ openclaw-infra/
 │   └── backup.sh       # Data backup
 │
 └── docs/
-    ├── SECURITY.md     # Threat model
-    ├── TROUBLESHOOTING.md
-    └── DOCS-REVIEW.md  # Official docs review tracking
+    ├── BROWSER-CONTROL-PLANNING.md  # Future browser automation approaches
+    ├── DOCS-REVIEW.md               # Official docs review tracking
+    ├── SECURITY.md                  # Threat model
+    └── TROUBLESHOOTING.md
 ```
 
 ## Common Operations
@@ -441,7 +107,7 @@ pulumi up
 # Via Tailscale
 tailscale ping openclaw-vps
 
-# SSH to server
+# SSH to server (over Tailscale — no public SSH port)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
 # Check service (on server)
@@ -468,13 +134,11 @@ sudo cat /var/log/cloud-init-openclaw.log
 
 ### Run Security Audit
 
-OpenClaw includes a built-in security audit tool:
-
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 ```
 
-**Expected output:** `0 critical · 0 warn · 1 info` - This deployment uses Tailscale identity auth with device pairing, which passes all security checks.
+**Expected output:** `0 critical · 0 warn · 1 info` — this deployment uses Tailscale identity auth with device pairing, which passes all security checks.
 
 ### Destroy Infrastructure
 
@@ -495,6 +159,28 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 **Why not automate this?** Tailscale's API key has broad permissions (manage all devices). We deliberately use only an auth key (limited scope) for security. The tradeoff is manual cleanup of stale entries—a minor inconvenience for better security.
 
 **Alternative:** Reduce ephemeral node expiry in Tailscale settings (Settings → Device Management) to auto-delete offline devices faster. However, this affects all ephemeral devices and risks removing devices during temporary outages.
+
+## Cost Breakdown
+
+| Resource | Cost |
+|----------|------|
+| Hetzner CAX21 (ARM, 4 vCPU, 8GB) | €6.49/mo |
+| Hetzner Backups | €1.30/mo |
+| Tailscale | Free (personal) |
+| **Total** | **~€7.79/mo** |
+
+## Secrets Reference
+
+| Secret | Purpose | Where to regenerate |
+|--------|---------|---------------------|
+| Pulumi passphrase | Encrypts Pulumi state | Cannot recover — must redeploy if lost |
+| Hetzner API token | Creates/manages VPS | console.hetzner.cloud → Project → API Tokens |
+| Tailscale auth key | Joins server to your network | login.tailscale.com/admin/settings/keys |
+| Claude setup token | Powers OpenClaw (flat fee) | `claude setup-token` in terminal |
+| Gateway token | Authenticates browser sessions (cached after first use) | Auto-generated by Pulumi, view with `pulumi stack output openclawGatewayToken --show-secrets` |
+| Telegram bot token | (Optional) Sends messages via Telegram | @BotFather on Telegram |
+| Telegram user ID | (Optional) Your Telegram recipient ID | @userinfobot on Telegram |
+| Workspace deploy key | (Optional) Pushes workspace to GitHub | Auto-generated by Pulumi, view public key with `pulumi stack output workspaceDeployPublicKey` |
 
 ## Security DO's and DON'Ts
 
@@ -541,115 +227,212 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 3. Update Pulumi config: `pulumi config set telegramBotToken --secret`
 4. Redeploy: `pulumi up`
 
-## Secrets Reference
+## Prerequisites
 
-You'll need to keep track of these secrets (store in a password manager):
+Before deploying, you need:
 
-| Secret | Purpose | Where to regenerate |
-|--------|---------|---------------------|
-| Pulumi passphrase | Encrypts Pulumi state | Cannot recover - must redeploy if lost |
-| Hetzner API token | Creates/manages VPS | console.hetzner.cloud → Project → API Tokens |
-| Tailscale auth key | Joins server to your network | login.tailscale.com/admin/settings/keys |
-| Claude setup token | Powers OpenClaw (flat fee) | `claude setup-token` in terminal |
-| Gateway token | Authenticates browser sessions (cached after first use) | Auto-generated by Pulumi, view with `pulumi stack output openclawGatewayToken --show-secrets` |
-| Telegram bot token | (Optional) Sends messages via Telegram | @BotFather on Telegram |
-| Telegram user ID | (Optional) Your Telegram recipient ID | @userinfobot on Telegram |
-| Workspace deploy key | (Optional) Pushes workspace to GitHub | Auto-generated by Pulumi, view public key with `pulumi stack output workspaceDeployPublicKey` |
+1. **Hetzner Cloud API Token** — Create a **dedicated project** for OpenClaw at [console.hetzner.cloud](https://console.hetzner.cloud/), then generate a Read & Write token (Security → API Tokens)
+2. **Tailscale Auth Key** — Generate at [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) with **Reusable** and **Ephemeral** enabled. New to Tailscale? See [README.md](./README.md#first-time-tailscale-setup).
+3. **Claude Max Setup Token** — Run `claude setup-token` in your terminal. Token starts with `sk-ant-oat01-...`. Note: setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
+4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Tailscale app
 
-## Troubleshooting
+## First-Time Setup
 
-### Can't reach server via Tailscale
+```bash
+# 1. Clone and install dependencies
+cd ~/projects/openclaw-infra
+npm install
 
-1. Wait 5 minutes for cloud-init to complete
-2. Check Tailscale admin console for the device
-3. SSH via Hetzner console and check `tailscale status`
+# 2. Initialize Pulumi stack (you'll be prompted to set a passphrase)
+cd pulumi
+pulumi stack init prod
+# SAVE YOUR PASSPHRASE - you'll need it for all future pulumi commands
 
-### Service not running
+# 3. Configure Hetzner token
+pulumi config set hcloud:token --secret
+
+# 4. Configure secrets
+pulumi config set tailscaleAuthKey --secret
+pulumi config set claudeSetupToken --secret
+
+# 5. Preview deployment
+pulumi preview
+
+# 6. Deploy
+pulumi up
+
+# 7. Wait ~5 minutes for cloud-init, then verify
+cd ..
+./scripts/verify.sh
+
+# 8. SECURITY: Clean up cloud-init log (contains secrets)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
+```
+
+### First-Time Access (Device Pairing)
+
+After deployment, you need to approve your browser as a trusted device (one-time):
+
+1. **Open the gateway URL** in your browser:
+   ```
+   https://openclaw-vps.<tailnet>.ts.net/chat
+   ```
+
+2. **You'll see "pairing required"** — this is expected for first-time access
+
+3. **Approve the device** via SSH:
+   ```bash
+   # List pending devices
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
+
+   # Approve the pending request (use the Request ID from the list)
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
+   ```
+
+4. **Refresh the browser** — you're now authenticated via Tailscale identity
+
+**For subsequent access:** Just use the plain URL. Your device is paired and Tailscale identity handles auth.
+
+**New browser/device?** Repeat the pairing process above.
+
+**Fallback (if pairing doesn't work):** Use the tokenized URL:
+```bash
+pulumi stack output tailscaleUrlWithToken --show-secrets
+```
+
+### Pulumi Passphrase
+
+Pulumi encrypts your secrets locally using a passphrase. You must set the `PULUMI_CONFIG_PASSPHRASE` environment variable for every Pulumi command:
+
+```bash
+# Option 1: Set per-command
+PULUMI_CONFIG_PASSPHRASE="your-passphrase" pulumi up
+
+# Option 2: Export for session
+export PULUMI_CONFIG_PASSPHRASE="your-passphrase"
+pulumi up
+
+# Option 3: Use a password manager / .envrc (don't commit!)
+```
+
+**Store your passphrase securely** — without it, you cannot manage or destroy your infrastructure.
+
+### Pulumi State Backend
+
+This project uses **local state storage** (`.pulumi/` directory, gitignored). For CI/CD or team use, consider migrating to [Pulumi Cloud](https://www.pulumi.com/docs/pulumi-cloud/) or [Pulumi ESC](https://www.pulumi.com/docs/esc/).
+
+## Workspace Git Sync (Optional)
+
+The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills, and prompts. Syncing it to a private GitHub repo gives you version history, visibility into agent changes, and continuous backup.
+
+### Setup Steps
+
+1. **Create a private GitHub repo** (e.g., `openclaw-workspace`)
+
+2. **Get the deploy key** (generated by Pulumi):
+   ```bash
+   cd pulumi
+   pulumi stack output workspaceDeployPublicKey
+   ```
+
+3. **Add the deploy key to your GitHub repo**:
+   ```bash
+   # Via CLI (if gh is installed):
+   pulumi stack output workspaceDeployPublicKey | gh repo deploy-key add --repo YOUR_USER/openclaw-workspace --title "OpenClaw VPS" -w -
+
+   # Or via GitHub UI:
+   # Go to your repo → Settings → Deploy keys → Add deploy key
+   # Paste the public key, check "Allow write access"
+   ```
+
+4. **Configure the repo URL**:
+   ```bash
+   pulumi config set workspaceRepoUrl "git@github.com:YOUR_USER/openclaw-workspace.git"
+   ```
+
+5. **Deploy**:
+   ```bash
+   pulumi up
+   ```
+
+### How It Works
+
+- A systemd timer runs every hour on the VPS
+- It commits any workspace changes and pushes to the remote
+- Commits are automatic with timestamps (e.g., `Auto-sync: 2026-01-15T14:00:00Z`)
+- If nothing changed, no commit is created
+- Uses an ED25519 deploy key (scoped to this single repo)
+
+### Verify Workspace Sync
+
+```bash
+# Check timer is running
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.timer'
+
+# Trigger a manual sync
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync.service'
+
+# Check git log
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd ~/.openclaw/workspace && git log --oneline -5'
+```
+
+## Telegram Integration (Optional)
+
+Configured via Pulumi secrets `telegramBotToken` and `telegramUserId`. If not set, deployment proceeds without Telegram. For bot creation and user ID setup, see [README.md](./README.md#telegram-bot-setup).
+
+```bash
+cd pulumi
+pulumi config set telegramBotToken --secret   # From @BotFather
+pulumi config set telegramUserId "123456789"  # Your numeric user ID
+pulumi up
+```
+
+### Scheduled Tasks
+
+When Telegram is configured, these cron jobs are automatically created:
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| **Morning Digest** | 09:30 daily | Summarize what needs your attention today |
+| **Evening Review** | 19:30 daily | Review accomplishments and pending items |
+| **Night Shift** | 23:00 daily | Deep work: review notes, organize, triage tasks |
+| **Weekly Planning** | 18:00 Sunday | Review past week, plan upcoming priorities |
+
+All times are in **Europe/Berlin** timezone. Each job runs in an isolated session for fresh context.
+
+### Verify Telegram
+
+```bash
+# Check Telegram channel status
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
+
+# List scheduled jobs
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
+
+# Test a job manually
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
+```
+
+### Customizing Schedules
 
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway
-XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100
+
+# List current jobs
+openclaw cron list
+
+# Remove a job
+openclaw cron remove "Night Shift"
+
+# Add a custom job
+openclaw cron add \
+    --name "Custom Task" \
+    --cron "0 14 * * *" \
+    --tz "Europe/Berlin" \
+    --session isolated \
+    --message "Your custom prompt here" \
+    --deliver --channel telegram --to "YOUR_USER_ID"
 ```
-
-### Tailscale Serve not working
-
-OpenClaw manages Tailscale Serve automatically (`gateway.tailscale.mode: serve`). If it's not working:
-
-```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-tailscale serve status
-# If not configured, restart the gateway (it will re-establish serve):
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
-```
-
-### "Pairing required" error
-
-This means your browser/device hasn't been approved yet. Approve it via SSH:
-
-```bash
-# List pending devices (look for your IP in the pending list)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
-
-# Approve the pending request
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
-```
-
-Then refresh the browser.
-
-**Common causes:**
-- First time accessing from this browser/device
-- Browser localStorage was cleared
-- Using incognito/private mode
-
-**Fallback:** Use the tokenized URL to bypass pairing:
-```bash
-cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
-```
-
-### Telegram not working
-
-1. **Verify configuration:**
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
-   ```
-
-2. **Check if bot token is set:**
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config get channels.telegram'
-   ```
-
-3. **Start a conversation with your bot** - You must message your bot first before it can message you. Find your bot by its username and send `/start`.
-
-4. **Verify user ID is correct** - Message @userinfobot again to confirm your numeric ID.
-
-5. **Test delivery manually:**
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
-   ```
-
-### Cron jobs not running
-
-1. **Check cron status:**
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
-   ```
-
-2. **Verify daemon is running** - Cron jobs require the daemon:
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
-   ```
-
-3. **Check timezone** - Jobs use Europe/Berlin. Verify your expected run time matches.
-
-## Cost Breakdown
-
-| Resource | Cost |
-|----------|------|
-| Hetzner CAX21 (ARM, 4 vCPU, 8GB) | €6.49/mo |
-| Hetzner Backups | €1.30/mo |
-| Tailscale | Free (personal) |
-| **Total** | **~€7.79/mo** |
 
 ## Known Limitations
 
@@ -662,6 +445,18 @@ To enable sandboxing after deployment:
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config set routing.agents.main.sandbox.mode docker'
 ```
 
-### Next Deployment Uses Official Installer
+## Troubleshooting
 
-The current running server uses NVM for Node.js. The next `pulumi up` will rebuild with the [official OpenClaw installer](https://openclaw.ai/install.sh) which uses NodeSource instead. This is a one-time transition — no action needed, just be aware that `source ~/.nvm/nvm.sh` will no longer be required after redeployment.
+See [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for all troubleshooting procedures.
+
+Quick diagnostics:
+```bash
+# Service status
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
+
+# Service logs
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 50'
+
+# Verify deployment
+./scripts/verify.sh
+```

@@ -21,6 +21,41 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 
 See [CLAUDE.md](./CLAUDE.md#prerequisites) for detailed setup instructions.
 
+### First-Time Tailscale Setup
+
+If you've never used Tailscale before:
+
+1. **Create account**: Go to https://tailscale.com/start
+   - Sign up with GitHub (recommended for infra projects), Google, or email
+   - Free tier supports up to 100 devices
+
+2. **Install on your Mac**:
+   ```bash
+   brew install --cask tailscale
+   ```
+   - Open Tailscale from Applications
+   - Click "Allow" for System Extension and VPN Configuration prompts
+   - Click menu bar icon → Log in → Authorize in browser
+
+3. **Generate auth key for server**:
+   - Go to https://login.tailscale.com/admin/settings/keys
+   - Click "Generate auth key"
+   - Enable: **Reusable**, **Ephemeral**
+   - Copy the key (starts with `tskey-auth-...`)
+
+### Telegram Bot Setup
+
+To enable optional Telegram notifications:
+
+1. **Create a bot**: Open Telegram, search for **@BotFather**, send `/newbot`
+   - Choose a display name (e.g., "OpenClaw Assistant")
+   - Choose a username (must end in "bot", e.g., `openclaw_assistant_bot`)
+   - Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+
+2. **Get your user ID**: Search for **@userinfobot** on Telegram, send `/start`, copy your numeric user ID
+
+3. **Configure**: See [Quick Start](#quick-start) below for the Pulumi commands.
+
 ## Quick Start
 
 ```bash
@@ -85,6 +120,7 @@ Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
 - [CLAUDE.md](./CLAUDE.md) — Setup, operations, security, and troubleshooting
 - [docs/SECURITY.md](./docs/SECURITY.md) — Threat model and mitigations
 - [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — Common issues
+- [docs/BROWSER-CONTROL-PLANNING.md](./docs/BROWSER-CONTROL-PLANNING.md) — Future browser automation approaches
 
 ## License
 

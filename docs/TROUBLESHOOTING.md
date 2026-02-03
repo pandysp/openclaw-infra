@@ -251,7 +251,38 @@ cd ~/.openclaw/workspace && git log --oneline -5
 
 **Most common fix**: You must message your bot first (`/start` in Telegram) before it can message you.
 
-For full Telegram and cron troubleshooting, see [CLAUDE.md](../CLAUDE.md#telegram-not-working).
+**Symptom**: Telegram messages not arriving.
+
+1. **Verify configuration:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
+   ```
+
+2. **Check if bot token is set:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config get channels.telegram'
+   ```
+
+3. **Verify user ID is correct** — Message @userinfobot again to confirm your numeric ID.
+
+4. **Test delivery manually:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
+   ```
+
+**Symptom**: Cron jobs not running.
+
+1. **Check cron status:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
+   ```
+
+2. **Verify daemon is running** — Cron jobs require the daemon:
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
+   ```
+
+3. **Check timezone** — Jobs use Europe/Berlin. Verify your expected run time matches.
 
 ## Recovery
 
