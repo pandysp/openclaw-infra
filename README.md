@@ -1,18 +1,19 @@
 # OpenClaw Infrastructure
 
-Deploy [OpenClaw](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) (Anthropic Computer Use) on a €5/month Hetzner VPS with zero-trust Tailscale networking.
+Deploy [OpenClaw](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) (Anthropic Computer Use) on a Hetzner VPS with zero-trust Tailscale networking. ~€7.79/month.
 
 ## Features
 
-- **Cheap**: €4.51/mo ARM server + €0.90 backups
-- **Secure**: No public ports, Tailscale-only access
+- **Cheap**: €6.49/mo ARM server + €1.30 backups
+- **Secure**: No public ports, Tailscale-only access, device pairing
 - **Simple**: Pulumi IaC, single command deploy
-- **Portable**: Docker container, easy to backup/migrate
+- **Extensible**: Optional Telegram integration with scheduled tasks
 
 ## Quick Start
 
 ```bash
-# Prerequisites: Node.js 18+, Pulumi CLI, Tailscale CLI
+# Prerequisites: Node.js 18+, Pulumi CLI, Tailscale
+# See CLAUDE.md for detailed installation instructions
 
 # Install
 npm install
@@ -20,23 +21,38 @@ npm install
 # Configure
 cd pulumi
 pulumi stack init prod
-pulumi config set hcloud:token --secret    # Hetzner API token
-pulumi config set tailscaleAuthKey --secret # Tailscale auth key
-pulumi config set anthropicApiKey --secret  # Anthropic API key
+pulumi config set hcloud:token --secret       # Hetzner API token
+pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
+pulumi config set claudeSetupToken --secret    # From `claude setup-token`
 
 # Deploy
 pulumi up
 
-# Verify (wait ~3 min for cloud-init)
+# Verify (wait ~5 min for cloud-init)
 cd ..
 ./scripts/verify.sh
 ```
 
 ## Access
 
-After deployment, access OpenClaw at:
+After deployment, open in your browser:
 ```
 https://openclaw-vps.<your-tailnet>.ts.net/
+```
+
+First visit shows **"pairing required"** — this is expected. Approve your device via SSH:
+```bash
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices list'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices approve <request-id>'
+```
+
+See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details.
+
+## Architecture
+
+```
+Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
+                               (no public ports)  (localhost:18789, systemd)
 ```
 
 ## Documentation
@@ -45,13 +61,6 @@ https://openclaw-vps.<your-tailnet>.ts.net/
 - [docs/SECURITY.md](./docs/SECURITY.md) - Threat model and mitigations
 - [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) - Common issues
 
-## Architecture
-
-```
-Your Machine ──(Tailscale)──▶ Hetzner VPS ──▶ Docker ──▶ OpenClaw
-                              (no public ports)    (localhost:18789)
-```
-
 ## License
 
-MIT
+[MIT](./LICENSE)

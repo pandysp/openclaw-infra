@@ -1,0 +1,22 @@
+# OpenClaw Production Stack Configuration
+#
+# Copy this file to Pulumi.prod.yaml, then configure:
+#
+#   cp Pulumi.prod.yaml.template Pulumi.prod.yaml
+#   pulumi config set hcloud:token --secret
+#   pulumi config set tailscaleAuthKey --secret
+#   pulumi config set claudeSetupToken --secret
+#
+# Optional (Telegram integration):
+#   pulumi config set telegramBotToken --secret
+#   pulumi config set telegramUserId "YOUR_TELEGRAM_USER_ID"
+#
+# Optional (for ready-to-use URL output):
+#   pulumi config set tailnetDnsName "your-tailnet.ts.net"
+
+config:
+  openclaw-infra:serverName: openclaw-vps
+  openclaw-infra:serverType: cax21
+  openclaw-infra:serverLocation: fsn1
+  openclaw-infra:serverImage: ubuntu-24.04
+  # Secrets are added via `pulumi config set --secret` and will appear here encrypted

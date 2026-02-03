@@ -2,8 +2,12 @@
 #
 # OpenClaw Backup Script
 #
-# Creates a backup of OpenClaw data volumes and configuration.
+# Creates a backup of OpenClaw configuration and workspace data.
 # Run locally - connects to server via Tailscale.
+#
+# Usage:
+#   ./scripts/backup.sh
+#   OPENCLAW_HOSTNAME=openclaw-vps-2 ./scripts/backup.sh  # if Tailscale assigned a suffix
 
 set -euo pipefail
 
@@ -47,7 +51,7 @@ read -p "Stop OpenClaw service during backup for consistency? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Stopping OpenClaw service..."
-    ssh "ubuntu@$FULL_HOSTNAME" "sudo systemctl stop openclaw"
+    ssh "ubuntu@$FULL_HOSTNAME" "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user stop openclaw-gateway"
     STOPPED=true
 else
     STOPPED=false
@@ -60,14 +64,41 @@ set -e
 BACKUP_TMP="/tmp/openclaw-backup-$(date +%s)"
 mkdir -p "$BACKUP_TMP"
 
-# Backup docker volume data
-echo "Backing up Docker volume..."
-docker run --rm -v openclaw-data:/data -v "$BACKUP_TMP":/backup alpine \
-    tar czf /backup/volume-data.tar.gz -C /data .
-
-# Backup configuration (without secrets)
+# Backup OpenClaw configuration
 echo "Backing up configuration..."
-sudo cp /opt/openclaw/docker-compose.yml "$BACKUP_TMP/"
+if [ -d ~/.openclaw ]; then
+    cp -r ~/.openclaw "$BACKUP_TMP/openclaw-config"
+    # Remove sensitive tokens from backup copy
+    if [ -f "$BACKUP_TMP/openclaw-config/openclaw.json" ]; then
+        python3 -c "
+import json, sys
+with open('$BACKUP_TMP/openclaw-config/openclaw.json') as f:
+    c = json.load(f)
+# Redact auth tokens
+if 'gateway' in c and 'auth' in c['gateway']:
+    c['gateway']['auth']['token'] = '<REDACTED>'
+if 'gateway' in c and 'remote' in c['gateway']:
+    c['gateway']['remote']['token'] = '<REDACTED>'
+with open('$BACKUP_TMP/openclaw-config/openclaw.json', 'w') as f:
+    json.dump(c, f, indent=2)
+"
+    fi
+fi
+
+# Backup workspace data (memory, projects, notes)
+echo "Backing up workspace..."
+if [ -d ~/.openclaw/workspace ]; then
+    cp -r ~/.openclaw/workspace "$BACKUP_TMP/workspace"
+fi
+
+# Backup cron configuration
+echo "Backing up cron jobs..."
+source ~/.nvm/nvm.sh
+openclaw cron list > "$BACKUP_TMP/cron-jobs.txt" 2>/dev/null || true
+
+# Backup systemd service file
+echo "Backing up service configuration..."
+cp ~/.config/systemd/user/openclaw-gateway.service "$BACKUP_TMP/" 2>/dev/null || true
 
 # Create archive
 echo "Creating archive..."
@@ -89,12 +120,15 @@ ssh "ubuntu@$FULL_HOSTNAME" "rm /tmp/openclaw-backup.tar.gz"
 # Restart service if stopped
 if [ "$STOPPED" = true ]; then
     echo "Restarting OpenClaw service..."
-    ssh "ubuntu@$FULL_HOSTNAME" "sudo systemctl start openclaw"
+    ssh "ubuntu@$FULL_HOSTNAME" "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway"
 fi
 
 echo ""
-echo -e "${GREEN}✓ Backup complete: $BACKUP_FILE${NC}"
+echo -e "${GREEN}Backup complete: $BACKUP_FILE${NC}"
 echo ""
-echo "To restore, use:"
-echo "  tar xzf $BACKUP_FILE"
-echo "  # Then copy files to server and restore docker volume"
+echo "Contents:"
+echo "  openclaw-config/  - OpenClaw configuration (tokens redacted)"
+echo "  workspace/        - Workspace data (memory, projects)"
+echo "  cron-jobs.txt     - Scheduled task listing"
+echo ""
+echo "To inspect: tar tzf $BACKUP_FILE"

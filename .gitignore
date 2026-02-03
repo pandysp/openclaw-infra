@@ -4,6 +4,11 @@ node_modules/
 # Pulumi
 .pulumi/
 Pulumi.*.yaml.bak
+# Stack config files contain encrypted secrets - never commit
+# Use Pulumi.prod.yaml.template as reference
+pulumi/Pulumi.prod.yaml
+pulumi/Pulumi.dev.yaml
+pulumi/Pulumi.staging.yaml
 
 # Environment files (NEVER commit secrets)
 .env

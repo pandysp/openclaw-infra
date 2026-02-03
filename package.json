@@ -8,10 +8,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": ["openclaw", "anthropic", "computer-use", "hetzner", "tailscale", "pulumi"],
+  "author": "Andreas Spannagel",
+  "license": "MIT",
+  "description": "Secure self-hosted OpenClaw deployment on Hetzner Cloud with Tailscale",
   "dependencies": {
     "@pulumi/hcloud": "^1.32.0",
     "@pulumi/pulumi": "^3.218.0",
