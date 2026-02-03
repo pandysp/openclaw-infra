@@ -25,15 +25,19 @@ export function generateUserData(config: {
     hostname: string;
     telegramBotToken?: pulumi.Output<string>;
     telegramUserId?: string;
+    workspaceDeployKey?: pulumi.Output<string>;
+    workspaceRepoUrl?: string;
 }): pulumi.Output<string> {
-    // Handle optional telegram config - use empty strings if not provided
+    // Handle optional config - use empty strings if not provided
     const telegramBotTokenOutput = config.telegramBotToken || pulumi.output("");
     const telegramUserIdOutput = pulumi.output(config.telegramUserId || "");
+    const workspaceDeployKeyOutput = config.workspaceDeployKey || pulumi.output("");
+    const workspaceRepoUrlOutput = pulumi.output(config.workspaceRepoUrl || "");
 
     return pulumi
-        .all([config.tailscaleAuthKey, config.claudeSetupToken, config.gatewayToken, telegramBotTokenOutput, telegramUserIdOutput])
+        .all([config.tailscaleAuthKey, config.claudeSetupToken, config.gatewayToken, telegramBotTokenOutput, telegramUserIdOutput, workspaceDeployKeyOutput, workspaceRepoUrlOutput])
         .apply(
-            ([tsKey, setupToken, gatewayToken, telegramBotToken, telegramUserId]) => `#!/bin/bash
+            ([tsKey, setupToken, gatewayToken, telegramBotToken, telegramUserId, workspaceDeployKey, workspaceRepoUrl]) => `#!/bin/bash
 set -euo pipefail
 
 # Logging for debugging
@@ -48,7 +52,7 @@ echo "=== System Updates ==="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get upgrade -y
-apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release jq python3
+apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release jq python3 git
 
 # Install unattended-upgrades for automatic security patches
 DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
@@ -261,6 +265,10 @@ set +x
 openclaw config set gateway.remote.token "\$GATEWAY_TOKEN"
 set -x
 
+# Default model and extended thinking for all sessions and cron jobs
+openclaw config set agents.defaults.model.primary "anthropic/claude-opus-4-5"
+openclaw config set agents.defaults.thinkingDefault high
+
 echo "Gateway config updated via openclaw config set"
 GATEWAY_EOF
 
@@ -356,8 +364,24 @@ if [ -f /tmp/telegram-user-id ]; then
     TELEGRAM_USER_ID=$(cat /tmp/telegram-user-id)
 fi
 
+# Remove existing jobs by name to avoid duplicates on redeploy
+# (openclaw cron add always creates a new job, even if the name exists)
+remove_cron_by_name() {
+    local name="$1"
+    local ids
+    ids=$(openclaw cron list --json 2>/dev/null | jq -r ".jobs[] | select(.name == \"$name\") | .id" 2>/dev/null)
+    for id in $ids; do
+        openclaw cron remove "$id" || true
+    done
+}
+
 # Only add cron jobs if Telegram user ID is configured
 if [ -n "$TELEGRAM_USER_ID" ]; then
+    remove_cron_by_name "Morning Digest"
+    remove_cron_by_name "Evening Review"
+    remove_cron_by_name "Night Shift"
+    remove_cron_by_name "Weekly Planning"
+
     # Morning Digest at 09:30
     openclaw cron add \
         --name "Morning Digest" \
@@ -382,7 +406,6 @@ if [ -n "$TELEGRAM_USER_ID" ]; then
         --cron "0 23 * * *" \
         --tz "Europe/Berlin" \
         --session isolated \
-        --thinking high \
         --message "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary." \
         --deliver --channel telegram --to "$TELEGRAM_USER_ID" || true
 
@@ -404,6 +427,142 @@ CRON_EOF
 
 # Clean up telegram user ID file
 rm -f /tmp/telegram-user-id
+
+# ============================================
+# Workspace Git Sync
+# ============================================
+echo "=== Configuring workspace git sync ==="
+
+WORKSPACE_REPO_URL="${workspaceRepoUrl}"
+if [ -n "\$WORKSPACE_REPO_URL" ]; then
+    # Write deploy key and repo URL to temp files
+    set +x
+    echo "${workspaceDeployKey}" > /tmp/workspace-deploy-key
+    chmod 600 /tmp/workspace-deploy-key
+    chown ubuntu:ubuntu /tmp/workspace-deploy-key
+    echo "\$WORKSPACE_REPO_URL" > /tmp/workspace-repo-url
+    chmod 600 /tmp/workspace-repo-url
+    chown ubuntu:ubuntu /tmp/workspace-repo-url
+    set -x
+
+    sudo -u ubuntu bash -l << 'GITSYNC_EOF'
+set -euo pipefail
+
+WORKSPACE_DIR="$HOME/.openclaw/workspace"
+DEPLOY_KEY="$HOME/.ssh/workspace-deploy-key"
+
+# Install deploy key
+mkdir -p ~/.ssh
+cp /tmp/workspace-deploy-key "$DEPLOY_KEY"
+chmod 600 "$DEPLOY_KEY"
+
+# Configure SSH to use deploy key for github.com
+# Uses a Host alias to avoid conflicts with other github.com keys
+cat >> ~/.ssh/config << 'SSHCONF'
+Host github-workspace
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/workspace-deploy-key
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+SSHCONF
+chmod 600 ~/.ssh/config
+
+# Configure git identity
+git config --global user.name "OpenClaw Agent"
+git config --global user.email "openclaw@localhost"
+
+# Initialize workspace as git repo
+if [ -d "$WORKSPACE_DIR" ]; then
+    cd "$WORKSPACE_DIR"
+
+    if [ ! -d ".git" ]; then
+        git init
+        git branch -M main
+    fi
+
+    # Rewrite remote origin to use the SSH alias
+    REPO_URL=$(cat /tmp/workspace-repo-url)
+    # Replace github.com with github-workspace alias
+    ALIAS_URL=$(echo "$REPO_URL" | sed 's/github\.com/github-workspace/')
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "$ALIAS_URL"
+
+    # Create .gitignore
+    cat > .gitignore << 'GITIGNORE'
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.swp
+*~
+GITIGNORE
+
+    # Initial commit and push
+    git add -A
+    git commit -m "Initial workspace sync" || true
+    git push -u origin main || echo "Warning: initial push failed (repo may not exist yet)"
+
+    echo "Workspace git repo initialized"
+else
+    echo "Warning: workspace directory not found at $WORKSPACE_DIR"
+fi
+
+# Install sync script
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/workspace-git-sync.sh << 'SYNCSCRIPT'
+#!/bin/bash
+set -euo pipefail
+cd ~/.openclaw/workspace
+git add -A
+if ! git diff --cached --quiet; then
+    git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    git push origin main
+fi
+SYNCSCRIPT
+chmod +x ~/.local/bin/workspace-git-sync.sh
+
+# Install systemd timer for hourly sync
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/workspace-git-sync.service << 'SVCUNIT'
+[Unit]
+Description=Sync OpenClaw workspace to git
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/workspace-git-sync.sh
+Environment=SSH_AUTH_SOCK=
+SVCUNIT
+
+cat > ~/.config/systemd/user/workspace-git-sync.timer << 'TIMERUNIT'
+[Unit]
+Description=Hourly workspace git sync
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
+TIMERUNIT
+
+export XDG_RUNTIME_DIR=/run/user/1000
+systemctl --user daemon-reload
+systemctl --user enable workspace-git-sync.timer
+systemctl --user start workspace-git-sync.timer
+
+echo "Workspace git sync timer installed (hourly)"
+GITSYNC_EOF
+
+    # Clean up temp files
+    rm -f /tmp/workspace-deploy-key /tmp/workspace-repo-url
+else
+    echo "Skipping workspace git sync (no repo URL configured)"
+fi
 
 echo "=== OpenClaw Bootstrap Complete: $(date) ==="
 echo "Access via: https://${config.hostname}.<your-tailnet>.ts.net/"

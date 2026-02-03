@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as random from "@pulumi/random";
+import * as tls from "@pulumi/tls";
 import { createFirewall } from "./firewall";
 import { createServer } from "./server";
 import { generateUserData } from "./user-data";
@@ -14,6 +15,9 @@ const claudeSetupToken = config.requireSecret("claudeSetupToken");
 // Optional Telegram configuration (set via `pulumi config set`)
 const telegramBotToken = config.getSecret("telegramBotToken");
 const telegramUserId = config.get("telegramUserId");
+
+// Optional workspace git sync (set via `pulumi config set`)
+const workspaceRepoUrl = config.get("workspaceRepoUrl");
 
 // Tailscale configuration
 // Find your tailnet name at: https://login.tailscale.com/admin/dns
@@ -36,6 +40,17 @@ const gatewayToken = new random.RandomPassword("openclaw-gateway-token", {
 });
 
 // ============================================
+// Workspace Git Sync: Deploy Key
+// ============================================
+
+// Generate ED25519 deploy key for pushing workspace to a private GitHub repo
+// Only meaningful if workspaceRepoUrl is configured, but always generated
+// so the public key can be retrieved before the first deploy
+const workspaceDeployKey = new tls.PrivateKey("workspace-deploy-key", {
+    algorithm: "ED25519",
+});
+
+// ============================================
 // Infrastructure Resources
 // ============================================
 
@@ -50,6 +65,10 @@ const userData = generateUserData({
     hostname: serverName,
     telegramBotToken,
     telegramUserId,
+    workspaceDeployKey: workspaceRepoUrl
+        ? workspaceDeployKey.privateKeyOpenssh
+        : undefined,
+    workspaceRepoUrl,
 });
 
 // 3. Create the server with attached firewall
@@ -81,6 +100,9 @@ export const firewallId = firewall.id;
 
 // Gateway token (for client configuration)
 export const openclawGatewayToken = pulumi.secret(gatewayToken.result);
+
+// Workspace deploy key (add as deploy key to your private GitHub repo)
+export const workspaceDeployPublicKey = workspaceDeployKey.publicKeyOpenssh;
 
 // Access information
 export const tailscaleHostname = pulumi.interpolate`${serverName}`;

@@ -78,6 +78,8 @@ Traffic must pass through multiple security layers:
 - Automatic security updates via unattended-upgrades
 - No Docker daemon attack surface
 
+**Blast radius**: Beyond server control, an attacker with shell access can read all session transcripts at `~/.openclaw/agents/<agentId>/sessions/*.jsonl`. These are plaintext JSONL files containing full conversation history, tool outputs, and anything discussed with the agent. File permissions (`600`) prevent other OS users from reading them, but not the `ubuntu` user or root.
+
 **Residual Risk**: Medium. Privilege escalation possible but requires additional exploits.
 
 ### Threat 3: Setup Token Leak
@@ -177,7 +179,42 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 # Expected: 0 critical · 0 warn · 1 info
 ```
 
-### Threat 4: Lateral Movement
+### Threat 4: Agent Host Command Abuse
+
+**Attack**: The OpenClaw agent executes destructive or malicious commands on the host.
+
+**Scenario**: OpenClaw has `tools.elevated.enabled: true` (the default), which gives it shell access on the host. The `ubuntu` user has passwordless sudo. If the agent is manipulated via prompt injection (e.g., through fetched web content, malicious files, or crafted messages), it could:
+- Run destructive commands (`rm -rf /`, overwrite system files)
+- Install malware or join the server to a botnet
+- Exfiltrate secrets (Tailscale keys, config tokens) via outbound network
+- Modify its own config to weaken security
+- Use sudo to escalate to root
+
+**Current status**: Elevated tools are enabled (default). This is the pragmatic choice for a single-user personal server where the agent needs to be useful.
+
+**Mitigations in place**:
+- Tailscale-only access limits who can send prompts to the agent
+- Dedicated VPS with no other services to damage
+- Hetzner firewall limits outbound attack surface (but allows all outbound by default)
+- `agents.defaults.thinkingDefault: high` — modern instruction-hardened models with extended thinking are more robust against prompt injection
+
+**Mitigations available but not enabled**:
+- `tools.elevated.enabled: false` — disables host shell access entirely
+- `agents.defaults.sandbox.mode: "non-main"` — runs agent code in Docker containers with restricted host access
+- `tools.elevated.allowFrom.<channel>` — restricts which channels can trigger host commands
+- Hetzner firewall outbound rules — could restrict outbound to known-good destinations
+
+**Prompt injection defensive guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
+- Lock down inbound DMs (we use allowlist — done)
+- Use mention gating in groups; avoid always-on bots in public rooms
+- Treat links, attachments, and pasted instructions as potentially hostile
+- Keep secrets out of the agent filesystem where possible
+- Prefer the latest, strongest model for tool-enabled agents — weaker models are less robust against injection
+- Red flags: requests to "read this URL and do exactly what it says", ignore system prompts, or reveal hidden instructions
+
+**Residual Risk**: Medium. A single-user Tailscale-only setup limits the attack surface for prompt injection, but the agent has full root access if exploited. Enabling sandbox mode would reduce this to Low for most scenarios.
+
+### Threat 5: Lateral Movement
 
 **Attack**: Attacker uses compromised server to attack other systems.
 
@@ -189,7 +226,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 
 **Residual Risk**: Low. Limited attack surface.
 
-### Threat 5: Supply Chain Attack
+### Threat 6: Supply Chain Attack
 
 **Attack**: Malicious npm package or dependency.
 
@@ -201,7 +238,30 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 
 **Residual Risk**: Medium. Trust in upstream is required.
 
-### Threat 6: Infrastructure Token Compromise
+### Threat 7: Malicious Plugin
+
+**Attack**: A compromised or malicious OpenClaw plugin gains full access to the gateway.
+
+**Scenario**: OpenClaw plugins run in-process with the gateway — they are not sandboxed. A plugin has the same access as the gateway itself:
+- Read/write `~/.openclaw/` (config, credentials, auth tokens, session transcripts)
+- Access all channel connections (Telegram, etc.)
+- Make network calls (exfiltrate data)
+- Execute as the `ubuntu` user (including sudo)
+- npm lifecycle scripts execute during installation, before you've reviewed the code
+
+**Current status**: No plugins installed. This threat becomes relevant when plugins are added.
+
+**Mitigations for when plugins are used**:
+- Review plugin source code before installing
+- Use `plugins.allow` to explicitly allowlist only approved plugins
+- Pin exact versions (`@scope/pkg@1.2.3`) to prevent supply chain attacks via version ranges
+- Monitor `~/.openclaw/extensions/` for unexpected additions
+- Prefer plugins from known/trusted authors
+- Restart the gateway after any plugin changes
+
+**Residual Risk**: Low (no plugins installed). Will become Medium when plugins are added — treat plugin installation with the same caution as granting shell access.
+
+### Threat 8: Infrastructure Token Compromise
 
 **Attack**: Attacker obtains Hetzner API token and pivots to other infrastructure.
 
@@ -215,7 +275,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 
 **Why this matters**: OpenClaw runs autonomous AI agents that could be vulnerable to prompt injection or other attacks. If compromised, an attacker with a shared Hetzner token could delete servers, create expensive instances, or pivot to other infrastructure in the same project.
 
-### Threat 7: Self-Modification via Node Control
+### Threat 9: Self-Modification via Node Control
 
 **Attack**: OpenClaw controls its own infrastructure deployment through a connected node.
 
@@ -238,7 +298,7 @@ Then OpenClaw could theoretically:
 
 **Residual Risk**: Medium if Mac is an OpenClaw node. Low if infrastructure management is isolated.
 
-### Threat 8: Cloud-Init Log Exposure
+### Threat 10: Cloud-Init Log Exposure
 
 **Attack**: Secrets visible in cloud-init log on the server.
 
@@ -254,6 +314,81 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-open
 ```
 
 **Residual Risk**: Low if log is cleaned up. Medium if forgotten.
+
+## Browser Control (Future Planning)
+
+Not currently enabled. When the agent needs to interact with authenticated websites (shopping, booking, admin dashboards, etc.), there are three viable approaches with different security tradeoffs.
+
+### Option B: Cookie Sync to VPS Headless Chrome
+
+**How it works**: Run headless Chromium on the VPS. Periodically export cookies for specific domains from your Mac's Chrome and sync them to the VPS browser profile.
+
+| Pros | Cons |
+|------|------|
+| Agent stays contained on VPS | Cookies expire, need periodic re-sync |
+| No Mac exposure | Fragile (Chrome cookie DB format can change) |
+| Selective — only domains you choose | Requires scripting and maintenance |
+
+**Implementation**: Script extracts cookies from Mac Chrome SQLite DB (`~/Library/Application Support/Google/Chrome/Default/Cookies`) for allowlisted domains, transfers via scp, imports into headless Chrome profile on VPS.
+
+**Best for**: Low-frequency tasks on a small number of sites where sessions are long-lived.
+
+### Option D: Password Vault with Dedicated Email
+
+**How it works**: Give the agent access to a dedicated password vault (1Password, Bitwarden) containing only approved credentials. Agent logs in fresh on VPS headless Chrome.
+
+| Pros | Cons |
+|------|------|
+| Clean separation — you choose exactly which accounts | 2FA and passwordless login are a problem |
+| No Mac exposure | Agent must handle login flows |
+| Auditable — vault logs show what was accessed | More setup per site |
+
+**The 2FA/passwordless problem**: Most sites now use email magic links or SMS codes. Solutions:
+- **Dedicated email** (e.g., `agent@yourdomain.com`) that only receives login codes, with the agent having IMAP access. Limited blast radius — this email has no other accounts attached.
+- **TOTP-based 2FA**: Share the TOTP secret with the agent. Works for sites that support authenticator apps.
+- **SMS forwarding**: Forward codes from a dedicated phone number to the agent via Telegram.
+
+**Best for**: Sites with stable login flows and TOTP support. The dedicated email approach extends this to passwordless sites.
+
+### Option E: Mac as Node with Restricted Browser Profile (Recommended)
+
+**How it works**: Pair your Mac as an OpenClaw node, but restrict it to a dedicated Chrome profile with only specific logins, no shell access, and a website allowlist.
+
+| Pros | Cons |
+|------|------|
+| Most practical — real browser, real logins | Mac is exposed (though restricted) |
+| Website allowlist prevents malicious navigation | Requires Mac to be online |
+| Exec denial prevents shell access | Dedicated profile needs separate login sessions |
+
+**Key restrictions to apply**:
+1. **Dedicated Chrome profile** — not your main profile. Only log into sites the agent should access.
+2. **Exec approvals: "deny"** — agent can control the browser but cannot run terminal commands on your Mac (Settings → Exec approvals).
+3. **Website allowlist** — restrict which domains the agent can navigate to. Prevents prompt injection from steering the browser to malicious sites.
+4. **Isolate from infrastructure** — keep Pulumi state and infra credentials off the Mac (or in a separate user account) to prevent Threat 9 (Self-Modification).
+
+**Best for**: Most use cases. Balances convenience with security. The website allowlist is the critical control — it limits blast radius even if the agent is prompt-injected.
+
+### Recommendation
+
+Start with **Option E** for general-purpose browser tasks. The dedicated profile + exec deny + website allowlist combination provides a practical security boundary. Add **Option D** for headless automation of specific sites where you don't want Mac exposure at all.
+
+Avoid giving the agent access to your main browser profile or unrestricted shell access on your Mac.
+
+## Credential Storage Paths
+
+Sensitive data on the server that should be backed up carefully and protected with `600` permissions:
+
+| Path | Contents |
+|------|----------|
+| `~/.openclaw/openclaw.json` | Gateway config including auth tokens |
+| `~/.openclaw/devices/paired.json` | Paired device tokens |
+| `~/.openclaw/devices/pending.json` | Pending pairing requests |
+| `~/.openclaw/credentials/` | Channel allowlists, OAuth tokens |
+| `~/.openclaw/agents/<agentId>/auth-profiles.json` | Model provider auth |
+| `~/.openclaw/agents/<agentId>/sessions/*.jsonl` | Session transcripts (contain conversation history) |
+| `~/.openclaw/cron/jobs.json` | Cron job definitions |
+
+The backup script (`scripts/backup.sh`) copies `~/.openclaw/` and redacts gateway auth tokens. Session transcripts are included — be aware they contain full conversation history.
 
 ## Security Checklist
 
@@ -275,6 +410,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-open
 - [ ] Tailscale Serve is configured correctly
 - [ ] Service runs as unprivileged user
 - [ ] `openclaw security audit --deep` shows 0 critical issues
+- [ ] `openclaw security audit --fix` applied (hardens file permissions and guardrails)
 - [ ] UFW status shows only tailscale0 allowed
 
 ### Ongoing Monitoring
