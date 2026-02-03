@@ -1,29 +1,44 @@
 # OpenClaw Infrastructure
 
-Deploy [OpenClaw](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) (Anthropic Computer Use) on a Hetzner VPS with zero-trust Tailscale networking. ~€7.79/month.
+Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€7.79/month.
 
 ## Features
 
-- **Cheap**: €6.49/mo ARM server + €1.30 backups
-- **Secure**: No public ports, Tailscale-only access, device pairing
-- **Simple**: Pulumi IaC, single command deploy
-- **Extensible**: Optional Telegram integration with scheduled tasks
+- **Cheap**: Hetzner CAX21 ARM (4 vCPU, 8 GB) €6.49/mo + €1.30 backups
+- **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
+- **Simple**: Pulumi IaC, single command deploy, systemd user service
+- **Telegram**: Optional scheduled tasks (morning digest, evening review, weekly planning)
+- **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
+
+## Prerequisites
+
+- Node.js 18+
+- [Pulumi CLI](https://www.pulumi.com/docs/install/)
+- [Tailscale](https://tailscale.com/start) installed and connected on your machine
+- Hetzner Cloud API token ([console.hetzner.cloud](https://console.hetzner.cloud/))
+- Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
+- Claude setup token (run `claude setup-token`)
+
+See [CLAUDE.md](./CLAUDE.md#prerequisites) for detailed setup instructions.
 
 ## Quick Start
 
 ```bash
-# Prerequisites: Node.js 18+, Pulumi CLI, Tailscale
-# See CLAUDE.md for detailed installation instructions
-
-# Install
 npm install
-
-# Configure
 cd pulumi
-pulumi stack init prod
+pulumi stack init prod  # Save this passphrase — you need it for every pulumi command
+
+# Required
 pulumi config set hcloud:token --secret       # Hetzner API token
 pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
 pulumi config set claudeSetupToken --secret    # From `claude setup-token`
+
+# Optional: Telegram notifications (daily digests, weekly planning)
+pulumi config set telegramBotToken --secret    # From @BotFather
+pulumi config set telegramUserId "YOUR_ID"     # From @userinfobot (not secret, numeric only)
+
+# Optional: hourly workspace backup to a private GitHub repo
+pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
 
 # Deploy
 pulumi up
@@ -33,18 +48,25 @@ cd ..
 ./scripts/verify.sh
 ```
 
+> After verifying, clean up the cloud-init log (contains secrets):
+> `ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"`
+
+See [CLAUDE.md](./CLAUDE.md#pulumi-passphrase) for passphrase management options.
+
 ## Access
 
-After deployment, open in your browser:
+Wait ~5 minutes after deployment for cloud-init to finish, then open:
 ```
-https://openclaw-vps.<your-tailnet>.ts.net/
+https://openclaw-vps.<tailnet>.ts.net/chat
 ```
 
-First visit shows **"pairing required"** — this is expected. Approve your device via SSH:
+First visit requires **device pairing** (one-time). Approve via SSH (over Tailscale):
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 ```
+
+> No public SSH port is exposed. SSH works over Tailscale only.
 
 See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details.
 
@@ -52,14 +74,17 @@ See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details.
 
 ```
 Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
-                               (no public ports)  (localhost:18789, systemd)
+                               Hetzner FW: no inbound
+                               UFW: tailscale0 only
+                               Gateway: localhost:18789 (systemd --user)
+                               Tailscale Serve: HTTPS proxy
 ```
 
 ## Documentation
 
-- [CLAUDE.md](./CLAUDE.md) - Comprehensive setup and operations guide
-- [docs/SECURITY.md](./docs/SECURITY.md) - Threat model and mitigations
-- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) - Common issues
+- [CLAUDE.md](./CLAUDE.md) — Setup, operations, security, and troubleshooting
+- [docs/SECURITY.md](./docs/SECURITY.md) — Threat model and mitigations
+- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — Common issues
 
 ## License
 

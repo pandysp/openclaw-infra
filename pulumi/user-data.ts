@@ -150,7 +150,10 @@ OPENCLAW_INSTALL_EOF
 # Add npm global bin dir to PATH for all subsequent commands
 # The official installer puts openclaw at ~/.npm-global/bin/openclaw
 # but doesn't add it to PATH automatically
-sudo -u ubuntu bash -c 'echo "export PATH=\\"\\\$HOME/.npm-global/bin:\\\$PATH\\"" >> ~/.bashrc'
+# Using /etc/profile.d/ ensures all login shells get the PATH (including non-interactive)
+cat > /etc/profile.d/openclaw-path.sh << 'PATHEOF'
+export PATH="$HOME/.npm-global/bin:$PATH"
+PATHEOF
 
 # Enable user lingering so systemd user services persist
 loginctl enable-linger ubuntu
@@ -362,6 +365,7 @@ echo "=== Configuring scheduled tasks ==="
 
 sudo -u ubuntu bash -l << 'CRON_EOF'
 set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/1000
 
 # Read user ID from file
 TELEGRAM_USER_ID=""
@@ -374,7 +378,7 @@ fi
 remove_cron_by_name() {
     local name="$1"
     local ids
-    ids=$(openclaw cron list --json 2>/dev/null | jq -r ".jobs[] | select(.name == \"$name\") | .id" 2>/dev/null)
+    ids=$(openclaw cron list --json 2>/dev/null | jq -r --arg n "$name" '.jobs[] | select(.name == $n) | .id' 2>/dev/null)
     for id in $ids; do
         openclaw cron remove "$id" || true
     done
@@ -482,8 +486,7 @@ if [ -d "$WORKSPACE_DIR" ]; then
     cd "$WORKSPACE_DIR"
 
     if [ ! -d ".git" ]; then
-        git init
-        git branch -M main
+        git init -b main
     fi
 
     # Rewrite remote origin to use the SSH alias
