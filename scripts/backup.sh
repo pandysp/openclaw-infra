@@ -93,7 +93,6 @@ fi
 
 # Backup cron configuration
 echo "Backing up cron jobs..."
-source ~/.nvm/nvm.sh
 openclaw cron list > "$BACKUP_TMP/cron-jobs.txt" 2>/dev/null || true
 
 # Backup systemd service file

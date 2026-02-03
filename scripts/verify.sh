@@ -98,7 +98,7 @@ fi
 echo ""
 echo "3. Checking Node.js version..."
 NODE_VERSION=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "source ~/.nvm/nvm.sh && node --version" 2>/dev/null || echo "")
+    "node --version" 2>/dev/null || echo "")
 
 if [[ "$NODE_VERSION" == v22* ]]; then
     check_pass "Node.js version: $NODE_VERSION"
@@ -179,6 +179,77 @@ else
     check_warn "Could not determine public IP"
 fi
 
+# 9. OpenClaw built-in status
+echo ""
+echo "9. Checking OpenClaw status..."
+OPENCLAW_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "openclaw status 2>&1" || echo "FAILED")
+
+if [[ "$OPENCLAW_STATUS" != "FAILED" ]] && [[ "$OPENCLAW_STATUS" != "" ]]; then
+    check_pass "OpenClaw status OK"
+    echo "$OPENCLAW_STATUS" | head -10 | sed 's/^/   /'
+else
+    check_warn "Could not get OpenClaw status"
+fi
+
+# 10. OpenClaw health check
+echo ""
+echo "10. Checking OpenClaw health..."
+OPENCLAW_HEALTH=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "openclaw health 2>&1" || echo "FAILED")
+
+if [[ "$OPENCLAW_HEALTH" != "FAILED" ]] && [[ "$OPENCLAW_HEALTH" != "" ]]; then
+    check_pass "OpenClaw health OK"
+    echo "$OPENCLAW_HEALTH" | head -10 | sed 's/^/   /'
+else
+    check_warn "Could not get OpenClaw health"
+fi
+
+# 11. OpenClaw security audit
+echo ""
+echo "11. Running OpenClaw security audit..."
+SECURITY_AUDIT=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "openclaw security audit --deep 2>&1" || echo "FAILED")
+
+if [[ "$SECURITY_AUDIT" == *"0 critical"* ]]; then
+    check_pass "Security audit passed"
+    echo "$SECURITY_AUDIT" | tail -3 | sed 's/^/   /'
+elif [[ "$SECURITY_AUDIT" != "FAILED" ]]; then
+    check_warn "Security audit returned findings"
+    echo "$SECURITY_AUDIT" | tail -5 | sed 's/^/   /'
+else
+    check_warn "Could not run security audit"
+fi
+
+# 12. Check Telegram channel (if configured)
+echo ""
+echo "12. Checking Telegram channel..."
+TELEGRAM_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "openclaw channels status 2>&1" || echo "FAILED")
+
+if [[ "$TELEGRAM_STATUS" == *"Telegram"*"enabled"* ]]; then
+    check_pass "Telegram channel enabled and running"
+elif [[ "$TELEGRAM_STATUS" == *"Telegram"* ]]; then
+    check_warn "Telegram channel found but may not be running"
+    echo "$TELEGRAM_STATUS" | grep -i telegram | head -3 | sed 's/^/   /'
+else
+    echo "   Telegram not configured (optional)"
+fi
+
+# 13. Check cron jobs
+echo ""
+echo "13. Checking scheduled tasks..."
+CRON_LIST=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "openclaw cron list 2>&1" || echo "FAILED")
+
+CRON_COUNT=$(echo "$CRON_LIST" | grep -c "idle\|running" || echo "0")
+if [[ "$CRON_COUNT" -gt 0 ]]; then
+    check_pass "$CRON_COUNT scheduled task(s) configured"
+    echo "$CRON_LIST" | grep -E "idle|running" | sed 's/^/   /'
+else
+    echo "   No cron jobs configured (optional)"
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════════"
 echo "                    Verification Complete"
@@ -187,5 +258,6 @@ echo ""
 echo "Access your OpenClaw instance at:"
 echo "  https://$FULL_HOSTNAME/"
 echo ""
-echo "Note: Cloud-init log was already cleaned up during deployment."
+echo "SECURITY: Clean up the cloud-init log (contains secrets):"
+echo "  ssh ubuntu@$FULL_HOSTNAME 'sudo shred -u /var/log/cloud-init-openclaw.log'"
 echo "═══════════════════════════════════════════════════════════════════"
