@@ -35,6 +35,17 @@ OpenClaw is a self-hosted Anthropic Computer Use gateway deployed on a Hetzner V
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
 
+### Why Not Docker?
+
+The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs the gateway in Docker. We use systemd instead because:
+
+- **Smaller attack surface** — Docker daemon runs as root. Our gateway runs as an unprivileged user.
+- **Simpler operations** — `systemctl --user` and `journalctl` are easier to debug than container logs.
+- **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
+- **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
+
+Docker *is* installed on the server for **sandbox support** — OpenClaw can sandbox agent-executed code in containers. But the gateway itself runs natively.
+
 ### Why Two Auth Layers?
 
 This deployment uses **Tailscale identity auth** with device pairing:
@@ -573,3 +584,18 @@ cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
 | Hetzner Backups | €1.30/mo |
 | Tailscale | Free (personal) |
 | **Total** | **~€7.79/mo** |
+
+## Known Limitations
+
+### Sandboxing Not Configured
+
+OpenClaw supports sandboxing agent-executed code in Docker containers. This deployment does not configure sandbox mode explicitly. Docker is installed and available for sandbox use, but the sandbox setting defaults to `off`.
+
+To enable sandboxing after deployment:
+```bash
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config set routing.agents.main.sandbox.mode docker'
+```
+
+### Next Deployment Uses Official Installer
+
+The current running server uses NVM for Node.js. The next `pulumi up` will rebuild with the [official OpenClaw installer](https://openclaw.ai/install.sh) which uses NodeSource instead. This is a one-time transition — no action needed, just be aware that `source ~/.nvm/nvm.sh` will no longer be required after redeployment.
