@@ -11,6 +11,10 @@ const config = new pulumi.Config();
 const tailscaleAuthKey = config.requireSecret("tailscaleAuthKey");
 const claudeSetupToken = config.requireSecret("claudeSetupToken");
 
+// Optional Telegram configuration (set via `pulumi config set`)
+const telegramBotToken = config.getSecret("telegramBotToken");
+const telegramUserId = config.get("telegramUserId");
+
 // Tailscale configuration
 // Find your tailnet name at: https://login.tailscale.com/admin/dns
 const tailnetDnsName = config.get("tailnetDnsName") || "";
@@ -44,6 +48,8 @@ const userData = generateUserData({
     claudeSetupToken,
     gatewayToken: gatewayToken.result,
     hostname: serverName,
+    telegramBotToken,
+    telegramUserId,
 });
 
 // 3. Create the server with attached firewall

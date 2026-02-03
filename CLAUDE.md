@@ -147,10 +147,10 @@ After deployment, you need to approve your browser as a trusted device (one-time
 3. **Approve the device** via SSH:
    ```bash
    # List pending devices
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices list'
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
 
    # Approve the pending request (use the Request ID from the list)
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices approve <request-id>'
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
    ```
 
 4. **Refresh the browser** - you're now authenticated via Tailscale identity
@@ -228,6 +228,104 @@ pulumi env init <your-org>/openclaw-secrets
 
 See [Pulumi ESC documentation](https://www.pulumi.com/docs/esc/) for details.
 
+## Telegram Integration (Optional)
+
+OpenClaw can send scheduled messages to you via Telegram. This is **optional** - if you don't configure it, the deployment works fine without it.
+
+### Why Telegram?
+
+- Receive daily digests, evening reviews, and weekly planning prompts
+- Get notifications from scheduled autonomous tasks
+- Interact with OpenClaw from your phone
+
+### Setup Steps
+
+#### 1. Create a Telegram Bot
+
+1. Open Telegram and search for **@BotFather**
+2. Send `/newbot`
+3. Choose a display name (e.g., "OpenClaw Assistant")
+4. Choose a username (must end in "bot", e.g., `openclaw_assistant_bot`)
+5. **Copy the bot token** (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+
+#### 2. Get Your Telegram User ID
+
+1. Search for **@userinfobot** on Telegram
+2. Send `/start`
+3. **Copy your numeric user ID** (e.g., `123456789`)
+
+#### 3. Configure Pulumi
+
+```bash
+cd pulumi
+pulumi config set telegramBotToken --secret   # Paste the bot token
+pulumi config set telegramUserId "123456789"  # Your numeric user ID
+```
+
+#### 4. Deploy
+
+```bash
+pulumi up
+```
+
+### Scheduled Tasks
+
+When Telegram is configured, these cron jobs are automatically created:
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| **Morning Digest** | 09:30 daily | Summarize what needs your attention today |
+| **Evening Review** | 19:30 daily | Review accomplishments and pending items |
+| **Night Shift** | 23:00 daily | Deep work: review notes, organize, triage tasks |
+| **Weekly Planning** | 18:00 Sunday | Review past week, plan upcoming priorities |
+
+All times are in **Europe/Berlin** timezone. Each job runs in an isolated session for fresh context.
+
+### Verification
+
+After deployment, verify Telegram is configured:
+
+```bash
+# Check Telegram channel status
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
+
+# List scheduled jobs
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
+
+# Test a job manually
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
+```
+
+### Customizing Schedules
+
+To modify schedules after deployment, SSH to the server and use `openclaw cron`:
+
+```bash
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net
+
+# List current jobs
+openclaw cron list
+
+# Remove a job
+openclaw cron remove "Night Shift"
+
+# Add a custom job
+openclaw cron add \
+    --name "Custom Task" \
+    --cron "0 14 * * *" \
+    --tz "Europe/Berlin" \
+    --session isolated \
+    --message "Your custom prompt here" \
+    --deliver --channel telegram --to "YOUR_USER_ID"
+```
+
+### Without Telegram
+
+If you don't configure Telegram:
+- The deployment completes normally
+- No cron jobs are created
+- You can add Telegram later by setting the config and redeploying
+
 ## Directory Structure
 
 ```
@@ -283,8 +381,7 @@ XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -f
 
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-source ~/.nvm/nvm.sh
-npm update -g openclaw
+OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
 
@@ -300,7 +397,7 @@ sudo cat /var/log/cloud-init-openclaw.log
 OpenClaw includes a built-in security audit tool:
 
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw security audit --deep'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 ```
 
 **Expected output:** `0 critical · 0 warn · 1 info` - This deployment uses Tailscale identity auth with device pairing, which passes all security checks.
@@ -364,6 +461,12 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 1. Redeploy with `pulumi up` (generates new token)
 2. Re-pair browser devices after rotation
 
+**Telegram bot token** (if compromised):
+1. Revoke old token: Message @BotFather, send `/revoke`, select your bot
+2. Get new token: `/token` in @BotFather
+3. Update Pulumi config: `pulumi config set telegramBotToken --secret`
+4. Redeploy: `pulumi up`
+
 ## Secrets Reference
 
 You'll need to keep track of these secrets (store in a password manager):
@@ -375,6 +478,8 @@ You'll need to keep track of these secrets (store in a password manager):
 | Tailscale auth key | Joins server to your network | login.tailscale.com/admin/settings/keys |
 | Claude setup token | Powers OpenClaw (flat fee) | `claude setup-token` in terminal |
 | Gateway token | Authenticates browser sessions (cached after first use) | Auto-generated by Pulumi, view with `pulumi stack output openclawGatewayToken --show-secrets` |
+| Telegram bot token | (Optional) Sends messages via Telegram | @BotFather on Telegram |
+| Telegram user ID | (Optional) Your Telegram recipient ID | @userinfobot on Telegram |
 
 ## Troubleshooting
 
@@ -407,10 +512,10 @@ This means your browser/device hasn't been approved yet. Approve it via SSH:
 
 ```bash
 # List pending devices (look for your IP in the pending list)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices list'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
 
 # Approve the pending request
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices approve <request-id>'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 ```
 
 Then refresh the browser.
@@ -424,6 +529,41 @@ Then refresh the browser.
 ```bash
 cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
 ```
+
+### Telegram not working
+
+1. **Verify configuration:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
+   ```
+
+2. **Check if bot token is set:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config get channels.telegram'
+   ```
+
+3. **Start a conversation with your bot** - You must message your bot first before it can message you. Find your bot by its username and send `/start`.
+
+4. **Verify user ID is correct** - Message @userinfobot again to confirm your numeric ID.
+
+5. **Test delivery manually:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
+   ```
+
+### Cron jobs not running
+
+1. **Check cron status:**
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
+   ```
+
+2. **Verify daemon is running** - Cron jobs require the daemon:
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
+   ```
+
+3. **Check timezone** - Jobs use Europe/Berlin. Verify your expected run time matches.
 
 ## Cost Breakdown
 

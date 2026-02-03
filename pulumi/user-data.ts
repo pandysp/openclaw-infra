@@ -5,12 +5,12 @@ import * as pulumi from "@pulumi/pulumi";
  *
  * This script runs on first boot and:
  * 1. Creates ubuntu user (Hetzner defaults to root)
- * 2. Installs Node.js 22 via NVM (required by OpenClaw)
+ * 2. Installs OpenClaw via official install script (includes Node.js)
  * 3. Installs unattended-upgrades for automatic security patches
  * 4. Installs and authenticates Tailscale
- * 5. Installs OpenClaw via npm globally
- * 6. Configures OpenClaw as a systemd user service
- * 7. Configures Tailscale Serve to proxy the gateway
+ * 5. Configures OpenClaw as a systemd user service
+ * 6. Configures Tailscale Serve to proxy the gateway
+ * 7. Optionally configures Telegram channel and cron jobs
  *
  * Security considerations:
  * - Secrets written to temp files (600 permissions), not CLI args
@@ -24,11 +24,17 @@ export function generateUserData(config: {
     claudeSetupToken: pulumi.Output<string>;
     gatewayToken: pulumi.Output<string>;
     hostname: string;
+    telegramBotToken?: pulumi.Output<string>;
+    telegramUserId?: string;
 }): pulumi.Output<string> {
+    // Handle optional telegram config - use empty strings if not provided
+    const telegramBotTokenOutput = config.telegramBotToken || pulumi.output("");
+    const telegramUserIdOutput = pulumi.output(config.telegramUserId || "");
+
     return pulumi
-        .all([config.tailscaleAuthKey, config.claudeSetupToken, config.gatewayToken])
+        .all([config.tailscaleAuthKey, config.claudeSetupToken, config.gatewayToken, telegramBotTokenOutput, telegramUserIdOutput])
         .apply(
-            ([tsKey, setupToken, gatewayToken]) => `#!/bin/bash
+            ([tsKey, setupToken, gatewayToken, telegramBotToken, telegramUserId]) => `#!/bin/bash
 set -euo pipefail
 
 # Logging for debugging
@@ -118,25 +124,7 @@ ufw --force enable
 ufw status verbose
 
 # ============================================
-# Node.js Installation via NVM
-# ============================================
-echo "=== Installing Node.js 22 via NVM ==="
-
-# Install NVM for ubuntu user
-sudo -u ubuntu bash << 'NVM_EOF'
-set -euo pipefail
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-nvm install 22
-nvm use 22
-nvm alias default 22
-node --version
-npm --version
-NVM_EOF
-
-# ============================================
-# OpenClaw Installation
+# OpenClaw Installation (official installer)
 # ============================================
 echo "=== Installing OpenClaw ==="
 
@@ -147,12 +135,13 @@ chmod 600 /tmp/setup-token
 chown ubuntu:ubuntu /tmp/setup-token
 set -x
 
-# Install OpenClaw globally as ubuntu user
+# Install OpenClaw using official install script
+# This handles Node.js installation, npm setup, and openclaw binary
 sudo -u ubuntu bash << 'OPENCLAW_INSTALL_EOF'
 set -euo pipefail
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-npm install -g openclaw@latest
+export OPENCLAW_NO_ONBOARD=1
+export OPENCLAW_NO_PROMPT=1
+curl -fsSL https://openclaw.ai/install.sh | bash
 OPENCLAW_INSTALL_EOF
 
 # Enable user lingering so systemd user services persist
@@ -170,10 +159,8 @@ sleep 5
 echo "=== Running OpenClaw onboard ==="
 
 # Run onboarding as ubuntu user with proper environment
-sudo -u ubuntu bash << 'ONBOARD_EOF'
+sudo -u ubuntu bash -l << 'ONBOARD_EOF'
 set -euo pipefail
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export XDG_RUNTIME_DIR=/run/user/1000
 
 # Read token from file (not in process list)
@@ -222,10 +209,8 @@ rm -f /tmp/setup-token
 # ============================================
 echo "=== Installing OpenClaw daemon ==="
 
-sudo -u ubuntu bash << 'DAEMON_EOF'
+sudo -u ubuntu bash -l << 'DAEMON_EOF'
 set -euo pipefail
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export XDG_RUNTIME_DIR=/run/user/1000
 
 openclaw daemon install
@@ -335,6 +320,120 @@ if ! systemctl --user is-active openclaw-gateway > /dev/null 2>&1; then
 fi
 echo "OpenClaw gateway service started successfully"
 START_EOF
+
+# ============================================
+# Telegram Channel Configuration
+# ============================================
+echo "=== Configuring Telegram channel ==="
+
+# Write Telegram credentials to temp files (secure)
+set +x  # Disable command logging
+TELEGRAM_BOT_TOKEN="${telegramBotToken}"
+TELEGRAM_USER_ID="${telegramUserId}"
+if [ -n "\$TELEGRAM_BOT_TOKEN" ]; then
+    echo "\$TELEGRAM_BOT_TOKEN" > /tmp/telegram-bot-token
+    chmod 600 /tmp/telegram-bot-token
+    chown ubuntu:ubuntu /tmp/telegram-bot-token
+fi
+echo "\$TELEGRAM_USER_ID" > /tmp/telegram-user-id
+chmod 600 /tmp/telegram-user-id
+chown ubuntu:ubuntu /tmp/telegram-user-id
+set -x
+
+sudo -u ubuntu bash -l << 'TELEGRAM_EOF'
+set -euo pipefail
+
+# Read user ID from file
+TELEGRAM_USER_ID=""
+if [ -f /tmp/telegram-user-id ]; then
+    TELEGRAM_USER_ID=$(cat /tmp/telegram-user-id)
+fi
+
+# Configure Telegram (only if bot token is provided)
+if [ -f /tmp/telegram-bot-token ]; then
+    set +x
+    BOT_TOKEN=$(cat /tmp/telegram-bot-token)
+    set -x
+
+    openclaw config set channels.telegram.enabled true
+    set +x
+    openclaw config set channels.telegram.botToken "$BOT_TOKEN"
+    set -x
+    openclaw config set channels.telegram.dmPolicy "allowlist"
+    if [ -n "$TELEGRAM_USER_ID" ]; then
+        openclaw config set channels.telegram.allowFrom "[$TELEGRAM_USER_ID]"
+    fi
+    echo "Telegram channel configured"
+else
+    echo "Skipping Telegram (no bot token provided)"
+fi
+TELEGRAM_EOF
+
+# Clean up Telegram token
+rm -f /tmp/telegram-bot-token
+
+# ============================================
+# Cron Jobs Configuration
+# ============================================
+echo "=== Configuring scheduled tasks ==="
+
+sudo -u ubuntu bash -l << 'CRON_EOF'
+set -euo pipefail
+
+# Read user ID from file
+TELEGRAM_USER_ID=""
+if [ -f /tmp/telegram-user-id ]; then
+    TELEGRAM_USER_ID=$(cat /tmp/telegram-user-id)
+fi
+
+# Only add cron jobs if Telegram user ID is configured
+if [ -n "$TELEGRAM_USER_ID" ]; then
+    # Morning Digest at 09:30
+    openclaw cron add \
+        --name "Morning Digest" \
+        --cron "30 9 * * *" \
+        --tz "Europe/Berlin" \
+        --session isolated \
+        --message "Good morning! Summarize what needs my attention today." \
+        --deliver --channel telegram --to "$TELEGRAM_USER_ID" || true
+
+    # Evening Review at 19:30
+    openclaw cron add \
+        --name "Evening Review" \
+        --cron "30 19 * * *" \
+        --tz "Europe/Berlin" \
+        --session isolated \
+        --message "Evening review. What was accomplished? What is pending?" \
+        --deliver --channel telegram --to "$TELEGRAM_USER_ID" || true
+
+    # Night Shift at 23:00
+    openclaw cron add \
+        --name "Night Shift" \
+        --cron "0 23 * * *" \
+        --tz "Europe/Berlin" \
+        --session isolated \
+        --thinking high \
+        --message "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary." \
+        --deliver --channel telegram --to "$TELEGRAM_USER_ID" || true
+
+    # Weekly Planning Sunday 18:00
+    openclaw cron add \
+        --name "Weekly Planning" \
+        --cron "0 18 * * 0" \
+        --tz "Europe/Berlin" \
+        --session isolated \
+        --message "Weekly planning. Review past week, plan upcoming week priorities." \
+        --deliver --channel telegram --to "$TELEGRAM_USER_ID" || true
+
+    echo "Cron jobs configured"
+    openclaw cron list
+else
+    echo "Skipping cron jobs (no Telegram user ID)"
+fi
+CRON_EOF
+
+# Clean up telegram user ID file
+rm -f /tmp/telegram-user-id
 
 # ============================================
 # Tailscale Serve Configuration
