@@ -42,8 +42,8 @@ https://openclaw-vps.<your-tailnet>.ts.net/
 
 First visit shows **"pairing required"** — this is expected. Approve your device via SSH:
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices list'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices approve <request-id>'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 ```
 
 See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details.

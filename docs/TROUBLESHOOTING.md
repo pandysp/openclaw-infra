@@ -72,9 +72,9 @@ cloud-init status
 # View the log
 sudo cat /var/log/cloud-init-openclaw.log
 
-# Common issue: npm install is slow on first run
+# Common issue: install script is slow on first run
 # Check if Node.js is installed
-source ~/.nvm/nvm.sh && node --version
+node --version
 ```
 
 ### Missing @pulumi/random module
@@ -143,7 +143,7 @@ ls -la ~/.config/systemd/user/openclaw.service
 
 **Common causes**:
 - Setup token invalid or expired
-- Node.js not in PATH (NVM not sourced)
+- Node.js not in PATH
 - User lingering not enabled
 
 **Fixes**:
@@ -155,7 +155,6 @@ sudo loginctl enable-linger ubuntu
 systemctl start user@1000.service
 
 # Reinstall daemon
-source ~/.nvm/nvm.sh
 XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway
 ```
@@ -170,7 +169,6 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway
 XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 200
 
 # Check if OpenClaw is installed
-source ~/.nvm/nvm.sh
 which openclaw
 openclaw --version
 ```
@@ -184,20 +182,13 @@ openclaw --version
 
 **Symptom**: Service fails with "node: command not found".
 
-**Solution**: NVM needs to be sourced in the service environment.
+**Solution**: Reinstall using the official installer:
 ```bash
 # Verify Node.js is installed
-source ~/.nvm/nvm.sh
 node --version  # Should show v22.x.x
 
-# If missing, reinstall
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-source ~/.nvm/nvm.sh
-nvm install 22
-nvm alias default 22
-
-# Reinstall OpenClaw
-npm install -g openclaw@latest
+# If missing, reinstall OpenClaw (includes Node.js)
+OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
 
 # Reinstall daemon
 XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
@@ -217,7 +208,6 @@ claude setup-token
 
 # Update on server
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-source ~/.nvm/nvm.sh
 
 # Re-run onboarding with new token
 openclaw onboard --non-interactive --accept-risk \
@@ -288,8 +278,8 @@ tailscale serve --bg 18789
    - CAX21 has 4 vCPU, 8GB RAM
    - Check resource usage: `htop`
 
-3. **NVM overhead**
-   - Node.js via NVM adds slight startup overhead
+3. **Node.js overhead**
+   - Node.js startup adds slight overhead
    - Not significant for running service
 
 ### High CPU usage
@@ -338,7 +328,6 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
 # Set environment and restart
 export XDG_RUNTIME_DIR=/run/user/1000
-source ~/.nvm/nvm.sh
 
 systemctl --user restart openclaw-gateway
 systemctl --user status openclaw-gateway
@@ -348,10 +337,9 @@ systemctl --user status openclaw-gateway
 
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-source ~/.nvm/nvm.sh
 
 # Update to latest version
-npm update -g openclaw
+OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
 
 # Restart service
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway

@@ -123,13 +123,13 @@ OpenClaw enforces authentication whenever the gateway is exposed beyond localhos
 **Token rotation:**
 ```bash
 # Generate new token
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw config set gateway.auth.token "$(openssl rand -base64 36)"'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config set gateway.auth.token "$(openssl rand -base64 36)"'
 
 # Restart gateway
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
 
 # Get new token
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw config get gateway.auth.token'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config get gateway.auth.token'
 ```
 
 ### Tailscale Identity Auth and Device Pairing
@@ -156,13 +156,13 @@ gateway.controlUi.allowInsecureAuth: false
 **Approving new devices:**
 ```bash
 # List pending devices
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices list'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
 
 # Approve a pending request
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices approve <request-id>'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 
 # Revoke a device
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw devices revoke <device-id>'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices revoke <device-id>'
 ```
 
 **Fallback access:**
@@ -173,7 +173,7 @@ pulumi stack output tailscaleUrlWithToken --show-secrets
 
 **Verifying security posture:**
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw security audit --deep'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
 # Expected: 0 critical · 0 warn · 1 info
 ```
 
@@ -195,7 +195,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'source ~/.nvm/nvm.sh && openclaw secur
 
 **Mitigations**:
 - Use official OpenClaw package from npm registry
-- Node.js installed via NVM (official installer)
+- Node.js installed via official OpenClaw installer
 - Pulumi dependencies from npm registry
 - Automatic security patches via unattended-upgrades
 
