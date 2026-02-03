@@ -147,6 +147,11 @@ export OPENCLAW_NO_PROMPT=1
 curl -fsSL https://openclaw.ai/install.sh | bash
 OPENCLAW_INSTALL_EOF
 
+# Add npm global bin dir to PATH for all subsequent commands
+# The official installer puts openclaw at ~/.npm-global/bin/openclaw
+# but doesn't add it to PATH automatically
+sudo -u ubuntu bash -c 'echo "export PATH=\\"\\\$HOME/.npm-global/bin:\\\$PATH\\"" >> ~/.bashrc'
+
 # Enable user lingering so systemd user services persist
 loginctl enable-linger ubuntu
 
@@ -239,7 +244,7 @@ set +x
 GATEWAY_TOKEN=$(cat /tmp/gateway-token)
 set -x
 
-# Tailscale Serve: let OpenClaw manage `tailscale serve` lifecycle
+# Tailscale Serve: let OpenClaw manage the tailscale serve lifecycle
 # resetOnExit undoes the serve config when the gateway shuts down
 openclaw config set gateway.tailscale.mode serve
 openclaw config set gateway.tailscale.resetOnExit true

@@ -254,9 +254,14 @@ The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills
    ```
 
 3. **Add the deploy key to your GitHub repo**:
-   - Go to your repo → Settings → Deploy keys → Add deploy key
-   - Paste the public key
-   - Check "Allow write access"
+   ```bash
+   # Via CLI (if gh is installed):
+   pulumi stack output workspaceDeployPublicKey | gh repo deploy-key add --repo YOUR_USER/openclaw-workspace --title "OpenClaw VPS" -w -
+
+   # Or via GitHub UI:
+   # Go to your repo → Settings → Deploy keys → Add deploy key
+   # Paste the public key, check "Allow write access"
+   ```
 
 4. **Configure the repo URL**:
    ```bash
