@@ -510,11 +510,13 @@ XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100
 
 ### Tailscale Serve not working
 
+OpenClaw manages Tailscale Serve automatically (`gateway.tailscale.mode: serve`). If it's not working:
+
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 tailscale serve status
-# If not configured:
-tailscale serve --bg 18789
+# If not configured, restart the gateway (it will re-establish serve):
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
 
 ### "Pairing required" error

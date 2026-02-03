@@ -251,9 +251,9 @@ curl http://127.0.0.1:18789/
 sudo ss -tlnp | grep tailscale
 ```
 
-**Fix if serve not configured**:
+**Fix**: OpenClaw manages Tailscale Serve automatically. Restart the gateway to re-establish it:
 ```bash
-tailscale serve --bg 18789
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
 
 ### HTTPS certificate errors

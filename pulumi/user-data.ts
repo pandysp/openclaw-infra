@@ -8,9 +8,8 @@ import * as pulumi from "@pulumi/pulumi";
  * 2. Installs OpenClaw via official install script (includes Node.js)
  * 3. Installs unattended-upgrades for automatic security patches
  * 4. Installs and authenticates Tailscale
- * 5. Configures OpenClaw as a systemd user service
- * 6. Configures Tailscale Serve to proxy the gateway
- * 7. Optionally configures Telegram channel and cron jobs
+ * 5. Configures OpenClaw as a systemd user service (with built-in Tailscale Serve)
+ * 6. Optionally configures Telegram channel and cron jobs
  *
  * Security considerations:
  * - Secrets written to temp files (600 permissions), not CLI args
@@ -228,71 +227,42 @@ chmod 600 /tmp/gateway-token
 chown ubuntu:ubuntu /tmp/gateway-token
 set -x
 
-# Configure gateway using Python (modify openclaw.json, not gateway.json)
-sudo -u ubuntu python3 << 'PYTHON_EOF'
-import json
-import os
-import sys
+sudo -u ubuntu bash -l << 'GATEWAY_EOF'
+set -euo pipefail
 
-config_path = os.path.expanduser("~/.openclaw/openclaw.json")
-token_path = "/tmp/gateway-token"
+# Read gateway token from file
+set +x
+GATEWAY_TOKEN=$(cat /tmp/gateway-token)
+set -x
 
-# Verify config exists (should have been created by onboarding)
-if not os.path.exists(config_path):
-    print(f"ERROR: Config file not found at {config_path}")
-    print("This usually means 'openclaw onboard' failed. Check logs above.")
-    sys.exit(1)
-
-# Read gateway token
-try:
-    with open(token_path, "r") as f:
-        gateway_token = f.read().strip()
-except FileNotFoundError:
-    print(f"ERROR: Gateway token file not found at {token_path}")
-    sys.exit(1)
-
-# Load existing config
-try:
-    with open(config_path, "r") as f:
-        config = json.load(f)
-except json.JSONDecodeError as e:
-    print(f"ERROR: Invalid JSON in {config_path}: {e}")
-    sys.exit(1)
-
-# Verify expected structure
-if "gateway" not in config:
-    print(f"ERROR: Config missing 'gateway' key. Keys present: {list(config.keys())}")
-    sys.exit(1)
+# Tailscale Serve: let OpenClaw manage `tailscale serve` lifecycle
+# resetOnExit undoes the serve config when the gateway shuts down
+openclaw config set gateway.tailscale.mode serve
+openclaw config set gateway.tailscale.resetOnExit true
 
 # Configure security settings for Tailscale Serve access
 # trustedProxies: localhost + Tailscale CGNAT range (100.64.0.0/10)
-config["gateway"]["trustedProxies"] = ["127.0.0.1", "100.64.0.0/10"]
+openclaw config set gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
 
 # Control UI: allowInsecureAuth=false because we use Tailscale identity auth
-config["gateway"]["controlUi"] = {
-    "enabled": True,
-    "allowInsecureAuth": False
-}
+openclaw config set gateway.controlUi.enabled true
+openclaw config set gateway.controlUi.allowInsecureAuth false
 
 # Auth: token mode + allowTailscale for Tailscale identity auth
 # allowTailscale lets Tailscale Serve users skip token auth (requires device pairing)
-config["gateway"]["auth"] = {
-    "mode": "token",
-    "token": gateway_token,
-    "allowTailscale": True
-}
+openclaw config set gateway.auth.mode token
+set +x
+openclaw config set gateway.auth.token "\$GATEWAY_TOKEN"
+set -x
+openclaw config set gateway.auth.allowTailscale true
 
 # CLI needs remote.token to manage devices (approve pairings, etc.)
-if "remote" not in config["gateway"]:
-    config["gateway"]["remote"] = {}
-config["gateway"]["remote"]["token"] = gateway_token
+set +x
+openclaw config set gateway.remote.token "\$GATEWAY_TOKEN"
+set -x
 
-# Write config
-with open(config_path, "w") as f:
-    json.dump(config, f, indent=2)
-
-print(f"Gateway config updated in {config_path}")
-PYTHON_EOF
+echo "Gateway config updated via openclaw config set"
+GATEWAY_EOF
 
 # Clean up gateway token
 rm -f /tmp/gateway-token
@@ -434,39 +404,6 @@ CRON_EOF
 
 # Clean up telegram user ID file
 rm -f /tmp/telegram-user-id
-
-# ============================================
-# Tailscale Serve Configuration
-# ============================================
-echo "=== Configuring Tailscale Serve ==="
-
-# Wait for OpenClaw to start
-echo "Waiting for OpenClaw gateway to be ready..."
-sleep 30
-
-# Check if gateway is responding
-GATEWAY_READY=false
-for i in {1..10}; do
-    if curl -s http://127.0.0.1:18789/ > /dev/null 2>&1; then
-        echo "Gateway is responding"
-        GATEWAY_READY=true
-        break
-    fi
-    echo "Waiting for gateway... ($i/10)"
-    sleep 5
-done
-
-if [ "$GATEWAY_READY" != "true" ]; then
-    echo "ERROR: Gateway failed to respond after 10 attempts (50 seconds)"
-    echo "Checking service status..."
-    sudo -u ubuntu bash -c 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway' || true
-    sudo -u ubuntu bash -c 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 50 --no-pager' || true
-    exit 1
-fi
-
-# Configure Tailscale Serve to proxy localhost:18789
-# This makes the service available at https://<hostname>.<tailnet>/
-tailscale serve --bg 18789
 
 echo "=== OpenClaw Bootstrap Complete: $(date) ==="
 echo "Access via: https://${config.hostname}.<your-tailnet>.ts.net/"
