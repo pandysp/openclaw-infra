@@ -1,52 +1,29 @@
-# Troubleshooting Guide
+# Troubleshooting
 
-Common issues and solutions for OpenClaw deployment.
+Common issues and solutions for the OpenClaw deployment.
 
-## Local Setup Issues
+**Quick reference** — jump to your symptom:
+- Can't reach server → [Connectivity](#connectivity-issues)
+- "Pairing required" in browser → [Device Pairing](#device-pairing-not-working)
+- Service not running → [Service Issues](#service-issues)
+- Token problems → [Setup Token](#setup-token-issues)
+- Web UI not loading → [Tailscale Serve](#tailscale-serve-issues)
+- Workspace sync not working → [Workspace Git Sync](#workspace-git-sync-issues)
+
+> **Note**: All `systemctl --user` and `journalctl --user` commands on the server require `XDG_RUNTIME_DIR=/run/user/1000`. Either prefix each command or run `export XDG_RUNTIME_DIR=/run/user/1000` once per session.
+
+## Deployment Issues
 
 ### Pulumi "passphrase must be set" error
 
-**Symptom**: `pulumi stack init` fails with passphrase error.
+**Symptom**: Any `pulumi` command fails with passphrase error.
 
-**Solution**: Set the passphrase environment variable:
+**Solution**:
 ```bash
-# Option 1: Set per-command
-PULUMI_CONFIG_PASSPHRASE="your-passphrase" pulumi stack init prod
-
-# Option 2: Export for session
 export PULUMI_CONFIG_PASSPHRASE="your-passphrase"
 ```
 
-### Tailscale stuck on "VPN starting..."
-
-**Symptom**: macOS Tailscale app shows "VPN starting..." indefinitely.
-
-**Solutions**:
-1. Check System Settings → Privacy & Security for pending approvals
-2. Look for "Tailscale" blocked message and click "Allow"
-3. Quit and reopen Tailscale (menu bar icon → Quit Tailscale)
-4. If still stuck, restart your Mac
-
-### Tailscale System Extension blocked
-
-**Symptom**: macOS blocks Tailscale kernel extension.
-
-**Solution**:
-1. Open System Settings → Privacy & Security
-2. Scroll down to see blocked extension message
-3. Click "Allow" next to Tailscale
-4. May require restart
-
-### brew install tailscale requires password
-
-**Symptom**: `brew install --cask tailscale` prompts for sudo password.
-
-**Solution**: Run in an interactive terminal (not from an IDE or script):
-```bash
-brew install --cask tailscale
-```
-
-## Deployment Issues
+See [CLAUDE.md — Pulumi Passphrase](../CLAUDE.md#pulumi-passphrase) for options.
 
 ### Pulumi fails with "unauthorized"
 
@@ -54,38 +31,38 @@ brew install --cask tailscale
 
 **Solution**:
 ```bash
-# Re-set the Hetzner token
 pulumi config set hcloud:token --secret
-# Enter your token when prompted
-```
-
-### Cloud-init takes too long
-
-**Symptom**: Server is up but OpenClaw not accessible after 10+ minutes.
-
-**Solution**:
-```bash
-# SSH via Hetzner console (fallback)
-# Check cloud-init status
-cloud-init status
-
-# View the log
-sudo cat /var/log/cloud-init-openclaw.log
-
-# Common issue: install script is slow on first run
-# Check if Node.js is installed
-node --version
 ```
 
 ### Missing @pulumi/random module
 
 **Symptom**: `pulumi preview` fails with "Cannot find module '@pulumi/random'".
 
-**Solution**:
+**Solution**: Run `npm install` from the project root.
+
+### Cloud-init not completing
+
+**Symptom**: Server is up but OpenClaw not accessible after 10+ minutes.
+
+Cloud-init typically completes in 3-5 minutes. If still not done after 10:
+
 ```bash
-cd ~/projects/openclaw-infra
-npm install
+# Check status
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo cloud-init status'
+
+# If "running", wait. If "error", check the log:
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo tail -50 /var/log/cloud-init-openclaw.log'
 ```
+
+If Tailscale never started (can't SSH), use the Hetzner Cloud console (web terminal) to access the server directly.
+
+### Server hostname changed after redeploy
+
+**Symptom**: After `pulumi destroy` + `pulumi up`, SSH commands fail because hostname is now `openclaw-vps-2` instead of `openclaw-vps`.
+
+Each redeploy creates a new Tailscale device with an incremented suffix. Check `tailscale status` for the current hostname, and clean up stale devices in the [Tailscale admin console](https://login.tailscale.com/admin/machines).
+
+See [CLAUDE.md — Clean Up Stale Tailscale Devices](../CLAUDE.md#clean-up-stale-tailscale-devices).
 
 ## Connectivity Issues
 
@@ -93,66 +70,71 @@ npm install
 
 **Symptom**: `tailscale ping openclaw-vps` times out.
 
-**Causes & Solutions**:
-
-1. **Cloud-init not complete**
-   - Wait 5 minutes after deployment
-   - Check Tailscale admin console for the device
-
-2. **Auth key expired**
-   - Generate new auth key in Tailscale admin
-   - SSH via Hetzner console, re-run `tailscale up --authkey=...`
-
-3. **Tailscale not installed**
-   - SSH via Hetzner console
-   - Check: `which tailscale`
-   - Re-run install: `curl -fsSL https://tailscale.com/install.sh | sh`
+1. **Cloud-init not complete** — wait 5 minutes, check [Tailscale admin](https://login.tailscale.com/admin/machines) for the device
+2. **Auth key expired** — generate a new key in Tailscale admin, then SSH via Hetzner console and re-run `tailscale up --authkey=<new-key> --hostname=openclaw-vps --ssh`
+3. **Tailscale not installed** — SSH via Hetzner console, run `curl -fsSL https://tailscale.com/install.sh | sh`
 
 ### SSH connection refused
 
 **Symptom**: Can ping via Tailscale but SSH fails.
 
-**Solutions**:
-```bash
-# Tailscale SSH (if enabled)
-ssh -o ProxyCommand="tailscale nc %h %p" ubuntu@openclaw-vps
+Tailscale SSH is enabled by default in this deployment (`--ssh` flag). If SSH is refused:
+- Cloud-init may still be running — wait and retry
+- Remove stale host key: `ssh-keygen -R openclaw-vps.<tailnet>.ts.net`
 
-# Or enable Tailscale SSH in ACLs
-# https://tailscale.com/kb/1193/tailscale-ssh
+## Device Pairing
+
+### Device pairing not working
+
+**Symptom**: Browser shows "pairing required" after opening the gateway URL.
+
+This is expected on first visit. Approve your device:
+```bash
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 ```
 
-## OpenClaw Service Issues
+Then refresh the browser.
+
+**Common causes of repeated pairing prompts**:
+- Browser localStorage was cleared
+- Using incognito/private mode
+- Different browser or device
+
+**Fallback**: Use the tokenized URL to bypass pairing:
+```bash
+cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
+```
+
+## Service Issues
 
 ### Service not running
 
-**Symptom**: Gateway not responding, service inactive.
+**Symptom**: Gateway not responding.
 
-**Diagnosis**:
+```bash
+# Quick fix — restart the service
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net \
+  'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
+```
+
+If that doesn't work, diagnose:
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
-# Check service status (user service requires XDG_RUNTIME_DIR)
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway
-
-# Check logs
 XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100
 
-# Check if the service file exists
-ls -la ~/.config/systemd/user/openclaw.service
+# Check if service file exists
+ls -la ~/.config/systemd/user/openclaw-gateway.service
 ```
 
-**Common causes**:
-- Setup token invalid or expired
-- Node.js not in PATH
-- User lingering not enabled
+**Common causes**: setup token expired, user lingering not enabled, Node.js not in PATH.
 
 **Fixes**:
 ```bash
 # Re-enable user lingering
 sudo loginctl enable-linger ubuntu
-
-# Restart user systemd
-systemctl start user@1000.service
 
 # Reinstall daemon
 XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
@@ -163,34 +145,21 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway
 
 **Symptom**: Service shows "activating (auto-restart)" or crash loop.
 
-**Diagnosis**:
 ```bash
-# Check recent logs for errors
 XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 200
-
-# Check if OpenClaw is installed
-which openclaw
-openclaw --version
 ```
 
-**Common causes**:
-- Invalid setup token format
-- Port conflict (something else on 18789)
-- Node.js version mismatch (needs v22+)
+**Common causes**: invalid setup token, port conflict (something else on 18789), Node.js version mismatch (needs v22+).
 
 ### Node.js not found
 
 **Symptom**: Service fails with "node: command not found".
 
-**Solution**: Reinstall using the official installer:
 ```bash
-# Verify Node.js is installed
-node --version  # Should show v22.x.x
-
-# If missing, reinstall OpenClaw (includes Node.js)
+# Reinstall OpenClaw (includes Node.js)
 OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
 
-# Reinstall daemon
+# Reinstall daemon and restart
 XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
@@ -201,25 +170,23 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 
 **Symptom**: OpenClaw fails to authenticate, logs show auth errors.
 
-**Solution**:
 ```bash
-# Generate new setup token locally
+# Generate new token locally
 claude setup-token
 
-# Update on server
+# Re-onboard on the server
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
-# Re-run onboarding with new token
 openclaw onboard --non-interactive --accept-risk \
     --mode local \
-    --auth-choice setup-token \
+    --auth-choice token \
     --token "YOUR_NEW_TOKEN" \
+    --token-provider anthropic \
     --gateway-port 18789 \
     --gateway-bind loopback \
     --skip-daemon \
     --skip-skills
 
-# Restart service
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
 
@@ -227,9 +194,7 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 
 **Symptom**: OpenClaw works but /status endpoint doesn't show usage.
 
-**Cause**: This is expected behavior. Setup tokens only have `user:inference` scope (missing `user:profile`), so usage tracking isn't available. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
-
-**Workaround**: None currently. This is a limitation of setup tokens.
+This is expected. Setup tokens only have `user:inference` scope (missing `user:profile`). See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
 
 ## Tailscale Serve Issues
 
@@ -237,21 +202,17 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 
 **Symptom**: Browser shows connection error for `https://openclaw-vps.<tailnet>.ts.net/`.
 
-**Diagnosis**:
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
-# Check serve status
+# Check if serve is configured
 tailscale serve status
 
 # Check if gateway is listening
-curl http://127.0.0.1:18789/
-
-# Check if serve is running
-sudo ss -tlnp | grep tailscale
+curl -s http://127.0.0.1:18789/ | head -5
 ```
 
-**Fix**: OpenClaw manages Tailscale Serve automatically. Restart the gateway to re-establish it:
+OpenClaw manages Tailscale Serve automatically. Restart the gateway to re-establish it:
 ```bash
 XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 ```
@@ -260,94 +221,67 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 
 **Symptom**: Browser warns about invalid certificate.
 
-**Cause**: Using IP instead of Tailscale DNS name.
+Always use the Tailscale DNS name (`https://openclaw-vps.<tailnet>.ts.net/`), not the IP address.
 
-**Solution**: Always use `https://openclaw-vps.<tailnet>.ts.net/`, not the IP.
+## Workspace Git Sync Issues
 
-## Performance Issues
+### Sync not running
 
-### Slow response times
+**Symptom**: No commits appearing in the workspace repo.
 
-**Causes & Solutions**:
-
-1. **Geographic distance**
-   - Server is in Frankfurt (fsn1)
-   - Consider different Hetzner location
-
-2. **Resource constraints**
-   - CAX21 has 4 vCPU, 8GB RAM
-   - Check resource usage: `htop`
-
-3. **Node.js overhead**
-   - Node.js startup adds slight overhead
-   - Not significant for running service
-
-### High CPU usage
-
-**Diagnosis**:
 ```bash
-# On server
-htop
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
-# Check OpenClaw specifically
-ps aux | grep openclaw
+# Check timer
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.timer
+
+# Check last sync result
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.service
+
+# Trigger a manual sync
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync.service
+
+# Check git log
+cd ~/.openclaw/workspace && git log --oneline -5
 ```
 
-**Solutions**:
-- OpenClaw is CPU-intensive during browser automation
-- Consider larger instance type
-- Check for runaway processes
+**Common causes**: deploy key not added to GitHub repo, repo doesn't exist, SSH host key not accepted.
 
-## Recovery Procedures
+## Telegram / Cron Issues
+
+**Most common fix**: You must message your bot first (`/start` in Telegram) before it can message you.
+
+For full Telegram and cron troubleshooting, see [CLAUDE.md](../CLAUDE.md#telegram-not-working).
+
+## Recovery
 
 ### Rebuild from scratch
 
 If all else fails:
 
 ```bash
-# Destroy infrastructure
 cd pulumi
 pulumi destroy
-
 # Wait 60 seconds for Hetzner cleanup
-
-# Redeploy
 pulumi up
-
-# Wait for cloud-init (~5 min)
-./scripts/verify.sh
-
-# Clean up cloud-init log
+# Wait ~5 min for cloud-init
+cd .. && ./scripts/verify.sh
+# Clean up cloud-init log (contains secrets)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
 ```
 
-### Manual service restart
+## General Diagnostics
 
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
+# Cloud-init log
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo tail -50 /var/log/cloud-init-openclaw.log'
 
-# Set environment and restart
-export XDG_RUNTIME_DIR=/run/user/1000
+# Service log
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 50'
 
-systemctl --user restart openclaw-gateway
-systemctl --user status openclaw-gateway
+# Gateway health
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'curl -s http://127.0.0.1:18789/'
+
+# Verify deployment
+./scripts/verify.sh
 ```
-
-### Update OpenClaw manually
-
-```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-
-# Update to latest version
-OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
-
-# Restart service
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
-```
-
-## Getting Help
-
-1. Check cloud-init log: `sudo cat /var/log/cloud-init-openclaw.log`
-2. Check service log: `XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway`
-3. Check gateway directly: `curl http://127.0.0.1:18789/`
-4. Verify deployment: `./scripts/verify.sh`
