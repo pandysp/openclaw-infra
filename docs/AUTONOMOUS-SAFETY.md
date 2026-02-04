@@ -18,9 +18,9 @@ An attacker embeds instructions in untrusted content. The agent follows them, re
 
 ## Current State
 
-Main sessions (web chat) have all three legs but are human-controlled — you can pull the plug. Non-main sessions (cron, Telegram) run in Docker with bridge networking — isolated from the host but with outbound internet.
+All sessions (including web chat) run in Docker with bridge networking — isolated from the host but with outbound internet. Main sessions are human-controlled (you can pull the plug); non-main sessions (cron, Telegram) run autonomously.
 
-| Capability | Non-main session | Vector |
+| Capability | All sessions | Vector |
 |---|---|---|
 | Private data | Yes | Workspace r/w |
 | Untrusted content | Yes | Web research during night shift (GitHub issues, Stack Overflow, Reddit) |

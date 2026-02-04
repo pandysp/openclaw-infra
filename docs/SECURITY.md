@@ -47,7 +47,7 @@ Threat model and mitigations for the OpenClaw Hetzner/Tailscale deployment.
 | **UFW** | Blocks all except tailscale0 interface | On VM |
 | **Tailscale** | Encrypts + authenticates network access | Overlay network |
 | **Gateway Auth** | Tailscale identity + device pairing (token fallback) | Application |
-| **Process Isolation** | Unprivileged user, systemd --user service | OS level |
+| **Process Isolation** | Unprivileged user, systemd --user service; all sessions sandboxed in Docker | OS level |
 
 ## Threat Model
 
@@ -97,25 +97,22 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Attack**: The agent executes destructive or malicious commands on the host.
 
-**Scenario**: OpenClaw has `tools.elevated.enabled: true` (default), giving it shell access. The `ubuntu` user has passwordless sudo. If the agent is manipulated via prompt injection, it could:
-- Run destructive commands or install malware
-- Exfiltrate secrets via outbound network (all outbound is allowed)
-- Modify its own config to weaken security
-- Use sudo to escalate to root
+**Scenario**: OpenClaw has `tools.elevated.enabled: true` (default), giving it shell access. If the agent is manipulated via prompt injection, it could attempt to run destructive commands, exfiltrate data, or modify config.
 
 **Mitigations in place**:
+- **`agents.defaults.sandbox.mode: "all"`** — all sessions (including web chat) run in Docker containers, preventing direct host access
+- `agents.defaults.sandbox.docker.image: "openclaw-sandbox-custom:latest"` — custom image with Claude Code pre-installed
+- `agents.defaults.sandbox.docker.network: "bridge"` — allows web research and git push while isolating from host filesystem, gateway config, and sudo
 - Tailscale-only access limits who can send prompts
 - Dedicated VPS with no other services
 - `agents.defaults.thinkingDefault: high` — extended thinking improves prompt injection resistance
-- `agents.defaults.sandbox.mode: "non-main"` — cron/Telegram sessions run in Docker containers with bridge networking (outbound internet, host isolation)
-- `agents.defaults.sandbox.docker.network: "bridge"` — allows web research and git push while isolating from host filesystem, gateway config, and sudo
 
 **Mitigations available but not enabled**:
-- `tools.elevated.enabled: false` — disables host shell access
-- `tools.elevated.allowFrom.<channel>` — restricts which channels trigger host commands
+- `tools.elevated.enabled: false` — disables shell access entirely
+- `tools.elevated.allowFrom.<channel>` — restricts which channels trigger commands
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
-**Accepted risk**: Sandboxed sessions have workspace write access and bridge networking. A prompt-injected cron job could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
+**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
 
 **Prompt injection guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
 - Lock down inbound DMs (we use allowlist — done)
@@ -124,7 +121,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - Prefer the latest, strongest model for tool-enabled agents
 - Red flags: requests to "read this URL and do exactly what it says", ignore system prompts, or reveal hidden instructions
 
-**Residual Risk**: High for main session (full host access, sudo, gateway config). Medium for non-main sessions (sandboxed but network-enabled — workspace exfiltration possible).
+**Residual Risk**: Medium for all sessions (sandboxed in Docker — no host access, no sudo, no gateway config — but network-enabled workspace exfiltration possible).
 
 ### 5. Self-Modification via Node Control
 

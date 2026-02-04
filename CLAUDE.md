@@ -30,7 +30,7 @@ OpenClaw is a self-hosted Anthropic Computer Use gateway deployed on a Hetzner V
 | Network (infrastructure) | Hetzner cloud firewall blocks ALL inbound |
 | Network (host) | UFW: deny incoming, allow only tailscale0 interface |
 | Access | Tailscale-only (no public SSH, no public ports) |
-| Process | Runs as unprivileged `ubuntu` user; non-main sessions [sandboxed](#sandboxing) in Docker |
+| Process | Runs as unprivileged `ubuntu` user; all sessions [sandboxed](#sandboxing) in Docker (custom image with Claude Code) |
 | Auth | Tailscale identity + device pairing |
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
@@ -46,7 +46,7 @@ The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs th
 - **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
 - **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
 
-Docker is installed on the server for **sandbox support** — non-main sessions run in Docker containers with bridge networking. The gateway itself runs natively.
+Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) that includes Claude Code. The gateway itself runs natively.
 
 ### Why Two Auth Layers?
 
@@ -92,6 +92,38 @@ openclaw-infra/
     └── TROUBLESHOOTING.md
 ```
 
+## Local CLI
+
+The OpenClaw CLI is installed locally and configured to talk to the remote gateway over Tailscale. **Prefer `openclaw` commands over SSH** for gateway operations — it's faster and avoids the SSH round-trip.
+
+```bash
+# Install
+brew install openclaw-cli
+
+# Configure for remote gateway (one-time)
+openclaw onboard --non-interactive --accept-risk --flow quickstart --mode remote \
+  --remote-url "wss://openclaw-vps.<tailnet>.ts.net" \
+  --remote-token "$(pulumi stack output openclawGatewayToken --show-secrets)" \
+  --skip-channels --skip-skills --skip-health --skip-ui --skip-daemon
+
+# Approve the CLI as a paired device (on first connect, via SSH)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'   # find the pending request ID
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
+```
+
+After pairing, CLI commands work directly:
+
+```bash
+openclaw health              # Gateway health check
+openclaw doctor              # Diagnostics and quick fixes
+openclaw devices list        # List paired devices
+openclaw cron list           # List scheduled jobs
+openclaw security audit      # Run security audit (add --deep for thorough scan)
+openclaw status              # Session health
+```
+
+**When to still use SSH:** systemd service management (`systemctl`, `journalctl`), system-level operations (`sudo`), updating the OpenClaw binary on the server.
+
 ## Common Operations
 
 ### Deploy Changes
@@ -104,38 +136,37 @@ pulumi up
 ### Check Server Status
 
 ```bash
-# Via Tailscale
+# Via local CLI (preferred)
+openclaw health
+openclaw status
+
+# Via Tailscale ping
 tailscale ping openclaw-vps
 
-# SSH to server (over Tailscale — no public SSH port)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-
-# Check service (on server)
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway
-
-# Check logs (on server)
-XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -f
+# Via SSH (for systemd-level details)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -f'
 ```
 
 ### Update OpenClaw
 
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
+# Requires SSH (system-level operation)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
 ```
 
 ### View Cloud-Init Logs
 
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-sudo cat /var/log/cloud-init-openclaw.log
+# Requires SSH (system-level operation)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo cat /var/log/cloud-init-openclaw.log'
 ```
 
 ### Run Security Audit
 
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw security audit --deep'
+openclaw security audit --deep
 ```
 
 **Expected output:** `0 critical · 0 warn · 1 info` — this deployment uses Tailscale identity auth with device pairing, which passes all security checks.
@@ -177,7 +208,7 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 | Hetzner API token | Creates/manages VPS | console.hetzner.cloud → Project → API Tokens |
 | Tailscale auth key | Joins server to your network | login.tailscale.com/admin/settings/keys |
 | Claude setup token | Powers OpenClaw (flat fee) | `claude setup-token` in terminal |
-| Gateway token | Authenticates browser sessions (cached after first use) | Auto-generated by Pulumi, view with `pulumi stack output openclawGatewayToken --show-secrets` |
+| Gateway token | Authenticates browser and CLI sessions (cached after first use) | Auto-generated by Pulumi, view with `pulumi stack output openclawGatewayToken --show-secrets` |
 | Telegram bot token | (Optional) Sends messages via Telegram | @BotFather on Telegram |
 | Telegram user ID | (Optional) Your Telegram recipient ID | @userinfobot on Telegram |
 | Workspace deploy key | (Optional) Pushes workspace to GitHub | Auto-generated by Pulumi, view public key with `pulumi stack output workspaceDeployPublicKey` |
@@ -195,7 +226,7 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 - **Clean up cloud-init log after deployment** (contains secrets)
 - **Monitor Tailscale admin console** for unauthorized devices: https://login.tailscale.com/admin/machines
 - **Rotate Tailscale auth keys periodically** (see [Key Rotation](#key-rotation) below)
-- **Review paired OpenClaw devices** regularly: `openclaw devices list`
+- **Review paired OpenClaw devices** regularly: `openclaw devices list` (via local CLI)
 
 ### DON'T
 
@@ -220,6 +251,7 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 **Gateway token** (auto-generated, rarely needs rotation):
 1. Redeploy with `pulumi up` (generates new token)
 2. Re-pair browser devices after rotation
+3. Re-run local CLI onboard with new token (see [Local CLI](#local-cli))
 
 **Telegram bot token** (if compromised):
 1. Revoke old token: Message @BotFather, send `/revoke`, select your bot
@@ -234,7 +266,7 @@ Before deploying, you need:
 1. **Hetzner Cloud API Token** — Create a **dedicated project** for OpenClaw at [console.hetzner.cloud](https://console.hetzner.cloud/), then generate a Read & Write token (Security → API Tokens)
 2. **Tailscale Auth Key** — Generate at [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) with **Reusable** and **Ephemeral** enabled. New to Tailscale? See [README.md](./README.md#first-time-tailscale-setup).
 3. **Claude Max Setup Token** — Run `claude setup-token` in your terminal. Token starts with `sk-ant-oat01-...`. Note: setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
-4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Tailscale app
+4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Tailscale app, OpenClaw CLI (`brew install openclaw-cli`)
 
 ## First-Time Setup
 
@@ -267,6 +299,14 @@ cd ..
 
 # 8. SECURITY: Clean up cloud-init log (contains secrets)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
+
+# 9. Install local CLI and connect to remote gateway (see "Local CLI" section above)
+brew install openclaw-cli
+openclaw onboard --non-interactive --accept-risk --flow quickstart --mode remote \
+  --remote-url "wss://openclaw-vps.<tailnet>.ts.net" \
+  --remote-token "$(pulumi stack output openclawGatewayToken --show-secrets)" \
+  --skip-channels --skip-skills --skip-health --skip-ui --skip-daemon
+# Then approve the CLI device via SSH (see "First-Time Access" below)
 ```
 
 ### First-Time Access (Device Pairing)
@@ -280,13 +320,15 @@ After deployment, you need to approve your browser as a trusted device (one-time
 
 2. **You'll see "pairing required"** — this is expected for first-time access
 
-3. **Approve the device** via SSH:
+3. **Approve the device** (requires an already-paired device — CLI or SSH):
    ```bash
-   # List pending devices
+   # Via SSH (required for first-ever device)
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
-
-   # Approve the pending request (use the Request ID from the list)
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
+
+   # Via local CLI (for subsequent devices, if CLI is already paired)
+   openclaw devices list
+   openclaw devices approve <request-id>
    ```
 
 4. **Refresh the browser** — you're now authenticated via Tailscale identity
@@ -366,13 +408,9 @@ The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills
 ### Verify Workspace Sync
 
 ```bash
-# Check timer is running
+# Requires SSH (systemd timer management)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.timer'
-
-# Trigger a manual sync
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync.service'
-
-# Check git log
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd ~/.openclaw/workspace && git log --oneline -5'
 ```
 
@@ -403,28 +441,18 @@ All times are in **Europe/Berlin** timezone. Each job runs in an isolated sessio
 ### Verify Telegram
 
 ```bash
-# Check Telegram channel status
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw channels status'
-
-# List scheduled jobs
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron list'
-
-# Test a job manually
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw cron run --force <job-id>'
+# Via local CLI (preferred)
+openclaw channels status
+openclaw cron list
+openclaw cron run --force <job-id>
 ```
 
 ### Customizing Schedules
 
 ```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-
-# List current jobs
+# All cron commands work via local CLI
 openclaw cron list
-
-# Remove a job
 openclaw cron remove "Night Shift"
-
-# Add a custom job
 openclaw cron add \
     --name "Custom Task" \
     --cron "0 14 * * *" \
@@ -436,26 +464,30 @@ openclaw cron add \
 
 ## Sandboxing
 
-Non-main sessions (cron jobs, Telegram) run in Docker containers with bridge networking. The web chat (main session) runs on the host with full access.
+All sessions (including web chat) run in Docker containers with bridge networking and a custom sandbox image that includes Claude Code.
 
-| | Main (web chat) | Non-main (cron, Telegram) |
-|---|---|---|
-| Runtime | Host | Docker container |
-| Network | Full | Bridge (outbound internet via Docker NAT) |
-| Workspace | Read-write | Read-write (mounted at `/workspace`) |
-| Host filesystem | Full access | No access |
-| Gateway config | Accessible | Isolated (can't read `~/.openclaw/`) |
-| Privilege escalation | Possible (sudo) | Blocked |
+| | All sessions (web chat, cron, Telegram) |
+|---|---|
+| Runtime | Docker container (`openclaw-sandbox-custom:latest`) |
+| Network | Bridge (outbound internet via Docker NAT) |
+| Workspace | Read-write (mounted at `/workspace`) |
+| Host filesystem | No access |
+| Gateway config | Isolated (can't read `~/.openclaw/`) |
+| Privilege escalation | Blocked |
+| Claude Code | Pre-installed in custom image |
 
-**Why bridge networking:** Night shift cron jobs need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
+**Why bridge networking:** Sessions need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
 
-**What the sandbox still protects against:** A prompt-injected cron job can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
+**What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
+
+**Custom image:** Built during cloud-init from `openclaw-sandbox:bookworm-slim` with Claude Code and git config added. Rebuilt on every deploy.
 
 **Config:**
 ```
-agents.defaults.sandbox.mode: non-main
+agents.defaults.sandbox.mode: all
 agents.defaults.sandbox.workspaceAccess: rw
 agents.defaults.sandbox.docker.network: bridge
+agents.defaults.sandbox.docker.image: openclaw-sandbox-custom:latest
 ```
 
 ## Troubleshooting
@@ -464,10 +496,12 @@ See [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for all troubleshooting
 
 Quick diagnostics:
 ```bash
-# Service status
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
+# Via local CLI (preferred)
+openclaw health
+openclaw doctor
 
-# Service logs
+# Via SSH (for systemd-level details)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 50'
 
 # Verify deployment

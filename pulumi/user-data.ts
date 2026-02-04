@@ -4,12 +4,14 @@ import * as pulumi from "@pulumi/pulumi";
  * Generates cloud-init user-data script for bootstrapping the OpenClaw server.
  *
  * This script runs on first boot and:
- * 1. Creates ubuntu user (Hetzner defaults to root)
- * 2. Installs OpenClaw via official install script (includes Node.js)
- * 3. Installs unattended-upgrades for automatic security patches
- * 4. Installs and authenticates Tailscale
- * 5. Configures OpenClaw as a systemd user service (with built-in Tailscale Serve)
- * 6. Optionally configures Telegram channel and cron jobs
+ * 1. Installs system dependencies, Docker, and unattended-upgrades
+ * 2. Creates ubuntu user (Hetzner defaults to root)
+ * 3. Installs and authenticates Tailscale
+ * 4. Installs OpenClaw via official install script (includes Node.js)
+ * 5. Installs OpenClaw daemon (systemd user service)
+ * 6. Builds custom sandbox Docker image with Claude Code pre-installed
+ * 7. Configures and starts OpenClaw gateway (with Tailscale Serve)
+ * 8. Optionally configures Telegram channel, cron jobs, and workspace git sync
  *
  * Security considerations:
  * - Secrets written to temp files (600 permissions), not CLI args
@@ -231,6 +233,48 @@ openclaw daemon install
 DAEMON_EOF
 
 # ============================================
+# Custom Sandbox Docker Image
+# ============================================
+echo "=== Building custom sandbox Docker image ==="
+
+# Ensure the default sandbox image exists (openclaw doctor --fix pulls it)
+if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+    echo "Default sandbox image not found, running openclaw doctor --fix..."
+    sudo -u ubuntu bash -l << 'DOCTOR_EOF'
+set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/1000
+openclaw doctor --fix || true
+DOCTOR_EOF
+    sleep 5
+    # Verify the base image is now available
+    if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+        echo "ERROR: Base sandbox image still not available after doctor --fix"
+    fi
+fi
+
+# Build custom image with Claude Code pre-installed
+# Uses /dev/null as build context since Dockerfile needs no local files
+if ! docker build -t openclaw-sandbox-custom:latest -f- /dev/null << 'DOCKERFILE_EOF'
+FROM openclaw-sandbox:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
+RUN getent group 1000 || groupadd -g 1000 node
+RUN id -u 1000 2>/dev/null || useradd -u 1000 -g 1000 -m -s /bin/bash node
+USER 1000
+RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN git config --global user.name "OpenClaw Agent" && \
+    git config --global user.email "openclaw@localhost"
+ENV PATH="/home/node/.claude/bin:\${PATH}"
+USER root
+DOCKERFILE_EOF
+then
+    echo "WARNING: Custom sandbox image build failed, falling back to base image"
+    docker tag openclaw-sandbox:bookworm-slim openclaw-sandbox-custom:latest
+fi
+
+echo "Sandbox image ready: openclaw-sandbox-custom:latest"
+docker images openclaw-sandbox-custom:latest
+
+# ============================================
 # Gateway Configuration
 # ============================================
 echo "=== Configuring OpenClaw gateway ==="
@@ -280,13 +324,15 @@ set -x
 openclaw config set agents.defaults.model.primary "anthropic/claude-opus-4-5"
 openclaw config set agents.defaults.thinkingDefault high
 
-# Sandbox: non-main sessions run in Docker with bridge networking
+# Sandbox: ALL sessions run in Docker with bridge networking and custom image
 # - Host isolation: can't read ~/.openclaw/, can't sudo, can't modify gateway config
 # - Network: bridge (outbound internet via Docker NAT — needed for web research + git push)
 # - Workspace: read-write (needed for autonomous workspace maintenance)
-openclaw config set agents.defaults.sandbox.mode non-main
+# - Custom image: includes Claude Code pre-installed
+openclaw config set agents.defaults.sandbox.mode all
 openclaw config set agents.defaults.sandbox.workspaceAccess rw
 openclaw config set agents.defaults.sandbox.docker.network bridge
+openclaw config set agents.defaults.sandbox.docker.image "openclaw-sandbox-custom:latest"
 
 echo "Gateway config updated via openclaw config set"
 GATEWAY_EOF
