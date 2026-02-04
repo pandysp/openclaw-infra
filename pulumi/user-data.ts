@@ -155,6 +155,9 @@ cat > /etc/profile.d/openclaw-path.sh << 'PATHEOF'
 export PATH="$HOME/.npm-global/bin:$PATH"
 PATHEOF
 
+# Symlink openclaw into /usr/local/bin so it's available in non-login shells (e.g. ssh 'command')
+ln -sf /home/ubuntu/.npm-global/bin/openclaw /usr/local/bin/openclaw
+
 # Enable user lingering so systemd user services persist
 loginctl enable-linger ubuntu
 
