@@ -2,6 +2,8 @@
 
 Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€7.79/month.
 
+**This is a reference template.** Clone it and adapt for your own deployment — the config values (timezone, model, cron prompts) are working examples you'll customize.
+
 ## Features
 
 - **Cheap**: Hetzner CAX21 ARM (4 vCPU, 8 GB) €6.49/mo + €1.30 backups
