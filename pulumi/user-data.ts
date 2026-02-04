@@ -280,6 +280,14 @@ set -x
 openclaw config set agents.defaults.model.primary "anthropic/claude-opus-4-5"
 openclaw config set agents.defaults.thinkingDefault high
 
+# Sandbox: non-main sessions run in Docker with bridge networking
+# - Host isolation: can't read ~/.openclaw/, can't sudo, can't modify gateway config
+# - Network: bridge (outbound internet via Docker NAT — needed for web research + git push)
+# - Workspace: read-write (needed for autonomous workspace maintenance)
+openclaw config set agents.defaults.sandbox.mode non-main
+openclaw config set agents.defaults.sandbox.workspaceAccess rw
+openclaw config set agents.defaults.sandbox.docker.network bridge
+
 echo "Gateway config updated via openclaw config set"
 GATEWAY_EOF
 

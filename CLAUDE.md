@@ -30,7 +30,7 @@ OpenClaw is a self-hosted Anthropic Computer Use gateway deployed on a Hetzner V
 | Network (infrastructure) | Hetzner cloud firewall blocks ALL inbound |
 | Network (host) | UFW: deny incoming, allow only tailscale0 interface |
 | Access | Tailscale-only (no public SSH, no public ports) |
-| Process | Runs as unprivileged `ubuntu` user via systemd user service |
+| Process | Runs as unprivileged `ubuntu` user; non-main sessions [sandboxed](#sandboxing) in Docker |
 | Auth | Tailscale identity + device pairing |
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
@@ -46,7 +46,7 @@ The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs th
 - **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
 - **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
 
-Docker *is* installed on the server for **sandbox support** — OpenClaw can sandbox agent-executed code in containers. But the gateway itself runs natively.
+Docker is installed on the server for **sandbox support** — non-main sessions run in Docker containers with bridge networking. The gateway itself runs natively.
 
 ### Why Two Auth Layers?
 
@@ -434,15 +434,28 @@ openclaw cron add \
     --deliver --channel telegram --to "YOUR_USER_ID"
 ```
 
-## Known Limitations
+## Sandboxing
 
-### Sandboxing Not Configured
+Non-main sessions (cron jobs, Telegram) run in Docker containers with bridge networking. The web chat (main session) runs on the host with full access.
 
-OpenClaw supports sandboxing agent-executed code in Docker containers. This deployment does not configure sandbox mode explicitly. Docker is installed and available for sandbox use, but the sandbox setting defaults to `off`.
+| | Main (web chat) | Non-main (cron, Telegram) |
+|---|---|---|
+| Runtime | Host | Docker container |
+| Network | Full | Bridge (outbound internet via Docker NAT) |
+| Workspace | Read-write | Read-write (mounted at `/workspace`) |
+| Host filesystem | Full access | No access |
+| Gateway config | Accessible | Isolated (can't read `~/.openclaw/`) |
+| Privilege escalation | Possible (sudo) | Blocked |
 
-To enable sandboxing after deployment:
-```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw config set routing.agents.main.sandbox.mode docker'
+**Why bridge networking:** Night shift cron jobs need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
+
+**What the sandbox still protects against:** A prompt-injected cron job can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
+
+**Config:**
+```
+agents.defaults.sandbox.mode: non-main
+agents.defaults.sandbox.workspaceAccess: rw
+agents.defaults.sandbox.docker.network: bridge
 ```
 
 ## Troubleshooting

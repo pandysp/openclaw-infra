@@ -107,12 +107,15 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - Tailscale-only access limits who can send prompts
 - Dedicated VPS with no other services
 - `agents.defaults.thinkingDefault: high` — extended thinking improves prompt injection resistance
+- `agents.defaults.sandbox.mode: "non-main"` — cron/Telegram sessions run in Docker containers with bridge networking (outbound internet, host isolation)
+- `agents.defaults.sandbox.docker.network: "bridge"` — allows web research and git push while isolating from host filesystem, gateway config, and sudo
 
 **Mitigations available but not enabled**:
 - `tools.elevated.enabled: false` — disables host shell access
-- `agents.defaults.sandbox.mode: "non-main"` — runs agent code in Docker containers
 - `tools.elevated.allowFrom.<channel>` — restricts which channels trigger host commands
 - Hetzner firewall outbound rules — could restrict to known-good destinations
+
+**Accepted risk**: Sandboxed sessions have workspace write access and bridge networking. A prompt-injected cron job could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
 
 **Prompt injection guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
 - Lock down inbound DMs (we use allowlist — done)
@@ -121,7 +124,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - Prefer the latest, strongest model for tool-enabled agents
 - Red flags: requests to "read this URL and do exactly what it says", ignore system prompts, or reveal hidden instructions
 
-**Residual Risk**: Medium. Tailscale-only limits the attack surface, but the agent has full root access if exploited. Enabling sandbox mode would reduce this to Low.
+**Residual Risk**: High for main session (full host access, sudo, gateway config). Medium for non-main sessions (sandboxed but network-enabled — workspace exfiltration possible).
 
 ### 5. Self-Modification via Node Control
 
