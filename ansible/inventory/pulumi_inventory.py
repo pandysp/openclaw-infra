@@ -66,23 +66,29 @@ def get_magic_dns_suffix():
 
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "--list":
+        # Use pre-resolved host from provision.sh if available
+        override = os.environ.get("OPENCLAW_SSH_HOST", "")
+
         hostname = get_tailscale_hostname()
-        if not hostname:
+        if not hostname and not override:
             print(json.dumps({"_meta": {"hostvars": {}}}))
             sys.exit(0)
 
-        # Try to resolve to Tailscale IP
-        ip = resolve_tailscale_ip(hostname)
-
-        if ip:
-            ansible_host = ip
+        if override:
+            ansible_host = override
         else:
-            # Fallback to MagicDNS FQDN
-            suffix = get_magic_dns_suffix()
-            if suffix:
-                ansible_host = f"{hostname}.{suffix}"
+            # Try to resolve to Tailscale IP
+            ip = resolve_tailscale_ip(hostname)
+
+            if ip:
+                ansible_host = ip
             else:
-                ansible_host = hostname
+                # Fallback to MagicDNS FQDN
+                suffix = get_magic_dns_suffix()
+                if suffix:
+                    ansible_host = f"{hostname}.{suffix}"
+                else:
+                    ansible_host = hostname
 
         inventory = {
             "openclaw": {

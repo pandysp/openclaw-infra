@@ -83,8 +83,18 @@ const ansibleProvision = new command.local.Command(
     {
         create: pulumi.interpolate`cd ${__dirname}/.. && ./scripts/provision.sh`,
         environment: {
+            // Pass all secrets directly so provision.sh doesn't need to
+            // call `pulumi stack output` (which can't read in-flight state)
             PULUMI_CONFIG_PASSPHRASE:
                 process.env.PULUMI_CONFIG_PASSPHRASE || "",
+            PROVISION_GATEWAY_TOKEN: gatewayToken.result,
+            PROVISION_CLAUDE_SETUP_TOKEN: claudeSetupToken,
+            PROVISION_TELEGRAM_BOT_TOKEN: telegramBotToken || "",
+            PROVISION_TELEGRAM_USER_ID: telegramUserId || "",
+            PROVISION_WORKSPACE_REPO_URL: workspaceRepoUrl || "",
+            PROVISION_WORKSPACE_DEPLOY_KEY:
+                workspaceDeployKey.privateKeyOpenssh,
+            PROVISION_TAILSCALE_HOSTNAME: serverName,
         },
         // Re-run Ansible whenever the server is replaced
         triggers: [server.id],
