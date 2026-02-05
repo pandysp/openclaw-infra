@@ -5,29 +5,29 @@
   changed_when: false
   failed_when: false
 
-- name: Pull base sandbox image via openclaw doctor --fix
-  ansible.builtin.shell: |
-    export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw doctor --fix
-  args:
-    executable: /bin/bash
-  register: doctor_result
-  when: base_image_check.rc != 0
-
-- name: Wait for base image to be available
-  ansible.builtin.command: docker image inspect openclaw-sandbox:bookworm-slim
-  register: base_image_verify
-  retries: 3
-  delay: 10
-  until: base_image_verify.rc == 0
-  changed_when: false
-  when: base_image_check.rc != 0
-
 - name: Create sandbox build directory
   ansible.builtin.file:
     path: /home/ubuntu/.openclaw/sandbox-build
     state: directory
     mode: "0755"
+
+- name: Template base sandbox Dockerfile
+  ansible.builtin.template:
+    src: Dockerfile.base.j2
+    dest: /home/ubuntu/.openclaw/sandbox-build/Dockerfile.base
+    mode: "0644"
+  register: base_dockerfile_changed
+
+- name: Build base sandbox image
+  ansible.builtin.shell: |
+    docker build -t openclaw-sandbox:bookworm-slim -f /home/ubuntu/.openclaw/sandbox-build/Dockerfile.base /home/ubuntu/.openclaw/sandbox-build/
+  args:
+    executable: /bin/bash
+  when: base_image_check.rc != 0 or base_dockerfile_changed.changed or (force_sandbox_rebuild | bool)
+
+- name: Verify base sandbox image was built
+  ansible.builtin.command: docker image inspect openclaw-sandbox:bookworm-slim
+  changed_when: false
 
 - name: Template custom sandbox Dockerfile
   ansible.builtin.template:
@@ -47,4 +47,8 @@
     docker build -t openclaw-sandbox-custom:latest /home/ubuntu/.openclaw/sandbox-build/
   args:
     executable: /bin/bash
-  when: force_sandbox_rebuild | bool or dockerfile_changed.changed or custom_image_check.rc != 0
+  when: force_sandbox_rebuild | bool or dockerfile_changed.changed or base_dockerfile_changed.changed or custom_image_check.rc != 0
+
+- name: Verify custom sandbox image was built
+  ansible.builtin.command: docker image inspect openclaw-sandbox-custom:latest
+  changed_when: false

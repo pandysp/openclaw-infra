@@ -14,8 +14,8 @@
     - { role: docker,    tags: [docker],    become: true }
     - { role: ufw,       tags: [ufw],       become: true }
     - { role: openclaw,  tags: [openclaw] }
-    - { role: sandbox,   tags: [sandbox] }
     - { role: config,    tags: [config] }
+    - { role: sandbox,   tags: [sandbox] }
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
     - { role: workspace, tags: [workspace], when: workspace_repo_url is defined and workspace_repo_url | length > 0 }
 

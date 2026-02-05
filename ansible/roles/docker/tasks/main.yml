@@ -20,3 +20,13 @@
     name: ubuntu
     groups: docker
     append: true
+  register: docker_group_result
+
+- name: Reset SSH connection to pick up new docker group
+  ansible.builtin.meta: reset_connection
+
+- name: Verify docker group membership is active
+  ansible.builtin.shell: groups | grep -q docker
+  args:
+    executable: /bin/bash
+  changed_when: false
