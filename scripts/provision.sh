@@ -26,17 +26,19 @@ cd "$PULUMI_DIR"
 
 gateway_token=$(pulumi stack output openclawGatewayToken --show-secrets 2>/dev/null || echo "")
 workspace_deploy_private_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-if [ -n "$workspace_repo_url" ] && [ -z "$workspace_deploy_private_key" ]; then
-    echo "ERROR: workspaceRepoUrl is set but workspaceDeployPrivateKey is missing from Pulumi outputs."
-    echo "Run 'pulumi up' to ensure the deploy key is exported, then re-run provision."
-    exit 1
-fi
 
 claude_setup_token=$(pulumi config get claudeSetupToken 2>/dev/null || echo "")
 telegram_bot_token=$(pulumi config get telegramBotToken 2>/dev/null || echo "")
 telegram_user_id=$(pulumi config get telegramUserId 2>/dev/null || echo "")
 workspace_repo_url=$(pulumi config get workspaceRepoUrl 2>/dev/null || echo "")
 tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
+
+# Validate: if workspace sync is configured, deploy key must exist
+if [ -n "$workspace_repo_url" ] && [ -z "$workspace_deploy_private_key" ]; then
+    echo "ERROR: workspaceRepoUrl is set but workspaceDeployPrivateKey is missing from Pulumi outputs."
+    echo "Run 'pulumi up' to ensure the deploy key is exported, then re-run provision."
+    exit 1
+fi
 
 # Write secrets to temp YAML file
 SECRETS_FILE="$SECRETS_DIR/secrets.yml"
