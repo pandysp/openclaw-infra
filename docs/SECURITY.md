@@ -101,7 +101,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Mitigations in place**:
 - **`agents.defaults.sandbox.mode: "all"`** — all sessions (including web chat) run in Docker containers, preventing direct host access
-- `agents.defaults.sandbox.docker.image: "openclaw-sandbox-custom:latest"` — custom image with Claude Code pre-installed
+- `agents.defaults.sandbox.docker.image: "openclaw-sandbox-custom:latest"` — custom image with dev toolchain and setuid bits stripped
 - `agents.defaults.sandbox.docker.network: "bridge"` — allows web research and git push while isolating from host filesystem, gateway config, and sudo
 - Tailscale-only access limits who can send prompts
 - Dedicated VPS with no other services

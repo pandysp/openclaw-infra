@@ -13,7 +13,7 @@ Tracking which [OpenClaw docs](https://docs.openclaw.ai) pages have been reviewe
 - [x] [Cron Jobs](https://docs.openclaw.ai/automation/cron-jobs) — our setup is correct; thinking default set to high; cron idempotency bug fixed
 - [x] [Device Pairing](https://docs.openclaw.ai/start/pairing) — our docs cover more than the official page; no changes needed
 - [x] [Security](https://docs.openclaw.ai/gateway/security) — added `--fix` to checklist, prompt injection guidance to Threat 4, credential storage paths, plugin threat, browser control planning
-- [x] [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing) — enabled `all` mode with `workspaceAccess: rw` and bridge networking; custom image (`openclaw-sandbox-custom:latest`) includes Claude Code
+- [x] [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing) — enabled `all` mode with `workspaceAccess: rw` and bridge networking; custom image (`openclaw-sandbox-custom:latest`) with dev toolchain
 
 ## To Review
 

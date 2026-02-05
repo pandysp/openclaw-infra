@@ -37,7 +37,7 @@ git merge upstream/main
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────────────┐
-│  Your Machine   │     │         Hetzner VPS (€7.79/mo)      │
+│  Your Machine   │     │         Hetzner VPS (~€6.59/mo)     │
 │  (Tailscale)    │────▶│                                     │
 │                 │     │  ┌─────────────────────────────┐    │
 │  No public IP   │     │  │   OpenClaw Gateway          │    │
@@ -57,7 +57,7 @@ git merge upstream/main
 | Network (infrastructure) | Hetzner cloud firewall blocks ALL inbound |
 | Network (host) | UFW: deny incoming, allow only tailscale0 interface |
 | Access | Tailscale-only (no public SSH, no public ports) |
-| Process | Runs as unprivileged `ubuntu` user; all sessions [sandboxed](#sandboxing) in Docker (custom image with Claude Code) |
+| Process | Runs as unprivileged `ubuntu` user; all sessions [sandboxed](#sandboxing) in Docker (custom image with dev toolchain) |
 | Auth | Tailscale identity + device pairing |
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
@@ -73,7 +73,7 @@ The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs th
 - **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
 - **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
 
-Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) that includes Claude Code. The gateway itself runs natively.
+Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) with a dev toolchain (Python, Node.js, git, ripgrep, etc.). The gateway itself runs natively.
 
 ### Why Two Auth Layers?
 
@@ -288,10 +288,10 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 
 | Resource | Cost |
 |----------|------|
-| Hetzner CAX21 (ARM, 4 vCPU, 8GB) | €6.49/mo |
-| Hetzner Backups | €1.30/mo |
+| Hetzner CX33 (x86, 4 vCPU, 8GB) | ~€5.49/mo |
+| Hetzner Backups | ~€1.10/mo |
 | Tailscale | Free (personal) |
-| **Total** | **~€7.79/mo** |
+| **Total** | **~€6.59/mo** |
 
 ## Secrets Reference
 
@@ -559,7 +559,7 @@ openclaw cron add \
 
 ## Sandboxing
 
-All sessions (including web chat) run in Docker containers with bridge networking and a custom sandbox image that includes Claude Code.
+All sessions (including web chat) run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain.
 
 | | All sessions (web chat, cron, Telegram) |
 |---|---|
@@ -568,14 +568,14 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 | Workspace | Read-write (mounted at `/workspace`) |
 | Host filesystem | No access |
 | Gateway config | Isolated (can't read `~/.openclaw/`) |
-| Privilege escalation | Blocked |
-| Claude Code | Pre-installed in custom image |
+| Privilege escalation | Blocked (setuid bits stripped) |
+| Dev toolchain | Python 3, Node.js, git, ripgrep, jq, build-essential, ffmpeg, etc. |
 
 **Why bridge networking:** Sessions need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
 
 **What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
 
-**Custom image:** Built by the Ansible `sandbox` role from `openclaw-sandbox:bookworm-slim` with Claude Code and git config added. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
+**Custom image:** Built by the Ansible `sandbox` role from `openclaw-sandbox:bookworm-slim` with a dev toolchain (Python 3, Node.js, ripgrep, build-essential, ffmpeg, etc.) and git config. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 
 **Config:**
 ```

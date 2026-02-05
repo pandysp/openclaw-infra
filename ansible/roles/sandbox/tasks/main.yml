@@ -8,9 +8,10 @@
 - name: Pull base sandbox image via openclaw doctor --fix
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw doctor --fix || true
+    openclaw doctor --fix
   args:
     executable: /bin/bash
+  register: doctor_result
   when: base_image_check.rc != 0
 
 - name: Wait for base image to be available
@@ -47,14 +48,3 @@
   args:
     executable: /bin/bash
   when: force_sandbox_rebuild | bool or dockerfile_changed.changed or custom_image_check.rc != 0
-  register: docker_build_result
-  failed_when: false
-
-- name: Fall back to base image if build fails
-  ansible.builtin.shell: |
-    docker tag openclaw-sandbox:bookworm-slim openclaw-sandbox-custom:latest
-  args:
-    executable: /bin/bash
-  when:
-    - docker_build_result is not skipped
-    - docker_build_result.rc != 0

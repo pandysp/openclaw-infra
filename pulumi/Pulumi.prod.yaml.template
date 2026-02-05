@@ -16,7 +16,7 @@
 
 config:
   openclaw-infra:serverName: openclaw-vps
-  openclaw-infra:serverType: cax21
+  openclaw-infra:serverType: cx33
   openclaw-infra:serverLocation: fsn1
   openclaw-infra:serverImage: ubuntu-24.04
   # Secrets are added via `pulumi config set --secret` and will appear here encrypted
