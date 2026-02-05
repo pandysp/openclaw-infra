@@ -1,0 +1,43 @@
+---
+- name: Provision OpenClaw gateway
+  hosts: openclaw
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for SSH connectivity
+      wait_for_connection:
+        timeout: 300
+        delay: 10
+
+  roles:
+    - { role: system,    tags: [system],    become: true }
+    - { role: docker,    tags: [docker],    become: true }
+    - { role: ufw,       tags: [ufw],       become: true }
+    - { role: openclaw,  tags: [openclaw] }
+    - { role: sandbox,   tags: [sandbox] }
+    - { role: config,    tags: [config] }
+    - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
+    - { role: workspace, tags: [workspace], when: workspace_repo_url is defined and workspace_repo_url | length > 0 }
+
+  post_tasks:
+    - name: Ensure openclaw-gateway is started and enabled
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: started
+        enabled: true
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/1000"
+      tags: [config, openclaw, sandbox]
+
+    - name: Wait for gateway to stabilize
+      ansible.builtin.pause:
+        seconds: 5
+      tags: [config, openclaw, sandbox]
+
+    - name: Verify gateway is active
+      ansible.builtin.command: systemctl --user is-active openclaw-gateway
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/1000"
+      changed_when: false
+      tags: [config, openclaw, sandbox]

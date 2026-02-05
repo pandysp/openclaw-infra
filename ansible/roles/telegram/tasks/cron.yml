@@ -1,0 +1,40 @@
+---
+- name: Get existing cron jobs
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw cron list --json 2>/dev/null || echo '{"jobs":[]}'
+  args:
+    executable: /bin/bash
+  register: existing_cron
+  changed_when: false
+
+- name: Remove existing cron jobs by name (idempotent recreation)
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    IDS=$(echo '{{ existing_cron.stdout }}' | jq -r --arg n "{{ item.name }}" '.jobs[] | select(.name == $n) | .id')
+    for id in $IDS; do
+      openclaw cron remove "$id" || true
+    done
+  args:
+    executable: /bin/bash
+  loop: "{{ openclaw_cron_jobs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+- name: Add cron jobs
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw cron add \
+        --name "{{ item.name }}" \
+        --cron "{{ item.schedule }}" \
+        --tz "{{ openclaw_timezone }}" \
+        --session isolated \
+        --message "{{ item.message }}" \
+        --deliver --channel telegram --to "{{ telegram_user_id }}"
+  args:
+    executable: /bin/bash
+  loop: "{{ openclaw_cron_jobs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true

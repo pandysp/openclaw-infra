@@ -1,0 +1,33 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Dist-upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - apt-transport-https
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - jq
+      - python3
+      - git
+    state: present
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+
+- name: Configure unattended-upgrades (no auto-reboot)
+  ansible.builtin.copy:
+    content: "Unattended-Upgrade::Automatic-Reboot \"false\";\n"
+    dest: /etc/apt/apt.conf.d/51unattended-upgrades-custom
+    mode: "0644"

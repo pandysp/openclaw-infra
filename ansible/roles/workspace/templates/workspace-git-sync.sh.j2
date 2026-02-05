@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+cd ~/.openclaw/workspace
+git add -A
+if ! git diff --cached --quiet; then
+    git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    git push origin main
+fi

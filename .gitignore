@@ -39,3 +39,7 @@ npm-debug.log*
 # Temporary
 tmp/
 temp/
+
+# Ansible
+ansible/*.retry
+ansible/inventory/__pycache__/

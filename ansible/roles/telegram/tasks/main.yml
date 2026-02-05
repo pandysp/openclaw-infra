@@ -1,0 +1,7 @@
+---
+- name: Configure Telegram channel
+  ansible.builtin.include_tasks: channel.yml
+
+- name: Configure cron jobs
+  ansible.builtin.include_tasks: cron.yml
+  when: telegram_user_id is defined and telegram_user_id | length > 0

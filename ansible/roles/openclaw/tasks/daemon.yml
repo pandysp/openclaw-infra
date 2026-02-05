@@ -1,0 +1,13 @@
+---
+- name: Check if openclaw-gateway service file exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service
+  register: daemon_service
+
+- name: Install OpenClaw daemon
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw daemon install
+  args:
+    executable: /bin/bash
+  when: not daemon_service.stat.exists

@@ -1,0 +1,10 @@
+FROM openclaw-sandbox:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
+RUN getent group 1000 || groupadd -g 1000 node
+RUN id -u 1000 2>/dev/null || useradd -u 1000 -g 1000 -m -s /bin/bash node
+USER 1000
+RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN git config --global user.name "OpenClaw Agent" && \
+    git config --global user.email "openclaw@localhost"
+ENV PATH="/home/node/.claude/bin:${PATH}"
+USER root

@@ -1,0 +1,25 @@
+---
+- name: Install ufw
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Set UFW default deny incoming
+  community.general.ufw:
+    default: deny
+    direction: incoming
+
+- name: Set UFW default allow outgoing
+  community.general.ufw:
+    default: allow
+    direction: outgoing
+
+- name: Allow all traffic on tailscale0 interface
+  community.general.ufw:
+    rule: allow
+    interface: tailscale0
+    direction: in
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled

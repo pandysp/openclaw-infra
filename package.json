@@ -13,6 +13,7 @@
   "license": "MIT",
   "description": "Secure self-hosted OpenClaw deployment on Hetzner Cloud with Tailscale",
   "dependencies": {
+    "@pulumi/command": "^1.0.0",
     "@pulumi/hcloud": "^1.32.0",
     "@pulumi/pulumi": "^3.218.0",
     "@pulumi/random": "^4.16.0",

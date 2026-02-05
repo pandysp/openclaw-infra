@@ -1,4 +1,5 @@
 import * as pulumi from "@pulumi/pulumi";
+import * as command from "@pulumi/command";
 import * as random from "@pulumi/random";
 import * as tls from "@pulumi/tls";
 import { createFirewall } from "./firewall";
@@ -57,18 +58,10 @@ const workspaceDeployKey = new tls.PrivateKey("workspace-deploy-key", {
 // 1. Create firewall (no inbound, all outbound)
 const firewall = createFirewall("openclaw-firewall");
 
-// 2. Generate cloud-init user-data script
+// 2. Generate cloud-init user-data (Tailscale-only bootstrap)
 const userData = generateUserData({
     tailscaleAuthKey,
-    claudeSetupToken,
-    gatewayToken: gatewayToken.result,
     hostname: serverName,
-    telegramBotToken,
-    telegramUserId,
-    workspaceDeployKey: workspaceRepoUrl
-        ? workspaceDeployKey.privateKeyOpenssh
-        : undefined,
-    workspaceRepoUrl,
 });
 
 // 3. Create the server with attached firewall
@@ -80,6 +73,24 @@ const { server, sshKey, privateKey } = createServer({
     userData,
     firewallId: firewall.id.apply((id) => parseInt(id)),
 });
+
+// ============================================
+// Ansible Provisioning (auto-triggered on server replacement)
+// ============================================
+
+const ansibleProvision = new command.local.Command(
+    "ansible-provision",
+    {
+        create: pulumi.interpolate`cd ${__dirname}/.. && ./scripts/provision.sh`,
+        environment: {
+            PULUMI_CONFIG_PASSPHRASE:
+                process.env.PULUMI_CONFIG_PASSPHRASE || "",
+        },
+        // Re-run Ansible whenever the server is replaced
+        triggers: [server.id],
+    },
+    { dependsOn: [server] }
+);
 
 // ============================================
 // Exports
@@ -101,8 +112,11 @@ export const firewallId = firewall.id;
 // Gateway token (for client configuration)
 export const openclawGatewayToken = pulumi.secret(gatewayToken.result);
 
-// Workspace deploy key (add as deploy key to your private GitHub repo)
+// Workspace deploy keys
 export const workspaceDeployPublicKey = workspaceDeployKey.publicKeyOpenssh;
+export const workspaceDeployPrivateKey = pulumi.secret(
+    workspaceDeployKey.privateKeyOpenssh
+);
 
 // Access information
 export const tailscaleHostname = pulumi.interpolate`${serverName}`;
@@ -127,21 +141,20 @@ export const postDeploymentInstructions = pulumi.interpolate`
 ║  Server: ${serverName}                                           ║
 ║  IPv4: ${server.ipv4Address}                                     ║
 ║                                                                  ║
-║  ⚠️  Wait ~5 minutes for cloud-init to complete                  ║
+║  Cloud-init installs Tailscale only (~1 minute).                 ║
+║  Ansible provisioning runs automatically after.                  ║
 ║                                                                  ║
-║  Access Methods:                                                 ║
-║  1. Web UI: https://${serverName}.<tailnet>.ts.net/              ║
-║  2. SSH: ssh ubuntu@${serverName}.<tailnet>.ts.net               ║
+║  Day-2 operations:                                               ║
+║  ./scripts/provision.sh                     # Full provision     ║
+║  ./scripts/provision.sh --tags config       # Config only        ║
+║  ./scripts/provision.sh --check --diff      # Dry run            ║
+║                                                                  ║
+║  Access:                                                         ║
+║  Web UI: https://${serverName}.<tailnet>.ts.net/                 ║
+║  SSH: ssh ubuntu@${serverName}.<tailnet>.ts.net                  ║
 ║                                                                  ║
 ║  Verification:                                                   ║
 ║  ./scripts/verify.sh                                             ║
-║                                                                  ║
-║  View logs on server:                                            ║
-║  systemctl --user status openclaw                                ║
-║  sudo cat /var/log/cloud-init-openclaw.log                       ║
-║                                                                  ║
-║  SECURITY: After verifying, clean up the cloud-init log:         ║
-║  ssh ubuntu@<host> "sudo shred -u /var/log/cloud-init-openclaw.log" ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 `;

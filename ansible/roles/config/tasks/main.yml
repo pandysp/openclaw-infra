@@ -1,0 +1,48 @@
+---
+- name: Write gateway token to temp file
+  ansible.builtin.copy:
+    content: "{{ gateway_token }}"
+    dest: /tmp/ansible-gateway-token
+    mode: "0600"
+  no_log: true
+
+- name: Configure OpenClaw gateway
+  ansible.builtin.shell: |
+    set -euo pipefail
+    GATEWAY_TOKEN=$(cat /tmp/ansible-gateway-token)
+
+    # Tailscale Serve
+    openclaw config set gateway.tailscale.mode serve
+    openclaw config set gateway.tailscale.resetOnExit true
+
+    # Trusted proxies: localhost + Tailscale CGNAT range
+    openclaw config set gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
+
+    # Control UI
+    openclaw config set gateway.controlUi.enabled true
+    openclaw config set gateway.controlUi.allowInsecureAuth false
+
+    # Auth: token mode + Tailscale identity
+    openclaw config set gateway.auth.mode token
+    openclaw config set gateway.auth.token "$GATEWAY_TOKEN"
+    openclaw config set gateway.auth.allowTailscale true
+    openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
+
+    # Model defaults
+    openclaw config set agents.defaults.model.primary "{{ openclaw_model_primary }}"
+    openclaw config set agents.defaults.thinkingDefault {{ openclaw_thinking_default }}
+
+    # Sandbox configuration
+    openclaw config set agents.defaults.sandbox.mode {{ openclaw_sandbox_mode }}
+    openclaw config set agents.defaults.sandbox.workspaceAccess {{ openclaw_sandbox_workspace_access }}
+    openclaw config set agents.defaults.sandbox.docker.network {{ openclaw_sandbox_docker_network }}
+    openclaw config set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
+  args:
+    executable: /bin/bash
+  no_log: true
+  notify: restart openclaw-gateway
+
+- name: Clean up gateway token
+  ansible.builtin.file:
+    path: /tmp/ansible-gateway-token
+    state: absent

@@ -1,0 +1,16 @@
+---
+- name: reload user systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+
+- name: enable workspace timer
+  ansible.builtin.systemd:
+    name: workspace-git-sync.timer
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"

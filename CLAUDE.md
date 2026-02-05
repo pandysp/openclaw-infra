@@ -22,8 +22,8 @@ This repo (`pandysp/openclaw-infra-private`) is the private deployment fork. The
 
 | Private only (`origin`) | Both repos (`upstream` too) |
 |---|---|
-| Personal Pulumi config values | Bug fixes in cloud-init script |
-| Custom cron prompt tweaks | New features (e.g., sandbox improvements) |
+| Personal Pulumi config values | Bug fixes in Ansible roles |
+| Custom cron prompt tweaks (`group_vars/all.yml`) | New features (e.g., sandbox improvements) |
 | Personal Telegram settings | Security model updates |
 | Tailnet-specific config | Documentation improvements |
 
@@ -103,14 +103,32 @@ openclaw-infra/
 ├── pulumi/
 │   ├── Pulumi.yaml     # Project definition
 │   ├── Pulumi.prod.yaml  # Stack config (non-secrets)
-│   ├── index.ts        # Main entrypoint
+│   ├── index.ts        # Main entrypoint (infra + Ansible trigger)
 │   ├── server.ts       # Hetzner server resource
 │   ├── firewall.ts     # Security rules (no inbound!)
-│   └── user-data.ts    # Cloud-init bootstrap script
+│   └── user-data.ts    # Cloud-init (Tailscale-only bootstrap)
+│
+├── ansible/
+│   ├── ansible.cfg         # Ansible config (pipelining, no host key check)
+│   ├── requirements.yml    # Ansible Galaxy collections
+│   ├── playbook.yml        # Main playbook
+│   ├── group_vars/all.yml  # Non-secret defaults (model, cron prompts, etc.)
+│   ├── inventory/
+│   │   └── pulumi_inventory.py  # Dynamic inventory (Tailscale IP from Pulumi)
+│   └── roles/
+│       ├── system/    # apt packages, unattended-upgrades
+│       ├── docker/    # Docker install, ubuntu→docker group
+│       ├── ufw/       # Firewall rules
+│       ├── openclaw/  # Binary install, onboard, daemon
+│       ├── sandbox/   # Pull base image, build custom Docker image
+│       ├── config/    # All `openclaw config set` commands
+│       ├── telegram/  # Channel config, cron jobs (conditional)
+│       └── workspace/ # Deploy key, git sync timer (conditional)
 │
 ├── scripts/
-│   ├── verify.sh       # Post-deployment checks
-│   └── backup.sh       # Data backup
+│   ├── provision.sh   # Ansible wrapper (reads secrets from Pulumi)
+│   ├── verify.sh      # Post-deployment checks
+│   └── backup.sh      # Data backup
 │
 └── docs/
     ├── BROWSER-CONTROL-PLANNING.md  # Future browser automation approaches
@@ -118,6 +136,31 @@ openclaw-infra/
     ├── SECURITY.md                  # Threat model
     └── TROUBLESHOOTING.md
 ```
+
+### Pulumi vs Ansible Responsibilities
+
+| Pulumi (infrastructure) | Ansible (configuration) |
+|---|---|
+| Hetzner VPS + firewall | System packages, Docker, UFW |
+| SSH keys, gateway token | OpenClaw install + onboard |
+| Workspace deploy key | Sandbox image build |
+| Cloud-init (Tailscale only) | Gateway config, Telegram, cron |
+| Triggers Ansible on server replacement | Workspace git sync |
+
+### Ansible Tags
+
+Use `./scripts/provision.sh --tags <tag>` to run specific roles:
+
+| Tag | Role(s) | Day-2 use case |
+|-----|---------|----------------|
+| `system` | system | Update system packages |
+| `docker` | docker | Docker upgrade or group changes |
+| `ufw` | ufw | Firewall rule changes |
+| `openclaw` | openclaw | Reinstall/update OpenClaw binary |
+| `sandbox` | sandbox | Rebuild custom Docker image |
+| `config` | config | Change model, sandbox mode, auth settings |
+| `telegram` | telegram | Update cron prompts or channel config |
+| `workspace` | workspace | Deploy key rotation, sync changes |
 
 ## Local CLI
 
@@ -153,11 +196,30 @@ openclaw status              # Session health
 
 ## Common Operations
 
-### Deploy Changes
+### Deploy Infrastructure (Fresh Server)
 
 ```bash
 cd pulumi
-pulumi up
+pulumi up    # Creates server + auto-triggers Ansible provisioning
+```
+
+### Provision / Re-provision (Day-2 Operations)
+
+```bash
+# Full provision
+./scripts/provision.sh
+
+# Config only (model, sandbox, auth settings)
+./scripts/provision.sh --tags config
+
+# Rebuild sandbox image
+./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true
+
+# Update cron prompts (edit ansible/group_vars/all.yml first)
+./scripts/provision.sh --tags telegram
+
+# Dry run — see what would change
+./scripts/provision.sh --check --diff
 ```
 
 ### Check Server Status
@@ -178,15 +240,19 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journal
 ### Update OpenClaw
 
 ```bash
-# Requires SSH (system-level operation)
+# Via Ansible (preferred)
+./scripts/provision.sh --tags openclaw
+
+# Or via SSH (manual)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash'
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
 ```
 
 ### View Cloud-Init Logs
 
+Cloud-init now only handles Tailscale bootstrap (~1 minute). For provisioning details, check Ansible output.
+
 ```bash
-# Requires SSH (system-level operation)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo cat /var/log/cloud-init-openclaw.log'
 ```
 
@@ -250,7 +316,7 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 - Run `./scripts/verify.sh` after deployment
 - Check that no public ports are exposed
 - Store your Pulumi passphrase in a password manager
-- **Clean up cloud-init log after deployment** (contains secrets)
+- **Cloud-init log is minimal** (Tailscale bootstrap only, no secrets beyond auth key)
 - **Monitor Tailscale admin console** for unauthorized devices: https://login.tailscale.com/admin/machines
 - **Rotate Tailscale auth keys periodically** (see [Key Rotation](#key-rotation) below)
 - **Review paired OpenClaw devices** regularly: `openclaw devices list` (via local CLI)
@@ -293,7 +359,7 @@ Before deploying, you need:
 1. **Hetzner Cloud API Token** — Create a **dedicated project** for OpenClaw at [console.hetzner.cloud](https://console.hetzner.cloud/), then generate a Read & Write token (Security → API Tokens)
 2. **Tailscale Auth Key** — Generate at [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) with **Reusable** and **Ephemeral** enabled. New to Tailscale? See [README.md](./README.md#first-time-tailscale-setup).
 3. **Claude Max Setup Token** — Run `claude setup-token` in your terminal. Token starts with `sk-ant-oat01-...`. Note: setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
-4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Tailscale app, OpenClaw CLI (`brew install openclaw-cli`)
+4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Ansible (`pip install ansible`), Tailscale app, OpenClaw CLI (`brew install openclaw-cli`)
 
 ## First-Time Setup
 
@@ -317,17 +383,14 @@ pulumi config set claudeSetupToken --secret
 # 5. Preview deployment
 pulumi preview
 
-# 6. Deploy
+# 6. Deploy (creates server + auto-runs Ansible provisioning)
 pulumi up
 
-# 7. Wait ~5 minutes for cloud-init, then verify
+# 7. Verify deployment
 cd ..
 ./scripts/verify.sh
 
-# 8. SECURITY: Clean up cloud-init log (contains secrets)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
-
-# 9. Install local CLI and connect to remote gateway (see "Local CLI" section above)
+# 8. Install local CLI and connect to remote gateway (see "Local CLI" section above)
 brew install openclaw-cli
 openclaw onboard --non-interactive --accept-risk --flow quickstart --mode remote \
   --remote-url "wss://openclaw-vps.<tailnet>.ts.net" \
@@ -476,8 +539,13 @@ openclaw cron run --force <job-id>
 
 ### Customizing Schedules
 
+Edit `ansible/group_vars/all.yml` to change cron job prompts or schedules, then re-provision:
+
 ```bash
-# All cron commands work via local CLI
+# After editing group_vars/all.yml:
+./scripts/provision.sh --tags telegram
+
+# Or via CLI for ad-hoc changes:
 openclaw cron list
 openclaw cron remove "Night Shift"
 openclaw cron add \
@@ -507,7 +575,7 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 
 **What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
 
-**Custom image:** Built during cloud-init from `openclaw-sandbox:bookworm-slim` with Claude Code and git config added. Rebuilt on every deploy.
+**Custom image:** Built by the Ansible `sandbox` role from `openclaw-sandbox:bookworm-slim` with Claude Code and git config added. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 
 **Config:**
 ```

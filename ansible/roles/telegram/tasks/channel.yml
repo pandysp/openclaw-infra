@@ -1,0 +1,26 @@
+---
+- name: Write Telegram bot token to temp file
+  ansible.builtin.copy:
+    content: "{{ telegram_bot_token }}"
+    dest: /tmp/ansible-telegram-bot-token
+    mode: "0600"
+  no_log: true
+
+- name: Configure Telegram channel
+  ansible.builtin.shell: |
+    set -euo pipefail
+    BOT_TOKEN=$(cat /tmp/ansible-telegram-bot-token)
+    openclaw config set channels.telegram.enabled true
+    openclaw config set channels.telegram.botToken "$BOT_TOKEN"
+    openclaw config set channels.telegram.dmPolicy "allowlist"
+    {% if telegram_user_id is defined and telegram_user_id | length > 0 %}
+    openclaw config set channels.telegram.allowFrom "[{{ telegram_user_id }}]"
+    {% endif %}
+  args:
+    executable: /bin/bash
+  no_log: true
+
+- name: Clean up Telegram bot token
+  ansible.builtin.file:
+    path: /tmp/ansible-telegram-bot-token
+    state: absent

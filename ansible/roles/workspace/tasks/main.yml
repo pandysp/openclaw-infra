@@ -1,0 +1,114 @@
+---
+- name: Ensure .ssh directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.ssh
+    state: directory
+    mode: "0700"
+
+- name: Install deploy key
+  ansible.builtin.copy:
+    content: "{{ workspace_deploy_key }}"
+    dest: /home/ubuntu/.ssh/workspace-deploy-key
+    mode: "0600"
+  no_log: true
+
+- name: Create config.d directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.ssh/config.d
+    state: directory
+    mode: "0700"
+
+- name: Configure SSH alias for github-workspace
+  ansible.builtin.template:
+    src: ssh-config-workspace.j2
+    dest: /home/ubuntu/.ssh/config.d/workspace
+    mode: "0600"
+
+- name: Ensure SSH config includes config.d
+  ansible.builtin.lineinfile:
+    path: /home/ubuntu/.ssh/config
+    line: "Include config.d/*"
+    insertbefore: BOF
+    create: true
+    mode: "0600"
+
+- name: Configure git identity
+  community.general.git_config:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    scope: global
+  loop:
+    - { name: "user.name",  value: "OpenClaw Agent" }
+    - { name: "user.email", value: "openclaw@localhost" }
+
+- name: Check if workspace directory exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.openclaw/workspace
+  register: workspace_dir
+
+- name: Initialize workspace git repo
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd ~/.openclaw/workspace
+    if [ ! -d ".git" ]; then
+      git init -b main
+    fi
+    ALIAS_URL=$(echo "{{ workspace_repo_url }}" | sed 's/github\.com/github-workspace/')
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "$ALIAS_URL"
+  args:
+    executable: /bin/bash
+  when: workspace_dir.stat.exists and workspace_dir.stat.isdir
+
+- name: Create workspace .gitignore
+  ansible.builtin.copy:
+    src: gitignore-workspace
+    dest: /home/ubuntu/.openclaw/workspace/.gitignore
+    mode: "0644"
+  when: workspace_dir.stat.exists and workspace_dir.stat.isdir
+
+- name: Initial workspace commit and push
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd ~/.openclaw/workspace
+    git add -A
+    git commit -m "Initial workspace sync" || true
+    git push -u origin main || echo "Warning: initial push failed"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: workspace_dir.stat.exists and workspace_dir.stat.isdir
+
+- name: Create local bin directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.local/bin
+    state: directory
+    mode: "0755"
+
+- name: Install workspace sync script
+  ansible.builtin.template:
+    src: workspace-git-sync.sh.j2
+    dest: /home/ubuntu/.local/bin/workspace-git-sync.sh
+    mode: "0755"
+
+- name: Ensure systemd user directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user
+    state: directory
+    mode: "0755"
+
+- name: Install workspace sync systemd service
+  ansible.builtin.template:
+    src: workspace-git-sync.service.j2
+    dest: /home/ubuntu/.config/systemd/user/workspace-git-sync.service
+    mode: "0644"
+  notify: reload user systemd
+
+- name: Install workspace sync systemd timer
+  ansible.builtin.template:
+    src: workspace-git-sync.timer.j2
+    dest: /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
+    mode: "0644"
+  notify:
+    - reload user systemd
+    - enable workspace timer

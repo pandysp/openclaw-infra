@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly workspace git sync
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

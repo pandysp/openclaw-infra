@@ -1,0 +1,7 @@
+[Unit]
+Description=Sync OpenClaw workspace to git
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/workspace-git-sync.sh
+Environment=SSH_AUTH_SOCK=

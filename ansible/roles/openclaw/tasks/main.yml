@@ -1,0 +1,9 @@
+---
+- name: Install OpenClaw
+  ansible.builtin.include_tasks: install.yml
+
+- name: Onboard OpenClaw
+  ansible.builtin.include_tasks: onboard.yml
+
+- name: Install OpenClaw daemon
+  ansible.builtin.include_tasks: daemon.yml

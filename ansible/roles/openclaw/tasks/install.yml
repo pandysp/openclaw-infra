@@ -1,0 +1,39 @@
+---
+- name: Check if openclaw binary exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.npm-global/bin/openclaw
+  register: openclaw_binary
+
+- name: Install OpenClaw via official script
+  ansible.builtin.shell: |
+    export OPENCLAW_NO_ONBOARD=1
+    export OPENCLAW_NO_PROMPT=1
+    curl -fsSL https://openclaw.ai/install.sh | bash
+  when: not openclaw_binary.stat.exists
+
+- name: Create PATH profile script
+  become: true
+  ansible.builtin.copy:
+    content: |
+      export PATH="$HOME/.npm-global/bin:$PATH"
+    dest: /etc/profile.d/openclaw-path.sh
+    mode: "0644"
+
+- name: Symlink openclaw to /usr/local/bin
+  become: true
+  ansible.builtin.file:
+    src: /home/ubuntu/.npm-global/bin/openclaw
+    dest: /usr/local/bin/openclaw
+    state: link
+    force: true
+
+- name: Enable user lingering for ubuntu
+  become: true
+  ansible.builtin.command: loginctl enable-linger ubuntu
+  changed_when: false
+
+- name: Start user systemd slice
+  become: true
+  ansible.builtin.systemd:
+    name: "user@1000.service"
+    state: started
