@@ -89,51 +89,60 @@ chmod 600 "$SECRETS_FILE"
 
 echo "=== Waiting for Tailscale SSH connectivity ==="
 
-resolve_tailscale_ip() {
+resolve_tailscale_ips() {
+    # Returns ALL IPv4 addresses for peers whose HostName starts with the
+    # given tailscale_hostname (handles Tailscale's numeric suffix for
+    # duplicate hostnames, e.g. openclaw-vps, openclaw-vps-1, openclaw-vps-2).
     if ! command -v tailscale &>/dev/null; then
         return 1
     fi
     local raw
     raw=$(tailscale status --json 2>&1) || return 1
     echo "$raw" | python3 -c "
-import json, sys
+import json, sys, re
 data = json.load(sys.stdin)
+base = '${tailscale_hostname}'.lower()
+pattern = re.compile(r'^' + re.escape(base) + r'(-\d+)?$')
 for peer in (data.get('Peer') or {}).values():
-    if peer.get('HostName','').lower() == '${tailscale_hostname}'.lower():
-        addrs = peer.get('TailscaleIPs', [])
-        for a in addrs:
+    if pattern.match(peer.get('HostName','').lower()):
+        for a in peer.get('TailscaleIPs', []):
             if '.' in a:
                 print(a)
-                sys.exit(0)
-        if addrs:
-            print(addrs[0])
-            sys.exit(0)
+                break
 " 2>/dev/null
 }
 
-# Retry loop: resolve Tailscale IP and attempt SSH each iteration
+# Retry loop: resolve Tailscale IPs and attempt SSH to each candidate
 MAX_RETRIES=30
 RETRY_DELAY=10
 HOST=""
 SSH_ERR=""
 for i in $(seq 1 $MAX_RETRIES); do
-    # Re-resolve Tailscale IP each attempt (server may not be on tailnet yet)
-    if [ -z "$HOST" ]; then
-        HOST=$(resolve_tailscale_ip) || true
-        if [ -n "$HOST" ]; then
-            echo "Resolved Tailscale IP: $HOST"
-        fi
+    # Re-resolve all candidate IPs each attempt (new server may appear mid-loop)
+    CANDIDATES=$(resolve_tailscale_ips) || true
+
+    # Fall back to hostname (MagicDNS may resolve before tailscale status learns the peer)
+    if [ -z "$CANDIDATES" ]; then
+        CANDIDATES="$tailscale_hostname"
     fi
 
-    TARGET="${HOST:-$tailscale_hostname}"
-    SSH_ERR=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-       ubuntu@"$TARGET" true 2>&1) && {
-        HOST="$TARGET"
-        echo "SSH connectivity established (via $HOST)"
-        break
-    }
+    if [ -z "$HOST" ]; then
+        echo "Tailscale candidates: $(echo $CANDIDATES | tr '\n' ' ')"
+    fi
+
+    # Try each candidate via SSH
+    for TARGET in $CANDIDATES; do
+        SSH_ERR=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+           ubuntu@"$TARGET" true 2>&1) && {
+            HOST="$TARGET"
+            echo "SSH connectivity established (via $HOST)"
+            break 2
+        }
+    done
+
     if [ "$i" -eq "$MAX_RETRIES" ]; then
         echo "ERROR: Could not establish SSH connection after $MAX_RETRIES attempts"
+        echo "Tried candidates: $(echo $CANDIDATES | tr '\n' ' ')"
         echo "Last SSH error: $SSH_ERR"
         exit 1
     fi

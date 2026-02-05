@@ -29,4 +29,5 @@
   ansible.builtin.shell: groups | grep -q docker
   args:
     executable: /bin/bash
+  become: false
   changed_when: false
