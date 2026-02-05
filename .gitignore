@@ -40,6 +40,9 @@ npm-debug.log*
 tmp/
 temp/
 
+# Backups (contain secrets and session data)
+backups/
+
 # Ansible
 ansible/*.retry
 ansible/inventory/__pycache__/

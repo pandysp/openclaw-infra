@@ -26,6 +26,11 @@ cd "$PULUMI_DIR"
 
 gateway_token=$(pulumi stack output openclawGatewayToken --show-secrets 2>/dev/null || echo "")
 workspace_deploy_private_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
+if [ -n "$workspace_repo_url" ] && [ -z "$workspace_deploy_private_key" ]; then
+    echo "ERROR: workspaceRepoUrl is set but workspaceDeployPrivateKey is missing from Pulumi outputs."
+    echo "Run 'pulumi up' to ensure the deploy key is exported, then re-run provision."
+    exit 1
+fi
 
 claude_setup_token=$(pulumi config get claudeSetupToken 2>/dev/null || echo "")
 telegram_bot_token=$(pulumi config get telegramBotToken 2>/dev/null || echo "")

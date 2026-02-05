@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 cd ~/.openclaw/workspace
+
+# Ensure branch is named 'main' regardless of how it was initialized
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ "$CURRENT_BRANCH" != "main" ] && [ -n "$CURRENT_BRANCH" ]; then
+    git branch -m "$CURRENT_BRANCH" main
+fi
+
 git add -A
 if ! git diff --cached --quiet; then
     git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
