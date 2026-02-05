@@ -49,7 +49,7 @@ echo "${tsKey}" > /tmp/ts-authkey
 chmod 600 /tmp/ts-authkey
 set -x
 
-tailscale up --authkey=\\$(cat /tmp/ts-authkey) --hostname=${config.hostname} --ssh
+tailscale up --authkey=$(cat /tmp/ts-authkey) --hostname=${config.hostname} --ssh
 
 rm -f /tmp/ts-authkey
 
