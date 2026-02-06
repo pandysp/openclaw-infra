@@ -106,10 +106,12 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - Tailscale-only access limits who can send prompts
 - Dedicated VPS with no other services
 - `agents.defaults.thinkingDefault: high` — extended thinking improves prompt injection resistance
+- **`tools.elevated.allowFrom.telegram`** — when Telegram is configured, elevated actions require approval from the configured Telegram user (without Telegram, elevated tools are enabled without an approval gate)
+- **`tools.sandbox.tools.allow`** — sandbox sessions have explicit access to all standard tool groups
 
 **Mitigations available but not enabled**:
 - `tools.elevated.enabled: false` — disables shell access entirely
-- `tools.elevated.allowFrom.<channel>` — restricts which channels trigger commands
+- `tools.elevated.allowFrom.<channel>` — restricts elevated tools to additional channels beyond Telegram
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
 **Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
@@ -225,6 +227,8 @@ Sensitive files on the server (all under `~/.openclaw/` unless noted):
 | `~/.ssh/workspace-deploy-key` | GitHub deploy key (if workspace sync enabled) |
 
 The backup script (`scripts/backup.sh`) copies `~/.openclaw/` with gateway auth tokens redacted from `openclaw.json`. Everything else is included unredacted: session transcripts, paired device tokens, channel credentials, and cron config.
+
+The `~/.openclaw/` directory is restricted to owner-only access (mode `700`), enforced by Ansible during provisioning. This prevents other OS users from listing or accessing any files within. Re-apply with `./scripts/provision.sh --tags openclaw` if changed.
 
 ## Security Checklist
 

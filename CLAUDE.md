@@ -73,7 +73,7 @@ The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs th
 - **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
 - **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
 
-Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) with a dev toolchain (Python, Node.js, git, ripgrep, etc.). The gateway itself runs natively.
+Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) with a dev toolchain (Python 3, Node.js, git, ripgrep 14, jq, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client). The gateway itself runs natively.
 
 ### Why Two Auth Layers?
 
@@ -158,7 +158,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall/update OpenClaw binary |
 | `sandbox` | sandbox | Rebuild custom Docker image |
-| `config` | config | Change model, sandbox mode, auth settings |
+| `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
 | `telegram` | telegram | Update cron prompts or channel config |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
@@ -262,7 +262,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo cat /var/log/cloud-init-openclaw.
 openclaw security audit --deep
 ```
 
-**Expected output:** `0 critical · 0 warn · 1 info` — this deployment uses Tailscale identity auth with device pairing, which passes all security checks.
+**Expected output:** `0 critical · 0 warn · 1 info` (after applying permission fixes) — this deployment uses Tailscale identity auth with device pairing, which passes all security checks.
 
 ### Destroy Infrastructure
 
@@ -569,13 +569,13 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 | Host filesystem | No access |
 | Gateway config | Isolated (can't read `~/.openclaw/`) |
 | Privilege escalation | Blocked (setuid bits stripped) |
-| Dev toolchain | Python 3, Node.js, git, ripgrep, jq, build-essential, ffmpeg, etc. |
+| Dev toolchain | Python 3, Node.js, git, ripgrep 14, jq, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
 
 **Why bridge networking:** Sessions need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
 
 **What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
 
-**Custom image:** Built by the Ansible `sandbox` role from `openclaw-sandbox:bookworm-slim` with a dev toolchain (Python 3, Node.js, ripgrep, build-essential, ffmpeg, etc.) and git config. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
+**Custom image:** Built in two layers by the Ansible `sandbox` role: a minimal base image (`openclaw-sandbox:bookworm-slim`) from `Dockerfile.base.j2`, then a custom image (`openclaw-sandbox-custom:latest`) from `Dockerfile.sandbox.j2` adding the dev toolchain. Neither image is pulled from a registry — both are built locally on the server. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 
 **Config:**
 ```
@@ -584,6 +584,8 @@ agents.defaults.sandbox.workspaceAccess: rw
 agents.defaults.sandbox.docker.network: bridge
 agents.defaults.sandbox.docker.image: openclaw-sandbox-custom:latest
 ```
+
+**Tool access:** Sandbox sessions have access to all standard tool groups (openclaw, runtime, fs, sessions, memory, web, ui, automation, messaging, nodes). Elevated tools (shell, system commands) are enabled. When Telegram is configured, sensitive actions require approval from the configured Telegram user. Without Telegram, elevated tools are enabled without an approval gate. Change via `./scripts/provision.sh --tags config`.
 
 ## Troubleshooting
 
