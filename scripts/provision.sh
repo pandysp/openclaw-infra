@@ -34,6 +34,7 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     workspace_repo_url="${PROVISION_WORKSPACE_REPO_URL:-}"
     workspace_deploy_private_key="${PROVISION_WORKSPACE_DEPLOY_KEY:-}"
     tailscale_hostname="${PROVISION_TAILSCALE_HOSTNAME:-openclaw-vps}"
+    brave_api_key="${PROVISION_BRAVE_API_KEY:-}"
 else
     echo "Reading secrets from Pulumi CLI"
     cd "$PULUMI_DIR"
@@ -50,6 +51,7 @@ else
     telegram_user_id=$(pulumi config get telegramUserId 2>/dev/null || echo "")
     workspace_repo_url=$(pulumi config get workspaceRepoUrl 2>/dev/null || echo "")
     tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
+    brave_api_key=$(pulumi config get braveApiKey 2>/dev/null || echo "")
 fi
 
 # Validate required secrets
@@ -72,6 +74,7 @@ echo "  gateway_token: set"
 echo "  claude_setup_token: set"
 echo "  telegram: $([ -n "$telegram_bot_token" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync: $([ -n "$workspace_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  brave_search: $([ -n "$brave_api_key" ] && echo "configured" || echo "skipped")"
 
 # Write secrets to temp YAML file
 SECRETS_FILE="$SECRETS_DIR/secrets.yml"
@@ -82,6 +85,7 @@ claude_setup_token: "$(echo "$claude_setup_token" | sed 's/"/\\"/g')"
 telegram_bot_token: "$(echo "$telegram_bot_token" | sed 's/"/\\"/g')"
 telegram_user_id: "$telegram_user_id"
 workspace_repo_url: "$workspace_repo_url"
+brave_api_key: "$(echo "$brave_api_key" | sed 's/"/\\"/g')"
 workspace_deploy_key: |
 $(echo "$workspace_deploy_private_key" | sed 's/^/  /')
 EOF

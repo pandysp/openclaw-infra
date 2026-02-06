@@ -17,6 +17,9 @@ const claudeSetupToken = config.requireSecret("claudeSetupToken");
 const telegramBotToken = config.getSecret("telegramBotToken");
 const telegramUserId = config.get("telegramUserId");
 
+// Optional Brave Search API key (set via `pulumi config set --secret`)
+const braveApiKey = config.getSecret("braveApiKey");
+
 // Optional workspace git sync (set via `pulumi config set`)
 const workspaceRepoUrl = config.get("workspaceRepoUrl");
 
@@ -95,6 +98,7 @@ const ansibleProvision = new command.local.Command(
             PROVISION_WORKSPACE_DEPLOY_KEY:
                 workspaceDeployKey.privateKeyOpenssh,
             PROVISION_TAILSCALE_HOSTNAME: serverName,
+            PROVISION_BRAVE_API_KEY: braveApiKey || "",
         },
         // Re-run Ansible whenever the server is replaced
         triggers: [server.id],

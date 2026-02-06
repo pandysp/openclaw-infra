@@ -1,22 +1,45 @@
 # OpenClaw Production Stack Configuration
 #
-# Copy this file to Pulumi.prod.yaml, then configure:
+# Copy this file to Pulumi.prod.yaml and initialize the stack:
 #
 #   cp Pulumi.prod.yaml.template Pulumi.prod.yaml
-#   pulumi config set hcloud:token --secret
-#   pulumi config set tailscaleAuthKey --secret
-#   pulumi config set claudeSetupToken --secret
+#   cd pulumi && pulumi stack init prod
 #
-# Optional (Telegram integration):
-#   pulumi config set telegramBotToken --secret
-#   pulumi config set telegramUserId "YOUR_TELEGRAM_USER_ID"
+# Then set the required secrets:
 #
-# Optional (for ready-to-use URL output):
+#   pulumi config set hcloud:token --secret          # Hetzner Cloud API token
+#   pulumi config set tailscaleAuthKey --secret       # Tailscale auth key (reusable + ephemeral)
+#   pulumi config set claudeSetupToken --secret       # From `claude setup-token`
+#
+# ──────────────────────────────────────────────────────────────────────
+# Optional integrations (set any combination):
+#
+#   # Telegram notifications + cron job delivery
+#   pulumi config set telegramBotToken --secret       # From @BotFather
+#   pulumi config set telegramUserId "YOUR_USER_ID"   # From @userinfobot
+#
+#   # Workspace git sync (backs up ~/.openclaw/workspace to a private repo)
+#   pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
+#
+#   # Web search via Brave Search API (free tier: 2,000 queries/mo)
+#   pulumi config set braveApiKey --secret            # From brave.com/search/api
+#
+#   # Ready-to-use URL in Pulumi outputs (cosmetic, not required for access)
 #   pulumi config set tailnetDnsName "your-tailnet.ts.net"
+#
+# ──────────────────────────────────────────────────────────────────────
+# Deploy:
+#
+#   pulumi up
+#
+# Secrets added via `pulumi config set --secret` will appear below as
+# encrypted values. Plain-text keys (like serverName) can be edited
+# directly in this file.
 
 config:
-  openclaw-infra:serverName: openclaw-vps
-  openclaw-infra:serverType: cx33
-  openclaw-infra:serverLocation: fsn1
-  openclaw-infra:serverImage: ubuntu-24.04
-  # Secrets are added via `pulumi config set --secret` and will appear here encrypted
+  # ── Hetzner server settings ───────────────────────────────────────
+  # These have sensible defaults in index.ts; override here if needed.
+  openclaw-infra:serverName: openclaw-vps        # Tailscale hostname
+  openclaw-infra:serverType: cx33                # x86, 4 vCPU, 8GB RAM (~€5.49/mo)
+  openclaw-infra:serverLocation: fsn1            # fsn1=Falkenstein, nbg1=Nuremberg, hel1=Helsinki
+  openclaw-infra:serverImage: ubuntu-24.04       # Hetzner OS image
