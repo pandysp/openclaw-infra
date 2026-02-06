@@ -45,6 +45,11 @@
   no_log: true
   when: not openclaw_config.stat.exists
 
+- name: Restrict .openclaw directory permissions
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw
+    mode: "0700"
+
 - name: Clean up setup token
   ansible.builtin.file:
     path: /tmp/ansible-setup-token
