@@ -4,9 +4,16 @@
     path: /home/ubuntu/.openclaw/openclaw.json
   register: openclaw_config
 
+- name: Compute onboard token arguments
+  ansible.builtin.set_fact:
+    onboard_token_args: >-
+      {{ '--kimi-code-api-key "$API_TOKEN"'
+         if provider == 'kimi'
+         else '--token "$API_TOKEN" --token-provider ' + token_provider }}
+
 - name: Write setup token to temp file
   ansible.builtin.copy:
-    content: "{{ claude_setup_token }}"
+    content: "{{ api_token }}"
     dest: /tmp/ansible-setup-token
     mode: "0600"
   no_log: true
@@ -16,12 +23,11 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    CLAUDE_SETUP_TOKEN=$(cat /tmp/ansible-setup-token)
+    API_TOKEN=$(cat /tmp/ansible-setup-token)
     ONBOARD_OUTPUT=$(openclaw onboard --non-interactive --accept-risk \
         --mode local \
-        --auth-choice token \
-        --token "$CLAUDE_SETUP_TOKEN" \
-        --token-provider anthropic \
+        --auth-choice {{ auth_choice }} \
+        {{ onboard_token_args }} \
         --gateway-port 18789 \
         --gateway-bind loopback \
         --skip-daemon \

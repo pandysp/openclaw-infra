@@ -1,4 +1,9 @@
 ---
+- name: Compute effective model configuration
+  ansible.builtin.set_fact:
+    effective_model_primary: "{{ openclaw_model_primary if openclaw_model_primary | length > 0 else openclaw_provider_defaults[provider].model_primary }}"
+    effective_thinking_default: "{{ openclaw_thinking_default if openclaw_thinking_default | length > 0 else openclaw_provider_defaults[provider].thinking_default }}"
+
 - name: Write gateway token to temp file
   ansible.builtin.copy:
     content: "{{ gateway_token }}"
@@ -28,9 +33,9 @@
     openclaw config set gateway.auth.allowTailscale true
     openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
 
-    # Model defaults
-    openclaw config set agents.defaults.model.primary "{{ openclaw_model_primary }}"
-    openclaw config set agents.defaults.thinkingDefault {{ openclaw_thinking_default }}
+    # Model defaults (provider: {{ provider }})
+    openclaw config set agents.defaults.model.primary "{{ effective_model_primary }}"
+    openclaw config set agents.defaults.thinkingDefault {{ effective_thinking_default }}
 
     # Sandbox tool allowlist (all groups)
     openclaw config set tools.sandbox.tools.allow --json '["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"]'
@@ -49,6 +54,16 @@
   args:
     executable: /bin/bash
   no_log: true
+  notify: restart openclaw-gateway
+
+- name: Set Kimi API key in OpenClaw env (Kimi provider only)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    openclaw config set env.KIMI_API_KEY "{{ api_token }}"
+  args:
+    executable: /bin/bash
+  no_log: true
+  when: provider == "kimi"
   notify: restart openclaw-gateway
 
 - name: Clean up gateway token

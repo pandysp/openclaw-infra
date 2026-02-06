@@ -5,7 +5,13 @@
 #   cp Pulumi.prod.yaml.template Pulumi.prod.yaml
 #   pulumi config set hcloud:token --secret
 #   pulumi config set tailscaleAuthKey --secret
-#   pulumi config set claudeSetupToken --secret
+#
+# Provider configuration (default: claude):
+#   pulumi config set provider claude   # or 'kimi'
+#
+# Token (required - depends on provider choice):
+#   For Claude: pulumi config set claudeSetupToken --secret
+#   For Kimi:   pulumi config set kimiApiKey --secret
 #
 # Optional (Telegram integration):
 #   pulumi config set telegramBotToken --secret
@@ -15,6 +21,7 @@
 #   pulumi config set tailnetDnsName "your-tailnet.ts.net"
 
 config:
+  openclaw-infra:provider: claude
   openclaw-infra:serverName: openclaw-vps
   openclaw-infra:serverType: cx33
   openclaw-infra:serverLocation: fsn1

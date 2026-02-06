@@ -16,10 +16,13 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 
 - Node.js 18+
 - [Pulumi CLI](https://www.pulumi.com/docs/install/)
+- Ansible (`pip install ansible`)
 - [Tailscale](https://tailscale.com/start) installed and connected on your machine
 - Hetzner Cloud API token ([console.hetzner.cloud](https://console.hetzner.cloud/))
 - Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
-- Claude setup token (run `claude setup-token`)
+- **One of:**
+  - Claude setup token (run `claude setup-token`) — default
+  - Kimi API key ([platform.moonshot.ai](https://platform.moonshot.ai)) — alternative
 
 See [CLAUDE.md](./CLAUDE.md#prerequisites) for detailed setup instructions.
 
@@ -67,12 +70,14 @@ pulumi stack init prod  # Save this passphrase — you need it for every pulumi 
 
 # Required
 pulumi config set hcloud:token --secret       # Hetzner API token
-pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
-pulumi config set claudeSetupToken --secret    # From `claude setup-token`
+pulumi config set tailscaleAuthKey --secret   # Tailscale auth key
+
+# Provider token (Claude by default)
+pulumi config set claudeSetupToken --secret   # From `claude setup-token`
 
 # Optional: Telegram notifications (daily digests, weekly planning)
-pulumi config set telegramBotToken --secret    # From @BotFather
-pulumi config set telegramUserId "YOUR_ID"     # From @userinfobot (not secret, numeric only)
+pulumi config set telegramBotToken --secret   # From @BotFather
+pulumi config set telegramUserId "YOUR_ID"    # From @userinfobot (not secret, numeric only)
 
 # Optional: hourly workspace backup to a private GitHub repo
 pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
@@ -84,6 +89,12 @@ pulumi up
 cd ..
 ./scripts/verify.sh
 ```
+
+> **Using Kimi instead of Claude?** Replace the token line with:
+> ```bash
+> pulumi config set provider kimi
+> pulumi config set kimiApiKey --secret  # From platform.moonshot.ai
+> ```
 
 > After verifying, clean up the cloud-init log (contains secrets):
 > `ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"`
@@ -106,6 +117,24 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 > No public SSH port is exposed. SSH works over Tailscale only.
 
 See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details.
+
+## Switching Providers
+
+Switch between Claude and Kimi on an existing deployment:
+
+```bash
+# Switch to Kimi
+pulumi config set provider kimi
+pulumi config set kimiApiKey --secret
+./scripts/provision.sh --tags openclaw,config
+
+# Switch to Claude
+pulumi config set provider claude
+pulumi config set claudeSetupToken --secret
+./scripts/provision.sh --tags openclaw,config
+```
+
+See [CLAUDE.md](./CLAUDE.md#switching-providers) for details on provider defaults and model overrides.
 
 ## Architecture
 

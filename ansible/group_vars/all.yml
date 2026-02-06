@@ -3,8 +3,19 @@
 # Secrets are passed via scripts/provision.sh from Pulumi config.
 
 openclaw_timezone: "Europe/Berlin"
-openclaw_model_primary: "anthropic/claude-opus-4-5"
-openclaw_thinking_default: "high"
+
+# Provider-specific defaults (runtime selection based on 'provider' variable)
+openclaw_provider_defaults:
+  claude:
+    model_primary: "anthropic/claude-opus-4-5"
+    thinking_default: "high"
+  kimi:
+    model_primary: "kimi-coding/k2p5"
+    thinking_default: "high"  # Kimi K2.5 supports extended thinking
+
+# Explicit overrides (leave empty to use provider defaults)
+openclaw_model_primary: ""
+openclaw_thinking_default: ""
 
 # Sandbox settings
 openclaw_sandbox_mode: "all"

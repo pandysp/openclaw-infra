@@ -11,7 +11,32 @@ const config = new pulumi.Config();
 
 // Required secrets (set via `pulumi config set --secret`)
 const tailscaleAuthKey = config.requireSecret("tailscaleAuthKey");
-const claudeSetupToken = config.requireSecret("claudeSetupToken");
+
+// Provider choice (default: claude for backward compatibility)
+const provider = config.get("provider") || "claude";
+if (provider !== "claude" && provider !== "kimi") {
+    throw new Error(`Invalid provider '${provider}'. Must be 'claude' or 'kimi'.`);
+}
+
+// Conditional token loading based on provider
+const claudeSetupToken = config.getSecret("claudeSetupToken");
+const kimiApiKey = config.getSecret("kimiApiKey");
+
+// Validate correct token is provided for chosen provider
+if (provider === "claude") {
+    if (!claudeSetupToken) {
+        throw new Error("Provider is 'claude' but claudeSetupToken is not set. Run: pulumi config set claudeSetupToken --secret");
+    }
+} else if (provider === "kimi") {
+    if (!kimiApiKey) {
+        throw new Error("Provider is 'kimi' but kimiApiKey is not set. Run: pulumi config set kimiApiKey --secret");
+    }
+}
+
+// Derive provider-specific values
+const apiToken = provider === "claude" ? claudeSetupToken! : kimiApiKey!;
+const tokenProvider = provider === "claude" ? "anthropic" : "kimi-coding";
+const authChoice = provider === "claude" ? "token" : "kimi-code-api-key";
 
 // Optional Telegram configuration (set via `pulumi config set`)
 const telegramBotToken = config.getSecret("telegramBotToken");
@@ -88,7 +113,10 @@ const ansibleProvision = new command.local.Command(
             PULUMI_CONFIG_PASSPHRASE:
                 process.env.PULUMI_CONFIG_PASSPHRASE || "",
             PROVISION_GATEWAY_TOKEN: gatewayToken.result,
-            PROVISION_CLAUDE_SETUP_TOKEN: claudeSetupToken,
+            PROVISION_API_TOKEN: apiToken,
+            PROVISION_PROVIDER: provider,
+            PROVISION_TOKEN_PROVIDER: tokenProvider,
+            PROVISION_AUTH_CHOICE: authChoice,
             PROVISION_TELEGRAM_BOT_TOKEN: telegramBotToken || "",
             PROVISION_TELEGRAM_USER_ID: telegramUserId || "",
             PROVISION_WORKSPACE_REPO_URL: workspaceRepoUrl || "",
@@ -121,6 +149,9 @@ export const firewallId = firewall.id;
 
 // Gateway token (for client configuration)
 export const openclawGatewayToken = pulumi.secret(gatewayToken.result);
+
+// Provider configuration
+export const providerName = provider;
 
 // Workspace deploy keys
 export const workspaceDeployPublicKey = workspaceDeployKey.publicKeyOpenssh;
