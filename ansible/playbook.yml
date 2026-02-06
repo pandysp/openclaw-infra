@@ -28,16 +28,16 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [config, openclaw, sandbox]
+      tags: [docker, config, openclaw, sandbox]
 
     - name: Wait for gateway to stabilize
       ansible.builtin.pause:
         seconds: 5
-      tags: [config, openclaw, sandbox]
+      tags: [docker, config, openclaw, sandbox]
 
     - name: Verify gateway is active
       ansible.builtin.command: systemctl --user is-active openclaw-gateway
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
-      tags: [config, openclaw, sandbox]
+      tags: [docker, config, openclaw, sandbox]

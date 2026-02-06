@@ -22,6 +22,19 @@
     append: true
   register: docker_group_result
 
+- name: Restart systemd user manager to pick up new docker group
+  ansible.builtin.systemd:
+    name: "user@1000.service"
+    state: restarted
+    scope: system
+  become: true
+  when: docker_group_result.changed
+
+- name: Wait for systemd user manager to stabilize
+  ansible.builtin.pause:
+    seconds: 2
+  when: docker_group_result.changed
+
 - name: Reset SSH connection to pick up new docker group
   ansible.builtin.meta: reset_connection
 
