@@ -28,7 +28,22 @@ echo "=== Reading secrets ==="
 if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     echo "Using secrets from Pulumi environment variables"
     gateway_token="$PROVISION_GATEWAY_TOKEN"
-    claude_setup_token="${PROVISION_CLAUDE_SETUP_TOKEN:-}"
+    api_token="${PROVISION_API_TOKEN:-}"
+    # Validate provider env vars are either all set or all default to claude
+    if [ -n "${PROVISION_PROVIDER:-}" ]; then
+        provider="$PROVISION_PROVIDER"
+        if [ -z "${PROVISION_TOKEN_PROVIDER:-}" ] || [ -z "${PROVISION_AUTH_CHOICE:-}" ]; then
+            echo "ERROR: PROVISION_PROVIDER is set ('$provider') but PROVISION_TOKEN_PROVIDER or PROVISION_AUTH_CHOICE is missing."
+            echo "All three must be set together."
+            exit 1
+        fi
+        token_provider="$PROVISION_TOKEN_PROVIDER"
+        auth_choice="$PROVISION_AUTH_CHOICE"
+    else
+        provider="claude"
+        token_provider="anthropic"
+        auth_choice="token"
+    fi
     telegram_bot_token="${PROVISION_TELEGRAM_BOT_TOKEN:-}"
     telegram_user_id="${PROVISION_TELEGRAM_USER_ID:-}"
     workspace_repo_url="${PROVISION_WORKSPACE_REPO_URL:-}"
@@ -41,10 +56,28 @@ else
         echo "ERROR: Failed to read gateway token from Pulumi. Is PULUMI_CONFIG_PASSPHRASE set?"
         exit 1
     }
-    claude_setup_token=$(pulumi config get claudeSetupToken) || {
-        echo "ERROR: Failed to read claudeSetupToken from Pulumi config."
+    # Read provider configuration
+    provider=$(pulumi config get provider 2>/dev/null || echo "claude")
+    if [ "$provider" = "claude" ]; then
+        api_token=$(pulumi config get claudeSetupToken) || {
+            echo "ERROR: Provider is 'claude' but claudeSetupToken not set."
+            echo "Run: pulumi config set claudeSetupToken --secret"
+            exit 1
+        }
+        token_provider="anthropic"
+        auth_choice="token"
+    elif [ "$provider" = "kimi" ]; then
+        api_token=$(pulumi config get kimiApiKey) || {
+            echo "ERROR: Provider is 'kimi' but kimiApiKey not set."
+            echo "Run: pulumi config set kimiApiKey --secret"
+            exit 1
+        }
+        token_provider="kimi-coding"
+        auth_choice="kimi-code-api-key"
+    else
+        echo "ERROR: Invalid provider '$provider'. Must be 'claude' or 'kimi'."
         exit 1
-    }
+    fi
     workspace_deploy_private_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     telegram_bot_token=$(pulumi config get telegramBotToken 2>/dev/null || echo "")
     telegram_user_id=$(pulumi config get telegramUserId 2>/dev/null || echo "")
@@ -57,8 +90,8 @@ if [ -z "$gateway_token" ]; then
     echo "ERROR: gateway_token is empty."
     exit 1
 fi
-if [ -z "$claude_setup_token" ]; then
-    echo "ERROR: claude_setup_token is empty."
+if [ -z "$api_token" ]; then
+    echo "ERROR: api_token is empty (provider: $provider)."
     exit 1
 fi
 
@@ -68,8 +101,9 @@ if [ -n "$workspace_repo_url" ] && [ -z "$workspace_deploy_private_key" ]; then
     exit 1
 fi
 
+echo "  provider: $provider"
 echo "  gateway_token: set"
-echo "  claude_setup_token: set"
+echo "  api_token: set ($token_provider)"
 echo "  telegram: $([ -n "$telegram_bot_token" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync: $([ -n "$workspace_repo_url" ] && echo "configured" || echo "skipped")"
 
@@ -78,7 +112,10 @@ SECRETS_FILE="$SECRETS_DIR/secrets.yml"
 cat > "$SECRETS_FILE" <<EOF
 ---
 gateway_token: "$(echo "$gateway_token" | sed 's/"/\\"/g')"
-claude_setup_token: "$(echo "$claude_setup_token" | sed 's/"/\\"/g')"
+api_token: "$(echo "$api_token" | sed 's/"/\\"/g')"
+provider: "$provider"
+token_provider: "$token_provider"
+auth_choice: "$auth_choice"
 telegram_bot_token: "$(echo "$telegram_bot_token" | sed 's/"/\\"/g')"
 telegram_user_id: "$telegram_user_id"
 workspace_repo_url: "$workspace_repo_url"
@@ -121,18 +158,23 @@ for i in $(seq 1 $MAX_RETRIES); do
     # Re-resolve all candidate IPs each attempt (new server may appear mid-loop)
     CANDIDATES=$(resolve_tailscale_ips) || true
 
-    # Fall back to hostname (MagicDNS may resolve before tailscale status learns the peer)
     if [ -z "$CANDIDATES" ]; then
-        CANDIDATES="$tailscale_hostname"
+        if [ "$i" -ge 5 ]; then
+            echo "WARNING: No Tailscale peers matching '$tailscale_hostname' found after $i attempts."
+            echo "  Check: tailscale status | grep $tailscale_hostname"
+            echo "  Common causes: auth key expired, server not joined to tailnet, hostname mismatch"
+        fi
+        echo "No Tailscale peers found yet (attempt $i/$MAX_RETRIES)"
+        sleep "$RETRY_DELAY"
+        continue
     fi
 
     if [ -z "$HOST" ]; then
         echo "Tailscale candidates: $(echo $CANDIDATES | tr '\n' ' ')"
     fi
 
-    # Try each candidate via SSH
     for TARGET in $CANDIDATES; do
-        SSH_ERR=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        SSH_ERR=$(timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
            ubuntu@"$TARGET" true 2>&1) && {
             HOST="$TARGET"
             echo "SSH connectivity established (via $HOST)"
@@ -142,8 +184,13 @@ for i in $(seq 1 $MAX_RETRIES); do
 
     if [ "$i" -eq "$MAX_RETRIES" ]; then
         echo "ERROR: Could not establish SSH connection after $MAX_RETRIES attempts"
-        echo "Tried candidates: $(echo $CANDIDATES | tr '\n' ' ')"
-        echo "Last SSH error: $SSH_ERR"
+        if [ -z "$CANDIDATES" ]; then
+            echo "No Tailscale peers matching hostname '$tailscale_hostname' were ever found."
+            echo "Check: is the server on your tailnet? Try: tailscale status"
+        else
+            echo "Tried candidates: $(echo $CANDIDATES | tr '\n' ' ')"
+            echo "Last SSH error: $SSH_ERR"
+        fi
         exit 1
     fi
     echo "Waiting for Tailscale SSH... (attempt $i/$MAX_RETRIES)"

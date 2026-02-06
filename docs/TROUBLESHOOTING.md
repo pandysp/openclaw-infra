@@ -171,17 +171,34 @@ XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
 **Symptom**: OpenClaw fails to authenticate, logs show auth errors.
 
 ```bash
-# Generate new token locally
-claude setup-token
+# First, delete existing config to force re-onboarding
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'rm ~/.openclaw/openclaw.json'
 
-# Re-onboard on the server
+# Then re-provision with the correct provider tag
+./scripts/provision.sh --tags openclaw,config
+```
+
+If you prefer to re-onboard manually on the server:
+
+```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
+# For Claude provider:
 openclaw onboard --non-interactive --accept-risk \
     --mode local \
     --auth-choice token \
     --token "YOUR_NEW_TOKEN" \
     --token-provider anthropic \
+    --gateway-port 18789 \
+    --gateway-bind loopback \
+    --skip-daemon \
+    --skip-skills
+
+# For Kimi provider:
+openclaw onboard --non-interactive --accept-risk \
+    --mode local \
+    --auth-choice kimi-code-api-key \
+    --kimi-code-api-key "YOUR_KIMI_API_KEY" \
     --gateway-port 18789 \
     --gateway-bind loopback \
     --skip-daemon \
