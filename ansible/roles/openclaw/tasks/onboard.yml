@@ -4,6 +4,21 @@
     path: /home/ubuntu/.openclaw/openclaw.json
   register: openclaw_config
 
+- name: Validate provider configuration for onboarding
+  ansible.builtin.assert:
+    that:
+      - provider is defined
+      - provider in ['claude', 'kimi']
+      - token_provider is defined
+      - auth_choice is defined
+      - api_token is defined
+    fail_msg: >-
+      Missing or invalid provider configuration.
+      provider={{ provider | default('UNDEFINED') }},
+      token_provider={{ token_provider | default('UNDEFINED') }},
+      auth_choice={{ auth_choice | default('UNDEFINED') }}.
+      Ensure provision.sh passes all provider variables.
+
 - name: Compute onboard token arguments
   ansible.builtin.set_fact:
     onboard_token_args: >-
@@ -26,7 +41,7 @@
     API_TOKEN=$(cat /tmp/ansible-setup-token)
     ONBOARD_OUTPUT=$(openclaw onboard --non-interactive --accept-risk \
         --mode local \
-        --auth-choice {{ auth_choice }} \
+        --auth-choice "{{ auth_choice }}" \
         {{ onboard_token_args }} \
         --gateway-port 18789 \
         --gateway-bind loopback \

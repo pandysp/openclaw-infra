@@ -34,7 +34,10 @@ if (provider === "claude") {
 }
 
 // Derive provider-specific values
+// Note: getSecret() returns Output<string> | undefined. The Output wrapper is always truthy,
+// so an empty config value passes the check above. provision.sh validates for empty values.
 const apiToken = provider === "claude" ? claudeSetupToken! : kimiApiKey!;
+// These values must match `openclaw onboard` CLI arguments (--token-provider, --auth-choice)
 const tokenProvider = provider === "claude" ? "anthropic" : "kimi-coding";
 const authChoice = provider === "claude" ? "token" : "kimi-code-api-key";
 

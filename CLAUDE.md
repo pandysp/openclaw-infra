@@ -300,18 +300,21 @@ pulumi up
 ### Switch existing deployment to different provider
 
 ```bash
-# Switch to Kimi
+# 1. Delete existing config to force re-onboarding
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'rm ~/.openclaw/openclaw.json'
+
+# 2. Switch to Kimi
 pulumi config set provider kimi
 pulumi config set kimiApiKey --secret
 ./scripts/provision.sh --tags openclaw,config
 
-# Switch to Claude
+# Or switch to Claude
 pulumi config set provider claude
 pulumi config set claudeSetupToken --secret
 ./scripts/provision.sh --tags openclaw,config
 ```
 
-Note: Switching providers requires re-onboarding (the `openclaw` tag), not just config changes.
+Note: You must delete `~/.openclaw/openclaw.json` on the server before switching — onboarding is skipped if the config already exists. Paired devices will need to be re-approved after switching.
 
 ### Provider Defaults
 
@@ -388,6 +391,11 @@ Then re-provision: `./scripts/provision.sh --tags config`
 2. Update Pulumi config: `pulumi config set claudeSetupToken --secret`
 3. Redeploy or update on server: `openclaw auth login`
 
+**Kimi API key:**
+1. Generate a new key at [platform.moonshot.ai](https://platform.moonshot.ai)
+2. Update Pulumi config: `pulumi config set kimiApiKey --secret`
+3. Re-provision: `./scripts/provision.sh --tags openclaw,config`
+
 **Gateway token** (auto-generated, rarely needs rotation):
 1. Redeploy with `pulumi up` (generates new token)
 2. Re-pair browser devices after rotation
@@ -405,7 +413,9 @@ Before deploying, you need:
 
 1. **Hetzner Cloud API Token** — Create a **dedicated project** for OpenClaw at [console.hetzner.cloud](https://console.hetzner.cloud/), then generate a Read & Write token (Security → API Tokens)
 2. **Tailscale Auth Key** — Generate at [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) with **Reusable** and **Ephemeral** enabled. New to Tailscale? See [README.md](./README.md#first-time-tailscale-setup).
-3. **Claude Max Setup Token** — Run `claude setup-token` in your terminal. Token starts with `sk-ant-oat01-...`. Note: setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
+3. **Inference Provider Token** — **One of:**
+   - **Claude** (default): Run `claude setup-token` in your terminal. Token starts with `sk-ant-oat01-...`. Note: setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
+   - **Kimi** (alternative): Get an API key from [platform.moonshot.ai](https://platform.moonshot.ai)
 4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Ansible (`pip install ansible`), Tailscale app, OpenClaw CLI (`brew install openclaw-cli`)
 
 ## First-Time Setup
@@ -425,7 +435,11 @@ pulumi config set hcloud:token --secret
 
 # 4. Configure secrets
 pulumi config set tailscaleAuthKey --secret
-pulumi config set claudeSetupToken --secret
+pulumi config set claudeSetupToken --secret   # For Claude (default)
+
+# Using Kimi instead? Replace the line above with:
+#   pulumi config set provider kimi
+#   pulumi config set kimiApiKey --secret
 
 # 5. Preview deployment
 pulumi preview

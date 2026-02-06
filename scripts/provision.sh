@@ -29,9 +29,21 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     echo "Using secrets from Pulumi environment variables"
     gateway_token="$PROVISION_GATEWAY_TOKEN"
     api_token="${PROVISION_API_TOKEN:-}"
-    provider="${PROVISION_PROVIDER:-claude}"
-    token_provider="${PROVISION_TOKEN_PROVIDER:-anthropic}"
-    auth_choice="${PROVISION_AUTH_CHOICE:-token}"
+    # Validate provider env vars are either all set or all default to claude
+    if [ -n "${PROVISION_PROVIDER:-}" ]; then
+        provider="$PROVISION_PROVIDER"
+        if [ -z "${PROVISION_TOKEN_PROVIDER:-}" ] || [ -z "${PROVISION_AUTH_CHOICE:-}" ]; then
+            echo "ERROR: PROVISION_PROVIDER is set ('$provider') but PROVISION_TOKEN_PROVIDER or PROVISION_AUTH_CHOICE is missing."
+            echo "All three must be set together."
+            exit 1
+        fi
+        token_provider="$PROVISION_TOKEN_PROVIDER"
+        auth_choice="$PROVISION_AUTH_CHOICE"
+    else
+        provider="claude"
+        token_provider="anthropic"
+        auth_choice="token"
+    fi
     telegram_bot_token="${PROVISION_TELEGRAM_BOT_TOKEN:-}"
     telegram_user_id="${PROVISION_TELEGRAM_USER_ID:-}"
     workspace_repo_url="${PROVISION_WORKSPACE_REPO_URL:-}"
@@ -147,6 +159,11 @@ for i in $(seq 1 $MAX_RETRIES); do
     CANDIDATES=$(resolve_tailscale_ips) || true
 
     if [ -z "$CANDIDATES" ]; then
+        if [ "$i" -ge 5 ]; then
+            echo "WARNING: No Tailscale peers matching '$tailscale_hostname' found after $i attempts."
+            echo "  Check: tailscale status | grep $tailscale_hostname"
+            echo "  Common causes: auth key expired, server not joined to tailnet, hostname mismatch"
+        fi
         echo "No Tailscale peers found yet (attempt $i/$MAX_RETRIES)"
         sleep "$RETRY_DELAY"
         continue
@@ -167,8 +184,13 @@ for i in $(seq 1 $MAX_RETRIES); do
 
     if [ "$i" -eq "$MAX_RETRIES" ]; then
         echo "ERROR: Could not establish SSH connection after $MAX_RETRIES attempts"
-        echo "Tried candidates: $(echo $CANDIDATES | tr '\n' ' ')"
-        echo "Last SSH error: $SSH_ERR"
+        if [ -z "$CANDIDATES" ]; then
+            echo "No Tailscale peers matching hostname '$tailscale_hostname' were ever found."
+            echo "Check: is the server on your tailnet? Try: tailscale status"
+        else
+            echo "Tried candidates: $(echo $CANDIDATES | tr '\n' ' ')"
+            echo "Last SSH error: $SSH_ERR"
+        fi
         exit 1
     fi
     echo "Waiting for Tailscale SSH... (attempt $i/$MAX_RETRIES)"

@@ -1,4 +1,14 @@
 ---
+- name: Validate provider is set and supported
+  ansible.builtin.assert:
+    that:
+      - provider is defined
+      - provider in openclaw_provider_defaults
+    fail_msg: >-
+      Invalid or missing provider '{{ provider | default("UNDEFINED") }}'.
+      Supported providers: {{ openclaw_provider_defaults.keys() | list | join(', ') }}.
+      Set via: pulumi config set provider claude
+
 - name: Compute effective model configuration
   ansible.builtin.set_fact:
     effective_model_primary: "{{ openclaw_model_primary if openclaw_model_primary | length > 0 else openclaw_provider_defaults[provider].model_primary }}"
@@ -56,14 +66,45 @@
   no_log: true
   notify: restart openclaw-gateway
 
+- name: Write API token to temp file for Kimi config
+  ansible.builtin.copy:
+    content: "{{ api_token }}"
+    dest: /tmp/ansible-api-token
+    mode: "0600"
+  no_log: true
+  when: provider == "kimi"
+
 - name: Set Kimi API key in OpenClaw env (Kimi provider only)
   ansible.builtin.shell: |
     set -euo pipefail
-    openclaw config set env.KIMI_API_KEY "{{ api_token }}"
+    KIMI_KEY=$(cat /tmp/ansible-api-token)
+    openclaw config set env.KIMI_API_KEY "$KIMI_KEY"
   args:
     executable: /bin/bash
   no_log: true
   when: provider == "kimi"
+  notify: restart openclaw-gateway
+
+- name: Clean up API token temp file
+  ansible.builtin.file:
+    path: /tmp/ansible-api-token
+    state: absent
+  when: provider == "kimi"
+
+- name: Remove Kimi API key from OpenClaw env (non-Kimi provider)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    output=$(openclaw config unset env.KIMI_API_KEY 2>&1) || {
+        if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
+            true
+        else
+            echo "ERROR: Failed to unset env.KIMI_API_KEY: $output"
+            exit 1
+        fi
+    }
+  args:
+    executable: /bin/bash
+  when: provider != "kimi"
   notify: restart openclaw-gateway
 
 - name: Clean up gateway token
