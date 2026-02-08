@@ -71,6 +71,9 @@
         # Elevated default
         openclaw config set agents.defaults.elevatedDefault {{ openclaw_elevated_default }}
 
+        # Heartbeat interval
+        openclaw config set agents.defaults.heartbeat.every {{ openclaw_heartbeat_interval }}
+
         # Sandbox configuration
         openclaw config set agents.defaults.sandbox.mode {{ openclaw_sandbox_mode }}
         openclaw config set agents.defaults.sandbox.workspaceAccess {{ openclaw_sandbox_workspace_access }}

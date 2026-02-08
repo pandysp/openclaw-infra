@@ -14,6 +14,7 @@ pulumi/Pulumi.staging.yaml
 .env
 .env.*
 !.env.template
+.envrc
 docker/.env
 
 # TypeScript

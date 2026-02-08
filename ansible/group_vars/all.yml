@@ -5,6 +5,7 @@
 openclaw_timezone: "Europe/Berlin"
 openclaw_model_primary: "anthropic/claude-opus-4-5"
 openclaw_thinking_default: "high"
+openclaw_heartbeat_interval: "30m"
 openclaw_elevated_default: "off"
 
 # Sandbox settings
