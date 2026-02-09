@@ -98,6 +98,10 @@
         # Elevated default
         openclaw config set agents.defaults.elevatedDefault {{ openclaw_elevated_default }}
 
+        # Timezone
+        openclaw config set agents.defaults.userTimezone "{{ openclaw_timezone }}"
+        openclaw config set agents.defaults.envelopeTimezone user
+
         # Heartbeat interval
         openclaw config set agents.defaults.heartbeat.every {{ openclaw_heartbeat_interval }}
 

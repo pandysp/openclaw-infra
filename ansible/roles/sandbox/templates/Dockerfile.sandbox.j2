@@ -1,6 +1,15 @@
 FROM openclaw-sandbox:bookworm-slim
 
-# --- Layer 1: System packages ---
+# --- Layer 1: Add external apt repositories ---
+# gh (GitHub CLI) — official apt repository (https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list
+
+# --- Layer 2: System packages ---
 # Some packages may already exist in base image; listed explicitly for reproducibility
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -13,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     less \
     # File discovery & archives
     findutils \
+    fd-find \
     tar \
     gzip \
     unzip \
@@ -23,8 +33,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     # Version control
     git \
-    # JSON processing
+    git-lfs \
+    # Data processing
     jq \
+    sqlite3 \
+    # Document conversion
+    pandoc \
     # Directory visualization
     tree \
     # Build tools (needed for pip packages with native extensions)
@@ -43,13 +57,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Node.js (via Debian packages)
     nodejs \
     npm \
+    # GitHub CLI (via external apt repo added in Layer 1)
+    gh \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+  && git lfs install --system \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Layer 2: Strip setuid bits to prevent privilege escalation ---
-# -xdev avoids descending into /proc, /sys, and other virtual filesystems
-RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
+# --- Layer 3: uv + uvx (official Docker method — https://docs.astral.sh/uv/guides/integration/docker/) ---
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# --- Layer 3: ripgrep v14.1.1 (Debian bookworm ships 13.0.0; install newer from GitHub) ---
+# --- Layer 4: yq (official Docker method — https://github.com/mikefarah/yq) ---
+COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq
+
+# --- Layer 5: ripgrep v14.1.1 (Debian bookworm ships 13.0.0; install newer from GitHub) ---
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
       amd64) RG_ARCH="x86_64-unknown-linux-musl" ;; \
@@ -60,7 +80,21 @@ RUN ARCH=$(dpkg --print-architecture) && \
       | tar xz --strip-components=1 -C /usr/local/bin "ripgrep-14.1.1-${RG_ARCH}/rg" && \
     rg --version
 
-# --- Layer 4: Unprivileged user ---
+# --- Layer 6: just (official install script — https://just.systems/man/en/pre-built-binaries.html) ---
+# Not in Debian 12/bookworm apt (available from Debian 13+)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+      | bash -s -- --to /usr/local/bin && \
+    just --version
+
+# --- Layer 7: pnpm via corepack (recommended — https://pnpm.io/installation) ---
+RUN npm install -g corepack@latest && corepack enable pnpm
+
+# --- Layer 8: Strip setuid bits to prevent privilege escalation ---
+# Runs AFTER all package installs to cover apt, COPY --from, and binary downloads
+# -xdev avoids descending into /proc, /sys, and other virtual filesystems
+RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
+
+# --- Layer 9: Unprivileged user ---
 RUN (getent group 1000 || groupadd -g 1000 node) && \
     (id -u 1000 2>/dev/null || useradd -u 1000 -g 1000 -m -s /bin/bash node)
 
