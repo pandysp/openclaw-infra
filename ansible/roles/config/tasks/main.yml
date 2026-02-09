@@ -1,13 +1,19 @@
 ---
-- name: Write secrets to temp files
+- name: Write secrets and config to temp files
   ansible.builtin.copy:
     content: "{{ item.content }}"
     dest: "{{ item.dest }}"
     mode: "0600"
   no_log: true
   loop:
-    - { content: "{{ gateway_token }}", dest: /tmp/ansible-gateway-token }
-    - { content: "{{ brave_api_key | default('') }}", dest: /tmp/ansible-brave-api-key }
+    - content: "{{ gateway_token }}"
+      dest: /tmp/ansible-gateway-token
+    - content: "{{ brave_api_key | default('') }}"
+      dest: /tmp/ansible-brave-api-key
+    - content: "{{ openclaw_custom_models | to_json }}"
+      dest: /tmp/ansible-custom-models
+    - content: "{{ openclaw_model_fallbacks | to_json }}"
+      dest: /tmp/ansible-model-fallbacks
 
 - name: Configure gateway with secret cleanup
   block:
@@ -36,7 +42,11 @@
 
         # Model defaults
         openclaw config set agents.defaults.model.primary "{{ openclaw_model_primary }}"
+        openclaw config set agents.defaults.model.fallbacks --json "$(cat /tmp/ansible-model-fallbacks)"
         openclaw config set agents.defaults.thinkingDefault {{ openclaw_thinking_default }}
+
+        # Custom model definitions
+        openclaw config set models --json "$(cat /tmp/ansible-custom-models)"
 
         # Sandbox tool allowlist (all groups)
         openclaw config set tools.sandbox.tools.allow --json '["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"]'
@@ -92,3 +102,5 @@
       loop:
         - /tmp/ansible-gateway-token
         - /tmp/ansible-brave-api-key
+        - /tmp/ansible-custom-models
+        - /tmp/ansible-model-fallbacks
