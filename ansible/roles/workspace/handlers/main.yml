@@ -6,11 +6,14 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/1000"
 
-- name: enable workspace timer
+- name: enable workspace timers
   ansible.builtin.systemd:
-    name: workspace-git-sync.timer
+    name: "workspace-git-sync-{{ item.agent_id }}.timer"
     state: started
     enabled: true
     scope: user
   environment:
     XDG_RUNTIME_DIR: "/run/user/1000"
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"

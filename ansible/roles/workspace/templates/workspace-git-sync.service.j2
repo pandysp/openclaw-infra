@@ -1,7 +1,7 @@
 [Unit]
-Description=Sync OpenClaw workspace to git
+Description=Sync OpenClaw workspace ({{ item.agent_id }}) to git
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/workspace-git-sync.sh
+ExecStart=%h/.local/bin/workspace-git-sync-{{ item.agent_id }}.sh
 Environment=SSH_AUTH_SOCK=

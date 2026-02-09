@@ -31,8 +31,14 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     claude_setup_token="${PROVISION_CLAUDE_SETUP_TOKEN:-}"
     telegram_bot_token="${PROVISION_TELEGRAM_BOT_TOKEN:-}"
     telegram_user_id="${PROVISION_TELEGRAM_USER_ID:-}"
+    telegram_manon_user_id="${PROVISION_TELEGRAM_MANON_USER_ID:-}"
+    telegram_group_id="${PROVISION_TELEGRAM_GROUP_ID:-}"
     workspace_repo_url="${PROVISION_WORKSPACE_REPO_URL:-}"
     workspace_deploy_private_key="${PROVISION_WORKSPACE_DEPLOY_KEY:-}"
+    workspace_manon_repo_url="${PROVISION_WORKSPACE_MANON_REPO_URL:-}"
+    workspace_manon_deploy_key="${PROVISION_WORKSPACE_MANON_DEPLOY_KEY:-}"
+    workspace_tl_repo_url="${PROVISION_WORKSPACE_TL_REPO_URL:-}"
+    workspace_tl_deploy_key="${PROVISION_WORKSPACE_TL_DEPLOY_KEY:-}"
     tailscale_hostname="${PROVISION_TAILSCALE_HOSTNAME:-openclaw-vps}"
     brave_api_key="${PROVISION_BRAVE_API_KEY:-}"
 else
@@ -49,7 +55,13 @@ else
     workspace_deploy_private_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     telegram_bot_token=$(pulumi config get telegramBotToken 2>/dev/null || echo "")
     telegram_user_id=$(pulumi config get telegramUserId 2>/dev/null || echo "")
+    telegram_manon_user_id=$(pulumi config get telegramManonUserId 2>/dev/null || echo "")
+    telegram_group_id=$(pulumi config get telegramGroupId 2>/dev/null || echo "")
     workspace_repo_url=$(pulumi config get workspaceRepoUrl 2>/dev/null || echo "")
+    workspace_manon_repo_url=$(pulumi config get workspaceManonRepoUrl 2>/dev/null || echo "")
+    workspace_manon_deploy_key=$(pulumi stack output workspaceManonDeployPrivateKey --show-secrets 2>/dev/null || echo "")
+    workspace_tl_repo_url=$(pulumi config get workspaceTlRepoUrl 2>/dev/null || echo "")
+    workspace_tl_deploy_key=$(pulumi stack output workspaceTlDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
     brave_api_key=$(pulumi config get braveApiKey 2>/dev/null || echo "")
 fi
@@ -64,16 +76,36 @@ if [ -z "$claude_setup_token" ]; then
     exit 1
 fi
 
-# Validate: if workspace sync is configured, deploy key must exist
-if [ -n "$workspace_repo_url" ] && [ -z "$workspace_deploy_private_key" ]; then
-    echo "ERROR: workspaceRepoUrl is set but workspaceDeployPrivateKey is missing."
-    exit 1
-fi
+# Validate deploy keys: if repo URL is set, deploy key must exist and be valid
+validate_deploy_key() {
+    local name="$1" url="$2" key="$3"
+    if [ -n "$url" ] && [ -z "$key" ]; then
+        echo "ERROR: $name repo URL is set but deploy key is missing."
+        exit 1
+    fi
+    if [ -n "$key" ]; then
+        if ! echo "$key" | head -1 | grep -q "BEGIN OPENSSH PRIVATE KEY"; then
+            echo "ERROR: $name deploy key missing header."
+            exit 1
+        fi
+        if ! echo "$key" | tail -1 | grep -q "END OPENSSH PRIVATE KEY"; then
+            echo "ERROR: $name deploy key missing footer (possibly truncated)."
+            exit 1
+        fi
+    fi
+}
+validate_deploy_key "workspace (main)" "$workspace_repo_url" "$workspace_deploy_private_key"
+validate_deploy_key "workspace (manon)" "$workspace_manon_repo_url" "$workspace_manon_deploy_key"
+validate_deploy_key "workspace (tl)" "$workspace_tl_repo_url" "$workspace_tl_deploy_key"
 
 echo "  gateway_token: set"
 echo "  claude_setup_token: set"
 echo "  telegram: $([ -n "$telegram_bot_token" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync: $([ -n "$workspace_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  telegram_manon: $([ -n "$telegram_manon_user_id" ] && echo "configured" || echo "skipped")"
+echo "  telegram_group: $([ -n "$telegram_group_id" ] && echo "configured" || echo "skipped")"
+echo "  workspace_sync (main): $([ -n "$workspace_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  workspace_sync (manon): $([ -n "$workspace_manon_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  workspace_sync (tl): $([ -n "$workspace_tl_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  brave_search: $([ -n "$brave_api_key" ] && echo "configured" || echo "skipped")"
 
 # Write secrets to temp YAML file
@@ -84,11 +116,27 @@ gateway_token: "$(echo "$gateway_token" | sed 's/"/\\"/g')"
 claude_setup_token: "$(echo "$claude_setup_token" | sed 's/"/\\"/g')"
 telegram_bot_token: "$(echo "$telegram_bot_token" | sed 's/"/\\"/g')"
 telegram_user_id: "$telegram_user_id"
+telegram_manon_user_id: "$telegram_manon_user_id"
+telegram_group_id: "$telegram_group_id"
 workspace_repo_url: "$workspace_repo_url"
 brave_api_key: "$(echo "$brave_api_key" | sed 's/"/\\"/g')"
-workspace_deploy_key: |
-$(echo "$workspace_deploy_private_key" | sed 's/^/  /')
+workspace_manon_repo_url: "$workspace_manon_repo_url"
+workspace_tl_repo_url: "$workspace_tl_repo_url"
 EOF
+
+# Append deploy keys (block scalar when non-empty, explicit empty string otherwise)
+append_deploy_key() {
+    local name="$1" value="$2" file="$3"
+    if [ -n "$value" ]; then
+        printf '%s: |\n' "$name" >> "$file"
+        echo "$value" | sed 's/^/  /' >> "$file"
+    else
+        printf '%s: ""\n' "$name" >> "$file"
+    fi
+}
+append_deploy_key "workspace_deploy_key" "$workspace_deploy_private_key" "$SECRETS_FILE"
+append_deploy_key "workspace_manon_deploy_key" "$workspace_manon_deploy_key" "$SECRETS_FILE"
+append_deploy_key "workspace_tl_deploy_key" "$workspace_tl_deploy_key" "$SECRETS_FILE"
 chmod 600 "$SECRETS_FILE"
 
 echo "=== Waiting for Tailscale SSH connectivity ==="

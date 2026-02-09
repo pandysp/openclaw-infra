@@ -20,8 +20,14 @@ const telegramUserId = config.get("telegramUserId");
 // Optional Brave Search API key (set via `pulumi config set --secret`)
 const braveApiKey = config.getSecret("braveApiKey");
 
+// Optional multi-agent Telegram configuration
+const telegramManonUserId = config.get("telegramManonUserId");
+const telegramGroupId = config.get("telegramGroupId");
+
 // Optional workspace git sync (set via `pulumi config set`)
 const workspaceRepoUrl = config.get("workspaceRepoUrl");
+const workspaceManonRepoUrl = config.get("workspaceManonRepoUrl");
+const workspaceTlRepoUrl = config.get("workspaceTlRepoUrl");
 
 // Tailscale configuration
 // Find your tailnet name at: https://login.tailscale.com/admin/dns
@@ -51,6 +57,14 @@ const gatewayToken = new random.RandomPassword("openclaw-gateway-token", {
 // Only meaningful if workspaceRepoUrl is configured, but always generated
 // so the public key can be retrieved before the first deploy
 const workspaceDeployKey = new tls.PrivateKey("workspace-deploy-key", {
+    algorithm: "ED25519",
+});
+
+// Deploy keys for additional agent workspaces
+const workspaceDeployKeyManon = new tls.PrivateKey("workspace-deploy-key-manon", {
+    algorithm: "ED25519",
+});
+const workspaceDeployKeyTl = new tls.PrivateKey("workspace-deploy-key-tl", {
     algorithm: "ED25519",
 });
 
@@ -97,6 +111,14 @@ const ansibleProvision = new command.local.Command(
             PROVISION_WORKSPACE_REPO_URL: workspaceRepoUrl || "",
             PROVISION_WORKSPACE_DEPLOY_KEY:
                 workspaceDeployKey.privateKeyOpenssh,
+            PROVISION_TELEGRAM_MANON_USER_ID: telegramManonUserId || "",
+            PROVISION_TELEGRAM_GROUP_ID: telegramGroupId || "",
+            PROVISION_WORKSPACE_MANON_REPO_URL: workspaceManonRepoUrl || "",
+            PROVISION_WORKSPACE_MANON_DEPLOY_KEY:
+                workspaceDeployKeyManon.privateKeyOpenssh,
+            PROVISION_WORKSPACE_TL_REPO_URL: workspaceTlRepoUrl || "",
+            PROVISION_WORKSPACE_TL_DEPLOY_KEY:
+                workspaceDeployKeyTl.privateKeyOpenssh,
             PROVISION_TAILSCALE_HOSTNAME: serverName,
             PROVISION_BRAVE_API_KEY: braveApiKey || "",
         },
@@ -126,10 +148,24 @@ export const firewallId = firewall.id;
 // Gateway token (for client configuration)
 export const openclawGatewayToken = pulumi.secret(gatewayToken.result);
 
-// Workspace deploy keys
+// Workspace deploy keys (andy/main)
 export const workspaceDeployPublicKey = workspaceDeployKey.publicKeyOpenssh;
 export const workspaceDeployPrivateKey = pulumi.secret(
     workspaceDeployKey.privateKeyOpenssh
+);
+
+// Workspace deploy keys (manon)
+export const workspaceManonDeployPublicKey =
+    workspaceDeployKeyManon.publicKeyOpenssh;
+export const workspaceManonDeployPrivateKey = pulumi.secret(
+    workspaceDeployKeyManon.privateKeyOpenssh
+);
+
+// Workspace deploy keys (tl)
+export const workspaceTlDeployPublicKey =
+    workspaceDeployKeyTl.publicKeyOpenssh;
+export const workspaceTlDeployPrivateKey = pulumi.secret(
+    workspaceDeployKeyTl.privateKeyOpenssh
 );
 
 // Access information

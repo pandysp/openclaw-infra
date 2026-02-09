@@ -6,19 +6,56 @@
     mode: "0600"
   no_log: true
 
-- name: Configure Telegram channel
+- name: Set Telegram bot token
   ansible.builtin.shell: |
     set -euo pipefail
     BOT_TOKEN=$(cat /tmp/ansible-telegram-bot-token)
     openclaw config set channels.telegram.enabled true
     openclaw config set channels.telegram.botToken "$BOT_TOKEN"
-    openclaw config set channels.telegram.dmPolicy "allowlist"
-    {% if telegram_user_id is defined and telegram_user_id | length > 0 %}
-    openclaw config set channels.telegram.allowFrom "[{{ telegram_user_id }}]"
-    {% endif %}
   args:
     executable: /bin/bash
   no_log: true
+
+- name: Configure Telegram channel policies
+  ansible.builtin.shell: |
+    set -euo pipefail
+    openclaw config set channels.telegram.dmPolicy "allowlist"
+
+    # Clear per-account config (bindings now use peer matching, not accountId,
+    # so all messages go through the default account with the flat botToken).
+    output=$(openclaw config unset channels.telegram.accounts 2>&1) || {
+        if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
+            true
+        else
+            echo "ERROR: Failed to unset channels.telegram.accounts: $output" >&2
+            exit 1
+        fi
+    }
+
+    # Build DM allowFrom list from all agents with DM deliver_to
+    {% set dm_allow = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if agent.deliver_type == 'dm' and agent.deliver_to | default('') | length > 0 %}
+    {%     set _ = dm_allow.append(agent.deliver_to | int) %}
+    {%   endif %}
+    {% endfor %}
+    {% if dm_allow | length > 0 %}
+    openclaw config set channels.telegram.allowFrom --json '{{ dm_allow | to_json }}'
+    {% endif %}
+
+    # Configure group chat if telegram_group_id is set
+    {% if telegram_group_id is defined and telegram_group_id | length > 0 %}
+    {% set group_allow = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if agent.deliver_to | default('') | length > 0 and agent.deliver_type == 'dm' %}
+    {%     set _ = group_allow.append(agent.deliver_to | int) %}
+    {%   endif %}
+    {% endfor %}
+    openclaw config set channels.telegram.groupPolicy "allowlist"
+    openclaw config set channels.telegram.groups --json '{"{{ telegram_group_id }}":{"allowFrom":{{ group_allow | to_json }},"requireMention":false}}'
+    {% endif %}
+  args:
+    executable: /bin/bash
 
 - name: Clean up Telegram bot token
   ansible.builtin.file:

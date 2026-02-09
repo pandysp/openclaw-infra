@@ -1,0 +1,8 @@
+---
+- name: restart openclaw-gateway
+  ansible.builtin.systemd:
+    name: openclaw-gateway
+    state: restarted
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"

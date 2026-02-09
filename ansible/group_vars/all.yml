@@ -34,17 +34,100 @@ openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
 
-# Cron jobs (only created when telegram_bot_token + telegram_user_id are defined)
+# Agent definitions
+# "main" is the built-in default agent (andy). manon and tl are additional agents.
+openclaw_agents:
+  - id: "main"
+    is_default: true
+    deliver_to: "{{ telegram_user_id | default('') }}"
+    deliver_type: "dm"
+  - id: "manon"
+    is_default: false
+    deliver_to: "{{ telegram_manon_user_id | default('') }}"
+    deliver_type: "dm"
+  - id: "tl"
+    is_default: false
+    deliver_to: "{{ telegram_group_id | default('') }}"
+    deliver_type: "group"
+
+# Legacy cron job names (removed during migration to per-agent jobs)
+openclaw_legacy_cron_names:
+  - "Morning Digest"
+  - "Evening Review"
+  - "Night Shift"
+  - "Weekly Planning"
+
+# Per-agent cron jobs (only created when telegram is configured)
 openclaw_cron_jobs:
-  - name: "Morning Digest"
+  # main (andy)
+  - name: "main: Daily Standup"
+    agent: "main"
     schedule: "30 9 * * *"
     message: "Good morning! Summarize what needs my attention today."
-  - name: "Evening Review"
-    schedule: "30 19 * * *"
-    message: "Evening review. What was accomplished? What is pending?"
-  - name: "Night Shift"
+  - name: "main: Night Shift"
+    agent: "main"
     schedule: "0 23 * * *"
     message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "Weekly Planning"
-    schedule: "0 18 * * 0"
+  - name: "main: Weekly Review"
+    agent: "main"
+    schedule: "0 15 * * 5"
+    message: "Weekly review. What was accomplished this week? What is pending?"
+  - name: "main: Weekly Planning"
+    agent: "main"
+    schedule: "0 10 * * 1"
     message: "Weekly planning. Review past week, plan upcoming week priorities."
+  # manon
+  - name: "manon: Daily Standup"
+    agent: "manon"
+    schedule: "0 10 * * *"
+    message: "Good morning! Summarize what needs my attention today."
+  - name: "manon: Night Shift"
+    agent: "manon"
+    schedule: "30 23 * * *"
+    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
+  - name: "manon: Weekly Review"
+    agent: "manon"
+    schedule: "30 15 * * 5"
+    message: "Weekly review. What was accomplished this week? What is pending?"
+  - name: "manon: Weekly Planning"
+    agent: "manon"
+    schedule: "30 10 * * 1"
+    message: "Weekly planning. Review past week, plan upcoming week priorities."
+  # tl (team lieblingsmensch)
+  - name: "tl: Daily Standup"
+    agent: "tl"
+    schedule: "45 9 * * *"
+    message: "Good morning team! Summarize what needs attention today."
+  - name: "tl: Night Shift"
+    agent: "tl"
+    schedule: "15 23 * * *"
+    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
+  - name: "tl: Weekly Review"
+    agent: "tl"
+    schedule: "15 15 * * 5"
+    message: "Weekly review. What was accomplished this week? What is pending?"
+  - name: "tl: Weekly Planning"
+    agent: "tl"
+    schedule: "15 10 * * 1"
+    message: "Weekly planning. Review past week, plan upcoming week priorities."
+
+# Workspace git sync definitions (per-agent)
+openclaw_workspaces:
+  - agent_id: "main"
+    repo_url: "{{ workspace_repo_url | default('') }}"
+    deploy_key: "{{ workspace_deploy_key | default('') }}"
+    workspace_dir: "/home/ubuntu/.openclaw/workspace"
+    ssh_alias: "github-workspace-main"
+    key_file: "workspace-deploy-key"
+  - agent_id: "manon"
+    repo_url: "{{ workspace_manon_repo_url | default('') }}"
+    deploy_key: "{{ workspace_manon_deploy_key | default('') }}"
+    workspace_dir: "/home/ubuntu/.openclaw/workspace-manon"
+    ssh_alias: "github-workspace-manon"
+    key_file: "workspace-deploy-key-manon"
+  - agent_id: "tl"
+    repo_url: "{{ workspace_tl_repo_url | default('') }}"
+    deploy_key: "{{ workspace_tl_deploy_key | default('') }}"
+    workspace_dir: "/home/ubuntu/.openclaw/workspace-tl"
+    ssh_alias: "github-workspace-tl"
+    key_file: "workspace-deploy-key-tl"

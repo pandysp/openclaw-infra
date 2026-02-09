@@ -1,0 +1,46 @@
+---
+# Configure agent bindings — route Telegram DMs and groups to the correct agent.
+# Uses the root-level `bindings` config path.
+
+# TODO: Add idempotency check (compare current vs desired bindings) to avoid
+# unnecessary gateway restarts. Requires testing `openclaw config get bindings` output format.
+- name: Build and set agent bindings
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+
+    # Route by peer (sender/group), NOT by accountId (bot instance).
+    # accountId identifies which bot received the message; peer identifies who sent it.
+    # Since we use one bot for everything, all messages arrive via the default account.
+    {% set bindings = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if agent.deliver_to | default('') | length > 0 and not agent.is_default %}
+    {%     set _ = bindings.append({"agentId": agent.id, "match": {"channel": "telegram", "peer": {"kind": agent.deliver_type, "id": agent.deliver_to | string}}}) %}
+    {%   endif %}
+    {% endfor %}
+
+    {% if bindings | length > 0 %}
+    openclaw config set bindings --json '{{ bindings | to_json }}'
+    {% else %}
+    # No non-default bindings to set — default agent handles everything
+    output=$(openclaw config unset bindings 2>&1) || {
+        echo "$output" | grep -qi "not set\|not found\|does not exist" || { echo "ERROR: $output" >&2; exit 1; }
+    }
+    {% endif %}
+  args:
+    executable: /bin/bash
+  changed_when: true
+  notify: restart openclaw-gateway
+
+- name: Verify bindings
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw agents list --json --bindings
+  args:
+    executable: /bin/bash
+  register: agents_with_bindings
+  changed_when: false
+
+- name: Show agent bindings
+  ansible.builtin.debug:
+    var: agents_with_bindings.stdout | from_json

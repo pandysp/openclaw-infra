@@ -1,28 +1,21 @@
 ---
+# Filter to only active workspaces (with both repo_url and deploy_key set)
+- name: Determine active workspaces
+  ansible.builtin.set_fact:
+    active_workspaces: >-
+      {{ openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list }}
+
 - name: Ensure .ssh directory exists
   ansible.builtin.file:
     path: /home/ubuntu/.ssh
     state: directory
     mode: "0700"
 
-- name: Install deploy key
-  ansible.builtin.copy:
-    content: "{{ workspace_deploy_key }}"
-    dest: /home/ubuntu/.ssh/workspace-deploy-key
-    mode: "0600"
-  no_log: true
-
 - name: Create config.d directory
   ansible.builtin.file:
     path: /home/ubuntu/.ssh/config.d
     state: directory
     mode: "0700"
-
-- name: Configure SSH alias for github-workspace
-  ansible.builtin.template:
-    src: ssh-config-workspace.j2
-    dest: /home/ubuntu/.ssh/config.d/workspace
-    mode: "0600"
 
 - name: Ensure SSH config includes config.d
   ansible.builtin.lineinfile:
@@ -32,63 +25,10 @@
     create: true
     mode: "0600"
 
-- name: Configure git identity
-  community.general.git_config:
-    name: "{{ item.name }}"
-    value: "{{ item.value }}"
-    scope: global
-  loop:
-    - { name: "user.name",  value: "OpenClaw Agent" }
-    - { name: "user.email", value: "openclaw@localhost" }
-
-- name: Check if workspace directory exists
-  ansible.builtin.stat:
-    path: /home/ubuntu/.openclaw/workspace
-  register: workspace_dir
-
-- name: Initialize workspace git repo
-  ansible.builtin.shell: |
-    set -euo pipefail
-    cd ~/.openclaw/workspace
-    if [ ! -d ".git" ]; then
-      git init -b main
-    fi
-    ALIAS_URL=$(echo "{{ workspace_repo_url }}" | sed 's/github\.com/github-workspace/')
-    git remote remove origin 2>/dev/null || true
-    git remote add origin "$ALIAS_URL"
-  args:
-    executable: /bin/bash
-  when: workspace_dir.stat.exists and workspace_dir.stat.isdir
-
-- name: Create workspace .gitignore
-  ansible.builtin.copy:
-    src: gitignore-workspace
-    dest: /home/ubuntu/.openclaw/workspace/.gitignore
-    mode: "0644"
-  when: workspace_dir.stat.exists and workspace_dir.stat.isdir
-
-- name: Initial workspace commit and push
-  ansible.builtin.shell: |
-    set -euo pipefail
-    cd ~/.openclaw/workspace
-    git add -A
-    git commit -m "Initial workspace sync" || true
-    git push -u origin main || echo "Warning: initial push failed"
-  args:
-    executable: /bin/bash
-  changed_when: false
-  when: workspace_dir.stat.exists and workspace_dir.stat.isdir
-
 - name: Create local bin directory
   ansible.builtin.file:
     path: /home/ubuntu/.local/bin
     state: directory
-    mode: "0755"
-
-- name: Install workspace sync script
-  ansible.builtin.template:
-    src: workspace-git-sync.sh.j2
-    dest: /home/ubuntu/.local/bin/workspace-git-sync.sh
     mode: "0755"
 
 - name: Ensure systemd user directory exists
@@ -97,18 +37,154 @@
     state: directory
     mode: "0755"
 
-- name: Install workspace sync systemd service
+# Per-workspace setup (deploy key, SSH config, git repo, sync script, systemd units)
+- name: Install deploy keys
+  ansible.builtin.copy:
+    content: "{{ item.deploy_key }}"
+    dest: "/home/ubuntu/.ssh/{{ item.key_file }}"
+    mode: "0600"
+  no_log: true
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Configure SSH aliases
+  ansible.builtin.template:
+    src: ssh-config-workspace.j2
+    dest: "/home/ubuntu/.ssh/config.d/workspace-{{ item.agent_id }}"
+    mode: "0600"
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Ensure workspace directories exist
+  ansible.builtin.file:
+    path: "{{ item.workspace_dir }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Check if workspace directories exist
+  ansible.builtin.stat:
+    path: "{{ item.workspace_dir }}"
+  register: workspace_dirs
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Initialize workspace git repos
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ item.item.workspace_dir }}"
+    if [ ! -d ".git" ]; then
+      git init -b main
+    fi
+
+    # Ensure branch is named 'main'
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+        git branch -m "$CURRENT_BRANCH" main
+    fi
+
+    # Set per-agent git identity (local scope)
+    git config user.name "OpenClaw Agent ({{ item.item.agent_id }})"
+    git config user.email "openclaw-{{ item.item.agent_id }}@localhost"
+
+    ALIAS_URL=$(echo "{{ item.item.repo_url }}" | sed "s/github\.com/{{ item.item.ssh_alias }}/")
+    if git remote | grep -q '^origin$'; then
+        git remote remove origin
+    fi
+    git remote add origin "$ALIAS_URL"
+  args:
+    executable: /bin/bash
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
+- name: Create workspace .gitignore files
+  ansible.builtin.copy:
+    src: gitignore-workspace
+    dest: "{{ item.item.workspace_dir }}/.gitignore"
+    mode: "0644"
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
+- name: Initial workspace commit and push
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ item.item.workspace_dir }}"
+    git add -A
+    if ! git diff --cached --quiet; then
+        git commit -m "Initial workspace sync"
+        git push -u origin main || {
+            echo "ERROR: Initial push failed for {{ item.item.agent_id }}. Check deploy key and remote." >&2
+            exit 1
+        }
+    else
+        echo "Nothing to commit"
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
+- name: Install workspace sync scripts
+  ansible.builtin.template:
+    src: workspace-git-sync.sh.j2
+    dest: "/home/ubuntu/.local/bin/workspace-git-sync-{{ item.agent_id }}.sh"
+    mode: "0755"
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Install workspace sync systemd services
   ansible.builtin.template:
     src: workspace-git-sync.service.j2
-    dest: /home/ubuntu/.config/systemd/user/workspace-git-sync.service
+    dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ item.agent_id }}.service"
     mode: "0644"
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
   notify: reload user systemd
 
-- name: Install workspace sync systemd timer
+- name: Install workspace sync systemd timers
   ansible.builtin.template:
     src: workspace-git-sync.timer.j2
-    dest: /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
+    dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ item.agent_id }}.timer"
     mode: "0644"
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
   notify:
     - reload user systemd
-    - enable workspace timer
+    - enable workspace timers
+
+# Clean up legacy single-workspace files (from before multi-agent refactor)
+- name: Stop legacy workspace timer if active
+  ansible.builtin.systemd:
+    name: workspace-git-sync.timer
+    state: stopped
+    enabled: false
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+  failed_when: false
+
+- name: Remove legacy workspace files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /home/ubuntu/.config/systemd/user/workspace-git-sync.service
+    - /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
+    - /home/ubuntu/.local/bin/workspace-git-sync.sh
+    - /home/ubuntu/.ssh/config.d/workspace
+  notify: reload user systemd

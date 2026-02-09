@@ -1,6 +1,6 @@
-Host github-workspace
+Host {{ item.ssh_alias }}
     HostName github.com
     User git
-    IdentityFile ~/.ssh/workspace-deploy-key
+    IdentityFile ~/.ssh/{{ item.key_file }}
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new

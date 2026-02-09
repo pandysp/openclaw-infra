@@ -1,0 +1,28 @@
+---
+- name: Get existing agents
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw agents list --json
+  args:
+    executable: /bin/bash
+  register: existing_agents
+  changed_when: false
+
+- name: Create non-default agents
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    AGENTS_JSON='{{ existing_agents.stdout }}'
+    if echo "$AGENTS_JSON" | jq -e '.[] | select(.id == "{{ item.id }}")' > /dev/null 2>&1; then
+        echo "Agent {{ item.id }} already exists"
+    else
+        openclaw agents add "{{ item.id }}" --non-interactive --workspace "/home/ubuntu/.openclaw/workspace-{{ item.id }}"
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | list }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: agent_create
+  changed_when: "'already exists' not in agent_create.stdout"
+  notify: restart openclaw-gateway

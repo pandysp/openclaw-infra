@@ -1,19 +1,72 @@
 ---
+- name: Flush handlers (ensure gateway is restarted before cron operations)
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for gateway to stabilize after restart
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    for i in $(seq 1 12); do
+        if openclaw health >/dev/null 2>&1; then
+            echo "Gateway is healthy"
+            exit 0
+        fi
+        sleep 5
+    done
+    echo "ERROR: Gateway did not become healthy within 60s" >&2
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+
 - name: Get existing cron jobs
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw cron list --json 2>/dev/null || echo '{"jobs":[]}'
+    CRON_JSON=$(openclaw cron list --json 2>/dev/null) || {
+        echo "ERROR: Failed to list cron jobs: $CRON_JSON" >&2
+        exit 1
+    }
+    echo "$CRON_JSON"
   args:
     executable: /bin/bash
   register: existing_cron
   changed_when: false
 
-- name: Remove existing cron jobs by name (idempotent recreation)
+- name: Remove legacy cron jobs by name
   ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    IDS=$(echo '{{ existing_cron.stdout }}' | jq -r --arg n "{{ item }}" '.jobs[] | select(.name == $n) | .id')
+    for id in $IDS; do
+      output=$(openclaw cron remove "$id" 2>&1) || {
+          if echo "$output" | grep -qi "not found\|does not exist"; then
+              true
+          else
+              echo "ERROR: Failed to remove legacy cron job $id: $output" >&2
+              exit 1
+          fi
+      }
+    done
+  args:
+    executable: /bin/bash
+  loop: "{{ openclaw_legacy_cron_names | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+
+- name: Remove existing per-agent cron jobs by name (idempotent recreation)
+  ansible.builtin.shell: |
+    set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     IDS=$(echo '{{ existing_cron.stdout }}' | jq -r --arg n "{{ item.name }}" '.jobs[] | select(.name == $n) | .id')
     for id in $IDS; do
-      openclaw cron remove "$id" || true
+      output=$(openclaw cron remove "$id" 2>&1) || {
+          if echo "$output" | grep -qi "not found\|does not exist"; then
+              true
+          else
+              echo "ERROR: Failed to remove cron job $id: $output" >&2
+              exit 1
+          fi
+      }
     done
   args:
     executable: /bin/bash
@@ -22,19 +75,54 @@
     label: "{{ item.name }}"
   changed_when: false
 
-- name: Add cron jobs
+# Build deliver_to lookup map from openclaw_agents
+- name: Build agent delivery map
+  ansible.builtin.set_fact:
+    agent_deliver_map: >-
+      {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_to'))) }}
+
+- name: Validate delivery targets
+  ansible.builtin.assert:
+    that: agent_deliver_map[item.agent] | default('') | length > 0
+    fail_msg: "Agent '{{ item.agent }}' has no deliver_to configured — cannot create cron job '{{ item.name }}'"
+  loop: "{{ openclaw_cron_jobs }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Add per-agent cron jobs
   ansible.builtin.shell: |
+    set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     openclaw cron add \
         --name "{{ item.name }}" \
         --cron "{{ item.schedule }}" \
         --tz "{{ openclaw_timezone }}" \
         --session isolated \
+        --agent "{{ item.agent }}" \
         --message "{{ item.message }}" \
-        --deliver --channel telegram --to "{{ telegram_user_id }}"
+        --deliver --channel telegram --to "{{ agent_deliver_map[item.agent] }}"
   args:
     executable: /bin/bash
   loop: "{{ openclaw_cron_jobs }}"
   loop_control:
     label: "{{ item.name }}"
   changed_when: true
+
+- name: Verify cron job count
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw cron list --json
+  args:
+    executable: /bin/bash
+  register: final_cron
+  changed_when: false
+
+- name: Assert expected cron jobs
+  ansible.builtin.assert:
+    that:
+      - (final_cron.stdout | from_json).jobs | length == openclaw_cron_jobs | length
+      - (final_cron.stdout | from_json).jobs | map(attribute='name') | sort | list == openclaw_cron_jobs | map(attribute='name') | sort | list
+    fail_msg: >-
+      Cron job mismatch.
+      Expected {{ openclaw_cron_jobs | length }}: {{ openclaw_cron_jobs | map(attribute='name') | list }}.
+      Got {{ (final_cron.stdout | from_json).jobs | length }}: {{ (final_cron.stdout | from_json).jobs | map(attribute='name') | list }}.

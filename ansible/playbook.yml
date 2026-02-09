@@ -15,9 +15,12 @@
     - { role: ufw,       tags: [ufw],       become: true }
     - { role: openclaw,  tags: [openclaw] }
     - { role: config,    tags: [config] }
+    - { role: agents,    tags: [agents],    when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
     - { role: sandbox,   tags: [sandbox] }
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
-    - { role: workspace, tags: [workspace], when: workspace_repo_url is defined and workspace_repo_url | length > 0 }
+    - role: workspace
+      tags: [workspace]
+      when: openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list | length > 0
 
   post_tasks:
     - name: Ensure openclaw-gateway is started and enabled
@@ -28,16 +31,16 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox]
+      tags: [docker, config, openclaw, sandbox, agents]
 
     - name: Wait for gateway to stabilize
       ansible.builtin.pause:
         seconds: 5
-      tags: [docker, config, openclaw, sandbox]
+      tags: [docker, config, openclaw, sandbox, agents]
 
     - name: Verify gateway is active
       ansible.builtin.command: systemctl --user is-active openclaw-gateway
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
-      tags: [docker, config, openclaw, sandbox]
+      tags: [docker, config, openclaw, sandbox, agents]

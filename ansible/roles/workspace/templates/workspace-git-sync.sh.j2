@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-cd ~/.openclaw/workspace
+cd {{ item.workspace_dir }}
 
 # Ensure branch is named 'main' regardless of how it was initialized
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
