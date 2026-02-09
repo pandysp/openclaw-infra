@@ -1,4 +1,4 @@
-FROM openclaw-sandbox:bookworm-slim
+FROM openclaw-sandbox:trixie
 
 # --- Layer 1: Add external apt repositories ---
 # gh (GitHub CLI) — official apt repository (https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
@@ -34,11 +34,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Version control
     git \
     git-lfs \
-    # Data processing
+    # Search & data processing
+    ripgrep \
     jq \
     sqlite3 \
     # Document conversion
     pandoc \
+    # Command runner (available in Debian 13+)
+    just \
     # Directory visualization
     tree \
     # Build tools (needed for pip packages with native extensions)
@@ -69,32 +72,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # --- Layer 4: yq (official Docker method — https://github.com/mikefarah/yq) ---
 COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq
 
-# --- Layer 5: ripgrep v14.1.1 (Debian bookworm ships 13.0.0; install newer from GitHub) ---
-RUN ARCH=$(dpkg --print-architecture) && \
-    case "$ARCH" in \
-      amd64) RG_ARCH="x86_64-unknown-linux-musl" ;; \
-      arm64) RG_ARCH="aarch64-unknown-linux-gnu" ;; \
-      *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
-    esac && \
-    curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-${RG_ARCH}.tar.gz" \
-      | tar xz --strip-components=1 -C /usr/local/bin "ripgrep-14.1.1-${RG_ARCH}/rg" && \
-    rg --version
-
-# --- Layer 6: just (official install script — https://just.systems/man/en/pre-built-binaries.html) ---
-# Not in Debian 12/bookworm apt (available from Debian 13+)
-RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-      | bash -s -- --to /usr/local/bin && \
-    just --version
-
-# --- Layer 7: pnpm via corepack (recommended — https://pnpm.io/installation) ---
+# --- Layer 5: pnpm via corepack (recommended — https://pnpm.io/installation) ---
 RUN npm install -g corepack@latest && corepack enable pnpm
 
-# --- Layer 8: Strip setuid bits to prevent privilege escalation ---
+# --- Layer 6: Strip setuid bits to prevent privilege escalation ---
 # Runs AFTER all package installs to cover apt, COPY --from, and binary downloads
 # -xdev avoids descending into /proc, /sys, and other virtual filesystems
 RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
 
-# --- Layer 9: Unprivileged user ---
+# --- Layer 7: Unprivileged user ---
 RUN (getent group 1000 || groupadd -g 1000 node) && \
     (id -u 1000 2>/dev/null || useradd -u 1000 -g 1000 -m -s /bin/bash node)
 

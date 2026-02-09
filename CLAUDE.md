@@ -73,7 +73,7 @@ The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs th
 - **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
 - **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
 
-Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) with a dev toolchain (Python 3, Node.js, git, ripgrep 14, jq, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client). The gateway itself runs natively.
+Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) with a dev toolchain (Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, gh, uv, pnpm, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client). The gateway itself runs natively.
 
 ### Why Two Auth Layers?
 
@@ -601,13 +601,13 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 | Host filesystem | No access |
 | Gateway config | Isolated (can't read `~/.openclaw/`) |
 | Privilege escalation | Blocked (setuid bits stripped) |
-| Dev toolchain | Python 3, Node.js, git, ripgrep 14, jq, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
+| Dev toolchain | Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, gh, uv, pnpm, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
 
 **Why bridge networking:** Sessions need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
 
 **What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
 
-**Custom image:** Built in two layers by the Ansible `sandbox` role: a minimal base image (`openclaw-sandbox:bookworm-slim`) from `Dockerfile.base.j2`, then a custom image (`openclaw-sandbox-custom:latest`) from `Dockerfile.sandbox.j2` adding the dev toolchain. Neither image is pulled from a registry — both are built locally on the server. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
+**Custom image:** Built in two layers by the Ansible `sandbox` role: a base image (`openclaw-sandbox:trixie`) from `Dockerfile.base.j2`, then a custom image (`openclaw-sandbox-custom:latest`) from `Dockerfile.sandbox.j2` adding the dev toolchain. Neither image is pulled from a registry — both are built locally on the server. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 
 **Config:**
 ```

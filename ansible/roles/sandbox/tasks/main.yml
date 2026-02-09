@@ -1,6 +1,6 @@
 ---
 - name: Check if base sandbox image exists
-  ansible.builtin.command: docker image inspect openclaw-sandbox:bookworm-slim
+  ansible.builtin.command: docker image inspect openclaw-sandbox:trixie
   register: base_image_check
   changed_when: false
   failed_when: false
@@ -20,13 +20,13 @@
 
 - name: Build base sandbox image
   ansible.builtin.shell: |
-    docker build -t openclaw-sandbox:bookworm-slim -f /home/ubuntu/.openclaw/sandbox-build/Dockerfile.base /home/ubuntu/.openclaw/sandbox-build/
+    docker build -t openclaw-sandbox:trixie -f /home/ubuntu/.openclaw/sandbox-build/Dockerfile.base /home/ubuntu/.openclaw/sandbox-build/
   args:
     executable: /bin/bash
   when: base_image_check.rc != 0 or base_dockerfile_changed.changed or (force_sandbox_rebuild | bool)
 
 - name: Verify base sandbox image was built
-  ansible.builtin.command: docker image inspect openclaw-sandbox:bookworm-slim
+  ansible.builtin.command: docker image inspect openclaw-sandbox:trixie
   changed_when: false
 
 - name: Template custom sandbox Dockerfile
