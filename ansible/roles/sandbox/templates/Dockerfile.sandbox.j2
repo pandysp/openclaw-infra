@@ -67,4 +67,7 @@ RUN (getent group 1000 || groupadd -g 1000 node) && \
 USER 1000
 RUN git config --global user.name "OpenClaw Agent" && \
     git config --global user.email "openclaw@localhost"
-USER root
+
+# Stay as UID 1000 (not root). OpenClaw drops ALL capabilities via CapDrop=[ALL],
+# so root has no DAC_OVERRIDE and can't write to workspace files owned by UID 1000.
+# Running as UID 1000 directly matches the workspace file ownership.

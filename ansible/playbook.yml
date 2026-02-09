@@ -16,8 +16,10 @@
     - { role: openclaw,  tags: [openclaw] }
     - { role: config,    tags: [config] }
     - { role: agents,    tags: [agents],    when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
-    - { role: sandbox,   tags: [sandbox] }
+    # telegram must run immediately after agents — if sandbox runs in between,
+    # agents exist without bindings and incoming messages get misrouted.
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
+    - { role: sandbox,   tags: [sandbox] }
     - role: workspace
       tags: [workspace]
       when: openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list | length > 0
