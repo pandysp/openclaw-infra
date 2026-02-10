@@ -15,13 +15,20 @@
       ansible.builtin.shell: |
         set -euo pipefail
         python3 -c "
-        import json
-        with open('/home/ubuntu/.openclaw/openclaw.json') as f:
+        import json, os, tempfile
+        config_path = '/home/ubuntu/.openclaw/openclaw.json'
+        with open(config_path) as f:
             cfg = json.load(f)
         if 'openclaw-mcp-adapter' in cfg.get('plugins', {}).get('entries', {}):
             del cfg['plugins']['entries']['openclaw-mcp-adapter']
-            with open('/home/ubuntu/.openclaw/openclaw.json', 'w') as f:
-                json.dump(cfg, f, indent=2)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config_path), suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                os.rename(tmp, config_path)
+            except:
+                os.unlink(tmp)
+                raise
         "
       args:
         executable: /bin/bash
@@ -106,22 +113,6 @@
   register: github_mcp_binary
   changed_when: false
 
-- name: Resolve codex binary path
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export PATH="{{ (npm_prefix.stdout_lines | last) | trim }}/bin:$PATH"
-    BINARY=$(which codex) || {
-        echo "ERROR: codex not found in PATH after npm install"
-        echo "Expected at: {{ (npm_prefix.stdout_lines | last) | trim }}/bin/codex"
-        exit 1
-    }
-    echo "$BINARY"
-  args:
-    executable: /bin/bash
-  register: codex_mcp_binary
-  changed_when: false
-  when: codex_auth_json | default('') | length > 0
-
 - name: Deploy Codex auth credentials
   when: codex_auth_json | default('') | length > 0
   block:
@@ -137,6 +128,138 @@
         dest: /home/ubuntu/.codex/auth.json
         mode: "0600"
       no_log: true
+
+- name: Verify codex auth.json is a regular file (not a directory)
+  ansible.builtin.stat:
+    path: /home/ubuntu/.codex/auth.json
+  register: codex_auth_stat
+  when: codex_auth_json | default('') | length > 0
+
+- name: Fail if auth.json is a directory (Docker -v corruption)
+  ansible.builtin.assert:
+    that: codex_auth_stat.stat.isreg
+    fail_msg: >-
+      /home/ubuntu/.codex/auth.json is a directory, not a file.
+      This is likely caused by a previous Docker bind mount when the file
+      did not exist. Remove it with: rm -rf /home/ubuntu/.codex/auth.json
+  when: codex_auth_json | default('') | length > 0 and codex_auth_stat.stat.exists
+
+- name: Ensure agent workspace directories exist for Codex containers
+  ansible.builtin.file:
+    path: "{{ item.cwd }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'codex') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: codex_auth_json | default('') | length > 0
+
+- name: Build Codex MCP Docker image
+  when: codex_auth_json | default('') | length > 0
+  block:
+    - name: Check if Codex MCP image exists
+      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.codex_docker_image }}\""
+      register: codex_image_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create Codex MCP build directory
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/codex-mcp-build
+        state: directory
+        mode: "0755"
+
+    - name: Template Codex MCP Dockerfile
+      ansible.builtin.template:
+        src: Dockerfile.codex-mcp.j2
+        dest: /home/ubuntu/.openclaw/codex-mcp-build/Dockerfile
+        mode: "0644"
+      register: codex_dockerfile_changed
+
+    - name: Build Codex MCP Docker image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker build -t "{{ openclaw_mcp_adapter.codex_docker_image }}" /home/ubuntu/.openclaw/codex-mcp-build/
+      args:
+        executable: /bin/bash
+      when: codex_image_check.rc != 0 or codex_dockerfile_changed.changed or (force_codex_rebuild | bool)
+      register: codex_image_build
+
+    - name: Verify Codex MCP image was built
+      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.codex_docker_image }}\""
+      changed_when: false
+
+    - name: Smoke test Codex MCP image
+      ansible.builtin.shell: |
+        docker run --rm "{{ openclaw_mcp_adapter.codex_docker_image }}" codex --version
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: codex_image_build is changed
+
+    - name: Remove Codex MCP containers after image rebuild
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -aq --filter "label=openclaw-role=codex-mcp")
+        if [ -n "$containers" ]; then
+          echo "$containers" | xargs docker rm -f
+        fi
+      args:
+        executable: /bin/bash
+      register: codex_container_removal
+      changed_when: codex_container_removal.stdout | length > 0
+      when: codex_image_build is changed
+
+    - name: Verify no Codex MCP containers remain after cleanup
+      ansible.builtin.shell: |
+        set -euo pipefail
+        count=$(docker ps -aq --filter "label=openclaw-role=codex-mcp" | wc -l)
+        if [ "$count" -ne 0 ]; then
+          echo "ERROR: $count Codex MCP containers still present after removal"
+          docker ps -a --filter "label=openclaw-role=codex-mcp" --format '{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Image{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}'
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: codex_container_removal is changed
+
+    - name: Restart gateway to pick up new Codex MCP image
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: restarted
+        scope: user
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      when: codex_image_build is changed
+
+    - name: Wait for gateway to be healthy after Codex image rebuild
+      ansible.builtin.command: openclaw health
+      register: codex_health_check
+      retries: 5
+      delay: 3
+      until: codex_health_check.rc == 0
+      changed_when: false
+      when: codex_image_build is changed
+
+  rescue:
+    - name: Capture gateway logs for diagnosis
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR=/run/user/1000
+        journalctl --user -u openclaw-gateway --since "2 minutes ago" --no-pager | tail -50
+      args:
+        executable: /bin/bash
+      register: gateway_crash_logs
+      failed_when: false
+
+    - name: Report gateway failure with diagnostic context
+      ansible.builtin.fail:
+        msg: |
+          Gateway failed health check after Codex MCP image rebuild.
+          Recent gateway logs:
+          {{ gateway_crash_logs.stdout | default('(no logs captured)') }}
+          Manual recovery: ssh ubuntu@<host> 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100'
 
 - name: Validate token variable names are defined
   ansible.builtin.assert:
@@ -162,7 +285,6 @@
   ansible.builtin.shell: |
     set -euo pipefail
     GITHUB_BINARY="{{ github_mcp_binary.stdout | trim }}"
-    CODEX_BINARY="{{ (codex_mcp_binary.stdout | default('')) | trim }}"
     TOOL_PREFIX='{{ openclaw_mcp_adapter.tool_prefix | to_json }}'
     CODEX_SANDBOX="{{ openclaw_mcp_adapter.codex_sandbox | default('workspace-write') }}"
     CODEX_APPROVAL="{{ openclaw_mcp_adapter.codex_approval | default('never') }}"
@@ -185,15 +307,31 @@
     fi
     {% endfor %}
 
-    # Codex servers — always included when auth.json is deployed (no env vars, uses cached auth)
+    # Codex servers — containerized with docker run -i (stdio piped through Docker)
+    # Security: containers only see the agent's workspace + auth.json (read-only).
+    # No access to gateway config, other agents' workspaces, SSH keys, etc.
+    CODEX_IMAGE="{{ openclaw_mcp_adapter.codex_docker_image }}"
+    CODEX_MEM="{{ openclaw_mcp_adapter.codex_memory_limit | default('2g') }}"
     if [ -f "/home/ubuntu/.codex/auth.json" ]; then
     {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'codex') %}
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
-            --arg cmd "$CODEX_BINARY" \
+        DOCKER_ARGS=$(jq -n \
+            --arg ws "{{ srv.cwd }}" \
+            --arg img "$CODEX_IMAGE" \
+            --arg agent "{{ srv.agent_id }}" \
+            --arg mem "$CODEX_MEM" \
             --arg sandbox "$CODEX_SANDBOX" \
             --arg approval "$CODEX_APPROVAL" \
-            --arg cwd "{{ srv.cwd }}" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, args: ["mcp-server", "-c", ("sandbox_mode=" + $sandbox), "-c", ("approval_policy=" + $approval)], cwd: $cwd}]')
+            '["run","--rm","-i","--init","--net=bridge",
+              ("--memory=" + $mem),("--memory-swap=" + $mem),
+              "--label","openclaw-role=codex-mcp",
+              "--label",("openclaw-agent=" + $agent),
+              "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+              "--mount","type=bind,source=/home/ubuntu/.codex/auth.json,target=/home/node/.codex/auth.json,readonly",
+              "-w","/workspace",
+              $img,
+              "codex","mcp-server","-c",("sandbox_mode=" + $sandbox),"-c",("approval_policy=" + $approval)]')
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
     {% endfor %}
     fi
 
@@ -270,7 +408,7 @@
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     LOGS=$(journalctl --user -u openclaw-gateway --since "30 seconds ago" --no-pager)
-    if echo "$LOGS" | grep -qi "mcp.*error\|error.*mcp\|failed.*mcp-adapter"; then
+    if echo "$LOGS" | grep -qi "mcp.*error\|error.*mcp\|failed.*mcp-adapter\|docker.*error\|container.*failed\|image.*not found"; then
         echo "ERROR: Gateway logs contain MCP adapter errors:"
         echo "$LOGS" | grep -i "mcp"
         exit 1
