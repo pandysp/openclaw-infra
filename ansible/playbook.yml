@@ -15,6 +15,7 @@
     - { role: ufw,       tags: [ufw],       become: true }
     - { role: openclaw,  tags: [openclaw] }
     - { role: config,    tags: [config] }
+    - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: agents,    tags: [agents],    when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
     # telegram must run immediately after agents — if sandbox runs in between,
     # agents exist without bindings and incoming messages get misrouted.
@@ -33,16 +34,16 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents]
+      tags: [docker, config, openclaw, sandbox, agents, plugins]
 
     - name: Wait for gateway to stabilize
       ansible.builtin.pause:
         seconds: 5
-      tags: [docker, config, openclaw, sandbox, agents]
+      tags: [docker, config, openclaw, sandbox, agents, plugins]
 
     - name: Verify gateway is active
       ansible.builtin.command: systemctl --user is-active openclaw-gateway
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
-      tags: [docker, config, openclaw, sandbox, agents]
+      tags: [docker, config, openclaw, sandbox, agents, plugins]

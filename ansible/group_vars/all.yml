@@ -34,6 +34,9 @@ openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
 
+# Force plugin reinstall (override with -e force_plugin_reinstall=true)
+force_plugin_reinstall: false
+
 # Agent definitions
 # "main" is the built-in default agent (andy). manon and tl are additional agents.
 openclaw_agents:
@@ -110,6 +113,19 @@ openclaw_cron_jobs:
     agent: "tl"
     schedule: "15 10 * * 1"
     message: "Weekly planning. Review past week, plan upcoming week priorities."
+
+# MCP plugin configuration
+openclaw_mcp_adapter:
+  source: "https://github.com/pandysp/openclaw-mcp-adapter.git"
+  npm_package: "@modelcontextprotocol/server-github"
+  tool_prefix: true
+  servers:
+    - name: "github"
+      token_var: "github_token"
+    - name: "github-manon"
+      token_var: "github_token_manon"
+    - name: "github-tl"
+      token_var: "github_token_tl"
 
 # Workspace git sync definitions (per-agent)
 openclaw_workspaces:

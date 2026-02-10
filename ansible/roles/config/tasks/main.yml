@@ -79,8 +79,12 @@
         # Custom model definitions
         openclaw config set models --json "$(cat /tmp/ansible-custom-models)"
 
-        # Sandbox tool allowlist (all groups)
-        openclaw config set tools.sandbox.tools.allow --json '["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"]'
+        # Sandbox tool allowlist (all groups + plugins)
+        {% set tool_allow = ["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"] %}
+        {% if openclaw_mcp_adapter is defined %}
+        {%   set _ = tool_allow.append("openclaw-mcp-adapter") %}
+        {% endif %}
+        openclaw config set tools.sandbox.tools.allow --json '{{ tool_allow | to_json }}'
 
         # Elevated tools (allow Telegram users to approve sensitive actions)
         openclaw config set tools.elevated.enabled true

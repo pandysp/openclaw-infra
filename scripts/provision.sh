@@ -41,6 +41,9 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     workspace_tl_deploy_key="${PROVISION_WORKSPACE_TL_DEPLOY_KEY:-}"
     tailscale_hostname="${PROVISION_TAILSCALE_HOSTNAME:-openclaw-vps}"
     brave_api_key="${PROVISION_BRAVE_API_KEY:-}"
+    github_token="${PROVISION_GITHUB_TOKEN:-}"
+    github_token_manon="${PROVISION_GITHUB_TOKEN_MANON:-}"
+    github_token_tl="${PROVISION_GITHUB_TOKEN_TL:-}"
 else
     echo "Reading secrets from Pulumi CLI"
     cd "$PULUMI_DIR"
@@ -64,6 +67,9 @@ else
     workspace_tl_deploy_key=$(pulumi stack output workspaceTlDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
     brave_api_key=$(pulumi config get braveApiKey 2>/dev/null || echo "")
+    github_token=$(pulumi config get githubToken 2>/dev/null || echo "")
+    github_token_manon=$(pulumi config get githubTokenManon 2>/dev/null || echo "")
+    github_token_tl=$(pulumi config get githubTokenTl 2>/dev/null || echo "")
 fi
 
 # Validate required secrets
@@ -107,6 +113,9 @@ echo "  workspace_sync (main): $([ -n "$workspace_repo_url" ] && echo "configure
 echo "  workspace_sync (manon): $([ -n "$workspace_manon_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (tl): $([ -n "$workspace_tl_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  brave_search: $([ -n "$brave_api_key" ] && echo "configured" || echo "skipped")"
+echo "  github_mcp (main): $([ -n "$github_token" ] && echo "configured" || echo "skipped")"
+echo "  github_mcp (manon): $([ -n "$github_token_manon" ] && echo "configured" || echo "skipped")"
+echo "  github_mcp (tl): $([ -n "$github_token_tl" ] && echo "configured" || echo "skipped")"
 
 # Write secrets to temp YAML file
 SECRETS_FILE="$SECRETS_DIR/secrets.yml"
@@ -122,6 +131,9 @@ workspace_repo_url: "$workspace_repo_url"
 brave_api_key: "$(echo "$brave_api_key" | sed 's/"/\\"/g')"
 workspace_manon_repo_url: "$workspace_manon_repo_url"
 workspace_tl_repo_url: "$workspace_tl_repo_url"
+github_token: "$(echo "$github_token" | sed 's/"/\\"/g')"
+github_token_manon: "$(echo "$github_token_manon" | sed 's/"/\\"/g')"
+github_token_tl: "$(echo "$github_token_tl" | sed 's/"/\\"/g')"
 EOF
 
 # Append deploy keys (block scalar when non-empty, explicit empty string otherwise)

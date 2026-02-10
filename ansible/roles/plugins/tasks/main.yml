@@ -1,0 +1,216 @@
+---
+# Install and configure the mcp-adapter plugin with GitHub MCP servers.
+# Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
+# Force reinstall with: -e force_plugin_reinstall=true
+
+- name: Check if mcp-adapter plugin directory exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.openclaw/extensions/openclaw-mcp-adapter/index.ts
+  register: plugin_dir
+
+- name: Install mcp-adapter plugin
+  when: not plugin_dir.stat.exists or force_plugin_reinstall | bool
+  block:
+    - name: Remove existing plugin directory (reinstall)
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/extensions/openclaw-mcp-adapter
+        state: absent
+      when: force_plugin_reinstall | bool
+
+    - name: Clone mcp-adapter fork
+      ansible.builtin.git:
+        repo: "{{ openclaw_mcp_adapter.source }}"
+        dest: /tmp/mcp-adapter
+        version: main
+        depth: 1
+
+    - name: Install plugin from local clone
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        openclaw plugins install /tmp/mcp-adapter
+      args:
+        executable: /bin/bash
+
+  always:
+    - name: Clean up plugin clone
+      ansible.builtin.file:
+        path: /tmp/mcp-adapter
+        state: absent
+
+- name: Ensure npm global prefix is configured
+  ansible.builtin.shell: |
+    set -euo pipefail
+    PREFIX=$(npm config get prefix 2>/dev/null || echo "")
+    if [ -z "$PREFIX" ] || [ "$PREFIX" = "/usr/local" ] || [ "$PREFIX" = "/usr" ]; then
+        npm config set prefix "$HOME/.npm-global"
+    fi
+    npm config get prefix
+  args:
+    executable: /bin/bash
+  register: npm_prefix
+  changed_when: false
+
+- name: Ensure npm global bin is in PATH profile
+  ansible.builtin.lineinfile:
+    path: /home/ubuntu/.profile
+    line: 'export PATH="$HOME/.npm-global/bin:$PATH"'
+    state: present
+
+- name: Install GitHub MCP server npm package globally
+  community.general.npm:
+    name: "{{ openclaw_mcp_adapter.npm_package }}"
+    global: true
+    state: present
+  environment:
+    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_env.PATH }}"
+
+- name: Resolve mcp-server-github binary path
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH="{{ (npm_prefix.stdout_lines | last) | trim }}/bin:$PATH"
+    BINARY=$(which mcp-server-github) || {
+        echo "ERROR: mcp-server-github not found in PATH after npm install"
+        echo "Expected at: {{ (npm_prefix.stdout_lines | last) | trim }}/bin/mcp-server-github"
+        exit 1
+    }
+    echo "$BINARY"
+  args:
+    executable: /bin/bash
+  register: mcp_binary
+  changed_when: false
+
+- name: Validate token variable names are defined
+  ansible.builtin.assert:
+    that:
+      - item.token_var in hostvars[inventory_hostname]
+    fail_msg: >-
+      Server '{{ item.name }}' references token_var '{{ item.token_var }}'
+      which is not a defined variable. Check group_vars/all.yml and provision.sh.
+    quiet: true
+  loop: "{{ openclaw_mcp_adapter.servers }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write server tokens to temp files
+  ansible.builtin.copy:
+    content: "{{ lookup('vars', item.token_var, default='') }}"
+    dest: "/tmp/ansible-mcp-token-{{ item.name }}"
+    mode: "0600"
+  no_log: true
+  loop: "{{ openclaw_mcp_adapter.servers }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Build and write plugin config JSON
+  ansible.builtin.shell: |
+    set -euo pipefail
+    BINARY="{{ mcp_binary.stdout | trim }}"
+    TOOL_PREFIX='{{ openclaw_mcp_adapter.tool_prefix | to_json }}'
+
+    # Build servers array — only include servers with non-empty tokens
+    SERVERS="[]"
+    {% for srv in openclaw_mcp_adapter.servers %}
+    TOKEN_FILE="/tmp/ansible-mcp-token-{{ srv.name }}"
+    if [ ! -f "$TOKEN_FILE" ]; then
+        echo "ERROR: Token file $TOKEN_FILE is missing — write task may have failed"
+        exit 1
+    fi
+    TOKEN=$(cat "$TOKEN_FILE")
+    if [ -n "$TOKEN" ]; then
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
+            --arg cmd "$BINARY" \
+            --arg token "$TOKEN" \
+            '. + [{name: $name, transport: "stdio", command: $cmd, env: {GITHUB_PERSONAL_ACCESS_TOKEN: $token}}]')
+    fi
+    {% endfor %}
+
+    # Build final config
+    CONFIG=$(jq -n --argjson prefix "$TOOL_PREFIX" --argjson servers "$SERVERS" \
+        '{toolPrefix: $prefix, servers: $servers}')
+
+    echo "$CONFIG" > /tmp/ansible-plugin-config
+    chmod 600 /tmp/ansible-plugin-config
+  args:
+    executable: /bin/bash
+  # no_log omitted intentionally — tokens are in temp files, not in this template.
+  # Errors here (jq failures, missing files) must be visible for debugging.
+
+- name: Configure mcp-adapter plugin
+  block:
+    - name: Set plugin config and enable
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        CONFIG=$(cat /tmp/ansible-plugin-config)
+        openclaw config set plugins.entries.openclaw-mcp-adapter.config --json "$CONFIG"
+        openclaw config set plugins.entries.openclaw-mcp-adapter.enabled true
+      args:
+        executable: /bin/bash
+      no_log: true
+      notify: restart openclaw-gateway
+
+    - name: Verify plugin config was applied
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        ENABLED=$(openclaw config get plugins.entries.openclaw-mcp-adapter.enabled 2>&1) || {
+            echo "ERROR: Failed to read plugin enabled state after config set"
+            exit 1
+        }
+        if [ "$ENABLED" != "true" ]; then
+            echo "ERROR: Plugin enabled state is '$ENABLED', expected 'true'"
+            exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+  always:
+    - name: Clean up plugin config temp file
+      ansible.builtin.file:
+        path: /tmp/ansible-plugin-config
+        state: absent
+
+    - name: Clean up token temp files
+      ansible.builtin.file:
+        path: "/tmp/ansible-mcp-token-{{ item.name }}"
+        state: absent
+      loop: "{{ openclaw_mcp_adapter.servers }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Flush handlers to restart gateway before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for gateway to stabilize after plugin config
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Verify mcp-adapter plugin is loaded
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins list --json | jq -e '.plugins[] | select(.id == "openclaw-mcp-adapter")'
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Check gateway logs for mcp-adapter errors
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    LOGS=$(journalctl --user -u openclaw-gateway --since "30 seconds ago" --no-pager)
+    if echo "$LOGS" | grep -qi "mcp.*error\|error.*mcp\|failed.*mcp-adapter"; then
+        echo "ERROR: Gateway logs contain MCP adapter errors:"
+        echo "$LOGS" | grep -i "mcp"
+        exit 1
+    fi
+    echo "$LOGS" | grep -i "mcp" || echo "No mcp-adapter log entries yet (normal for lazy-loaded plugins)"
+  args:
+    executable: /bin/bash
+  register: mcp_logs
+  changed_when: false
+
+- name: Show mcp-adapter log status
+  ansible.builtin.debug:
+    var: mcp_logs.stdout_lines

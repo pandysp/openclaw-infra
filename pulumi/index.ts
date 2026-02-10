@@ -20,6 +20,11 @@ const telegramUserId = config.get("telegramUserId");
 // Optional Brave Search API key (set via `pulumi config set --secret`)
 const braveApiKey = config.getSecret("braveApiKey");
 
+// Optional GitHub PATs for MCP adapter (set via `pulumi config set --secret`)
+const githubToken = config.getSecret("githubToken");
+const githubTokenManon = config.getSecret("githubTokenManon");
+const githubTokenTl = config.getSecret("githubTokenTl");
+
 // Optional multi-agent Telegram configuration
 const telegramManonUserId = config.get("telegramManonUserId");
 const telegramGroupId = config.get("telegramGroupId");
@@ -121,6 +126,9 @@ const ansibleProvision = new command.local.Command(
                 workspaceDeployKeyTl.privateKeyOpenssh,
             PROVISION_TAILSCALE_HOSTNAME: serverName,
             PROVISION_BRAVE_API_KEY: braveApiKey || "",
+            PROVISION_GITHUB_TOKEN: githubToken || "",
+            PROVISION_GITHUB_TOKEN_MANON: githubTokenManon || "",
+            PROVISION_GITHUB_TOKEN_TL: githubTokenTl || "",
         },
         // Re-run Ansible whenever the server is replaced
         triggers: [server.id],
