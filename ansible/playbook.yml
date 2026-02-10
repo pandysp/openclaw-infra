@@ -15,11 +15,12 @@
     - { role: ufw,       tags: [ufw],       become: true }
     - { role: openclaw,  tags: [openclaw] }
     - { role: config,    tags: [config] }
-    - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: agents,    tags: [agents],    when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
     # telegram must run immediately after agents — if sandbox runs in between,
     # agents exist without bindings and incoming messages get misrouted.
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
+    # plugins after agents — deny rules need agents to exist for index resolution.
+    - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
     - role: workspace
       tags: [workspace]

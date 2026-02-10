@@ -214,3 +214,66 @@
 - name: Show mcp-adapter log status
   ansible.builtin.debug:
     var: mcp_logs.stdout_lines
+
+# --- Per-agent GitHub tool scoping ---
+# Each agent denies all MCP server tool prefixes except its own.
+# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*").
+# Safe because toolPrefix uses "_" while server names use "-" as separator,
+# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
+# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*"]
+
+- name: Validate server agent_id values match defined agents
+  ansible.builtin.assert:
+    that:
+      - item.agent_id in (openclaw_agents | map(attribute='id') | list)
+    fail_msg: >-
+      Server '{{ item.name }}' has agent_id '{{ item.agent_id }}'
+      which does not match any agent in openclaw_agents.
+      Valid agent IDs: {{ openclaw_agents | map(attribute='id') | list }}
+    quiet: true
+  loop: "{{ openclaw_mcp_adapter.servers }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Get agent list for index resolution
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw agents list --json
+  args:
+    executable: /bin/bash
+  register: agents_list_json
+  changed_when: false
+
+- name: Set per-agent tool deny rules for GitHub MCP tools
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    AGENTS_JSON='{{ agents_list_json.stdout }}'
+    AGENT_INDEX=$(echo "$AGENTS_JSON" | jq -r 'to_entries[] | select(.value.id == "{{ item.id }}") | .key')
+    if [ -z "$AGENT_INDEX" ]; then
+        echo "SKIP: Agent '{{ item.id }}' not found in agents list"
+        exit 0
+    fi
+    CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.tools.deny" 2>/dev/null || echo "[]")
+    DESIRED='{{ deny_list | to_json }}'
+    if [ "$CURRENT" = "$DESIRED" ]; then
+        echo "UNCHANGED"
+    else
+        openclaw config set "agents.list.${AGENT_INDEX}.tools.deny" --json "$DESIRED"
+        echo "CHANGED"
+    fi
+  args:
+    executable: /bin/bash
+  vars:
+    deny_list: >-
+      {{ openclaw_mcp_adapter.servers
+         | rejectattr('agent_id', 'equalto', item.id)
+         | map(attribute='name')
+         | map('regex_replace', '$', '_*')
+         | list }}
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: deny_result
+  changed_when: "'CHANGED' in deny_result.stdout"
+  notify: restart openclaw-gateway

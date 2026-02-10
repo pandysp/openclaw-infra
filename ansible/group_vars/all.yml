@@ -122,10 +122,13 @@ openclaw_mcp_adapter:
   servers:
     - name: "github"
       token_var: "github_token"
+      agent_id: "main"
     - name: "github-manon"
       token_var: "github_token_manon"
+      agent_id: "manon"
     - name: "github-tl"
       token_var: "github_token_tl"
+      agent_id: "tl"
 
 # Workspace git sync definitions (per-agent)
 openclaw_workspaces:

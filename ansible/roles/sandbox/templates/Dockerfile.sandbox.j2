@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && git lfs install --system \
+  && (apt-get purge -y gh || true) \
   && rm -rf /var/lib/apt/lists/*
 
 # --- Layer 2: uv + uvx (official Docker method — https://docs.astral.sh/uv/guides/integration/docker/) ---
