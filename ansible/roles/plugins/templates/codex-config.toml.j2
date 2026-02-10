@@ -1,0 +1,13 @@
+# Codex MCP container config — routes API calls through codex-token-proxy.
+# The proxy injects the real ChatGPT OAuth bearer token server-side,
+# so containers never see auth.json.
+#
+# Managed by Ansible — do not edit on the server.
+
+model_provider = "codex_proxy"
+
+[model_providers.codex_proxy]
+name = "Codex Proxy"
+base_url = "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}"
+wire_api = "responses"
+env_key = "CODEX_PROXY_TOKEN"

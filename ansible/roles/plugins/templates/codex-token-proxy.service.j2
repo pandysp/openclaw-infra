@@ -1,0 +1,17 @@
+[Unit]
+Description=Codex Token Proxy (credential injection for Codex MCP containers)
+After=network.target
+Before=openclaw-gateway.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /home/ubuntu/.openclaw/codex-token-proxy.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=CODEX_PROXY_LISTEN={{ codex_proxy_gateway_ip }}
+Environment=CODEX_PROXY_PORT={{ openclaw_mcp_adapter.codex_proxy_port }}
+Environment=CODEX_AUTH_PATH=/home/ubuntu/.codex/auth.json
+
+[Install]
+WantedBy=default.target

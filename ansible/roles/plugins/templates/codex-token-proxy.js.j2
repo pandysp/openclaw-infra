@@ -1,0 +1,330 @@
+#!/usr/bin/env node
+// Codex Token Proxy — reverse proxy that injects ChatGPT OAuth bearer token
+// for Codex MCP containers on the codex-proxy-net Docker network.
+//
+// Zero npm dependencies. Listens on the Docker network gateway IP only,
+// so sandbox containers on the default bridge cannot reach it.
+//
+// Managed by Ansible — do not edit on the server.
+
+'use strict';
+
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const { pipeline } = require('stream');
+
+const LISTEN_HOST = process.env.CODEX_PROXY_LISTEN || '127.0.0.1';
+const LISTEN_PORT = parseInt(process.env.CODEX_PROXY_PORT || '{{ openclaw_mcp_adapter.codex_proxy_port }}', 10);
+const AUTH_PATH = process.env.CODEX_AUTH_PATH || '/home/ubuntu/.codex/auth.json';
+const UPSTREAM_HOST = 'chatgpt.com';
+const UPSTREAM_PATH_PREFIX = '/backend-api/codex';
+const CONNECT_TIMEOUT_MS = 10000;
+const RESPONSE_TIMEOUT_MS = 30000;
+const OVERALL_TIMEOUT_MS = 300000; // 5 min for long codex sessions
+const REFRESH_URL = 'https://auth.openai.com/oauth/token';
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// --- Structured logging ---
+
+function log(level, msg, extra) {
+  const entry = { ts: new Date().toISOString(), level, msg };
+  if (extra) Object.assign(entry, extra);
+  process.stdout.write(JSON.stringify(entry) + '\n');
+}
+
+// --- Token management ---
+
+let cachedToken = null;
+let tokenMtime = 0;
+let refreshMutex = null; // Promise when refresh is in-flight
+let circuitOpen = false;
+let circuitOpenUntil = 0;
+
+function readAuthFile() {
+  try {
+    const raw = fs.readFileSync(AUTH_PATH, 'utf8');
+    const data = JSON.parse(raw);
+    return data;
+  } catch (err) {
+    log('error', 'Failed to read auth.json', { error: err.message });
+    return null;
+  }
+}
+
+function getAccessToken() {
+  try {
+    const stat = fs.statSync(AUTH_PATH);
+    const mtime = stat.mtimeMs;
+    if (cachedToken && mtime === tokenMtime) return cachedToken;
+    const data = readAuthFile();
+    const tokens = data && data.tokens;
+    if (tokens && tokens.access_token) {
+      cachedToken = tokens.access_token;
+      tokenMtime = mtime;
+      log('info', 'Loaded access token from auth.json');
+      return cachedToken;
+    }
+  } catch (err) {
+    log('error', 'Failed to stat auth.json', { error: err.message });
+  }
+  return cachedToken; // return stale if file unreadable
+}
+
+function invalidateToken() {
+  cachedToken = null;
+  tokenMtime = 0;
+}
+
+// Watch auth.json for external changes (e.g. reprovision)
+try {
+  fs.watch(AUTH_PATH, () => {
+    log('info', 'auth.json changed on disk, invalidating cached token');
+    invalidateToken();
+  });
+} catch (err) {
+  log('warn', 'Cannot watch auth.json, token reload requires restart', { error: err.message });
+}
+
+// --- Token refresh ---
+
+function refreshToken() {
+  // Deduplicate concurrent refresh attempts
+  if (refreshMutex) return refreshMutex;
+
+  // Circuit breaker: don't hammer refresh endpoint
+  if (circuitOpen && Date.now() < circuitOpenUntil) {
+    return Promise.reject(new Error('Circuit breaker open — refresh disabled'));
+  }
+
+  refreshMutex = new Promise((resolve, reject) => {
+    const auth = readAuthFile();
+    const tokens = auth && auth.tokens;
+    if (!tokens || !tokens.refresh_token) {
+      reject(new Error('No refresh_token in auth.json'));
+      return;
+    }
+
+    const body = JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+      client_id: 'DRivsnm2Mu42T3KOpqdL9p3q9ByGaHfy',
+    });
+
+    const req = https.request(REFRESH_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: CONNECT_TIMEOUT_MS,
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          log('error', 'Token refresh failed', { status: res.statusCode, body: data.slice(0, 500) });
+          // Open circuit breaker for 5 minutes
+          circuitOpen = true;
+          circuitOpenUntil = Date.now() + 5 * 60 * 1000;
+          reject(new Error(`Refresh returned ${res.statusCode}`));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          if (!parsed.access_token) throw new Error('No access_token in refresh response');
+          // Update auth.json on disk (tokens are nested under .tokens)
+          const updatedTokens = Object.assign({}, tokens, {
+            access_token: parsed.access_token,
+            refresh_token: parsed.refresh_token || tokens.refresh_token,
+          });
+          const updated = Object.assign({}, auth, {
+            tokens: updatedTokens,
+            last_refresh: new Date().toISOString(),
+          });
+          fs.writeFileSync(AUTH_PATH, JSON.stringify(updated, null, 2), 'utf8');
+          cachedToken = parsed.access_token;
+          tokenMtime = fs.statSync(AUTH_PATH).mtimeMs;
+          circuitOpen = false;
+          log('info', 'Token refreshed successfully');
+          resolve(parsed.access_token);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      log('error', 'Token refresh request error', { error: err.message });
+      circuitOpen = true;
+      circuitOpenUntil = Date.now() + 5 * 60 * 1000;
+      reject(err);
+    });
+    req.on('timeout', () => { req.destroy(new Error('Refresh request timeout')); });
+    req.write(body);
+    req.end();
+  }).finally(() => { refreshMutex = null; });
+
+  return refreshMutex;
+}
+
+// --- Proxy logic ---
+
+function bufferBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function proxyRequest(clientReq, clientRes, body, token, isRetry) {
+  const upstreamPath = UPSTREAM_PATH_PREFIX + clientReq.url;
+  const headers = Object.assign({}, clientReq.headers);
+  delete headers.host;
+  headers.host = UPSTREAM_HOST;
+  headers.authorization = 'Bearer ' + token;
+  headers['content-length'] = Buffer.byteLength(body);
+
+  const options = {
+    hostname: UPSTREAM_HOST,
+    port: 443,
+    path: upstreamPath,
+    method: clientReq.method,
+    headers: headers,
+    timeout: CONNECT_TIMEOUT_MS,
+  };
+
+  const upReq = https.request(options, (upRes) => {
+    // Handle 401 — try refresh once
+    if (upRes.statusCode === 401 && !isRetry) {
+      // Drain upstream response
+      upRes.resume();
+      log('warn', 'Upstream returned 401, attempting token refresh');
+      invalidateToken();
+      refreshToken().then((newToken) => {
+        proxyRequest(clientReq, clientRes, body, newToken, true);
+      }).catch((err) => {
+        log('error', 'Token refresh failed on 401 retry', { error: err.message });
+        clientRes.writeHead(502, { 'Content-Type': 'application/json' });
+        clientRes.end(JSON.stringify({ error: 'token_refresh_failed', detail: err.message }));
+      });
+      return;
+    }
+
+    // Validate upstream content type
+    const ct = (upRes.headers['content-type'] || '').toLowerCase();
+    if (upRes.statusCode >= 200 && upRes.statusCode < 300 &&
+        !ct.includes('json') && !ct.includes('event-stream') && !ct.includes('text/')) {
+      log('warn', 'Unexpected upstream content-type', { contentType: ct, status: upRes.statusCode });
+    }
+
+    // Forward response
+    clientRes.writeHead(upRes.statusCode, upRes.headers);
+    pipeline(upRes, clientRes, (err) => {
+      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+        log('error', 'Stream pipeline error', { error: err.message });
+      }
+    });
+  });
+
+  // Timeouts
+  upReq.on('timeout', () => {
+    upReq.destroy(new Error('Upstream connect timeout'));
+  });
+
+  upReq.on('socket', (socket) => {
+    socket.once('connect', () => {
+      // After connect, set response timeout
+      upReq.setTimeout(RESPONSE_TIMEOUT_MS, () => {
+        upReq.destroy(new Error('Upstream response timeout'));
+      });
+    });
+  });
+
+  upReq.on('error', (err) => {
+    log('error', 'Upstream request error', { error: err.message, path: upstreamPath });
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { 'Content-Type': 'application/json' });
+      clientRes.end(JSON.stringify({ error: 'upstream_error', detail: err.message }));
+    }
+  });
+
+  upReq.write(body);
+  upReq.end();
+
+  // Overall timeout
+  const overallTimer = setTimeout(() => {
+    upReq.destroy(new Error('Overall request timeout'));
+  }, OVERALL_TIMEOUT_MS);
+  clientRes.on('close', () => clearTimeout(overallTimer));
+}
+
+// --- HTTP server ---
+
+const server = http.createServer((req, res) => {
+  // Health check
+  if (req.url === '/health' && req.method === 'GET') {
+    const token = getAccessToken();
+    const healthy = !!token && !circuitOpen;
+    res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: healthy ? 'healthy' : 'unhealthy',
+      hasToken: !!token,
+      circuitOpen: circuitOpen,
+      circuitOpenUntil: circuitOpen ? new Date(circuitOpenUntil).toISOString() : null,
+    }));
+    return;
+  }
+
+  // Proxy all other requests
+  const token = getAccessToken();
+  if (!token) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'no_token', detail: 'Cannot read access token from auth.json' }));
+    return;
+  }
+
+  bufferBody(req).then((body) => {
+    proxyRequest(req, res, body, token, false);
+  }).catch((err) => {
+    log('error', 'Failed to buffer request body', { error: err.message });
+    if (!res.headersSent) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'bad_request', detail: err.message }));
+    }
+  });
+});
+
+server.listen(LISTEN_PORT, LISTEN_HOST, () => {
+  log('info', 'Codex token proxy started', { host: LISTEN_HOST, port: LISTEN_PORT });
+  // Pre-load token
+  getAccessToken();
+});
+
+server.on('error', (err) => {
+  log('error', 'Server error', { error: err.message });
+  process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  log('info', 'SIGTERM received, shutting down');
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 5000);
+});
+process.on('SIGINT', () => {
+  log('info', 'SIGINT received, shutting down');
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 5000);
+});

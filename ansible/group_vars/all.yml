@@ -129,6 +129,7 @@ openclaw_mcp_adapter:
   codex_docker_image: "codex-mcp:latest"
   codex_version: "0.98.0"        # Pin for reproducibility; update intentionally
   codex_memory_limit: "2g"       # Prevent runaway Codex from exhausting VPS RAM
+  codex_proxy_port: 8787         # Port for the credential-injecting reverse proxy
   servers:
     # GitHub MCP servers (one per agent, each with its own PAT)
     - name: "github"

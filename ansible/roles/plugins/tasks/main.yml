@@ -144,6 +144,88 @@
       did not exist. Remove it with: rm -rf /home/ubuntu/.codex/auth.json
   when: codex_auth_json | default('') | length > 0 and codex_auth_stat.stat.exists
 
+- name: Create codex-proxy-net Docker network
+  community.docker.docker_network:
+    name: codex-proxy-net
+  when: codex_auth_json | default('') | length > 0
+
+- name: Get codex-proxy-net gateway IP
+  ansible.builtin.shell: |
+    docker network inspect codex-proxy-net --format '{{ '{{' }}range .IPAM.Config{{ '}}{{' }}.Gateway{{ '}}{{' }}end{{ '}}' }}'
+  args:
+    executable: /bin/bash
+  register: codex_proxy_net_info
+  changed_when: false
+  when: codex_auth_json | default('') | length > 0
+
+- name: Set codex proxy gateway IP fact
+  ansible.builtin.set_fact:
+    codex_proxy_gateway_ip: "{{ codex_proxy_net_info.stdout | trim }}"
+  when: codex_auth_json | default('') | length > 0
+
+- name: Allow codex-proxy-net containers to reach proxy port
+  become: true
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ codex_proxy_gateway_ip | regex_replace('\\.[0-9]+$', '.0/16') }}"
+    to_port: "{{ openclaw_mcp_adapter.codex_proxy_port }}"
+    proto: tcp
+  when: codex_auth_json | default('') | length > 0
+
+- name: Deploy codex token proxy
+  when: codex_auth_json | default('') | length > 0
+  block:
+    - name: Ensure systemd user directory exists
+      ansible.builtin.file:
+        path: /home/ubuntu/.config/systemd/user
+        state: directory
+        mode: "0755"
+
+    - name: Template codex-token-proxy.js
+      ansible.builtin.template:
+        src: codex-token-proxy.js.j2
+        dest: /home/ubuntu/.openclaw/codex-token-proxy.js
+        mode: "0644"
+      register: proxy_js_changed
+
+    - name: Template codex-token-proxy systemd service
+      ansible.builtin.template:
+        src: codex-token-proxy.service.j2
+        dest: /home/ubuntu/.config/systemd/user/codex-token-proxy.service
+        mode: "0644"
+      register: proxy_service_changed
+
+    - name: Enable and start codex-token-proxy
+      ansible.builtin.systemd:
+        name: codex-token-proxy
+        enabled: true
+        state: "{{ 'restarted' if (proxy_js_changed is changed or proxy_service_changed is changed) else 'started' }}"
+        scope: user
+        daemon_reload: true
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+
+    - name: Wait for codex-token-proxy to be ready
+      ansible.builtin.shell: |
+        curl -sf "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health"
+      args:
+        executable: /bin/bash
+      register: proxy_health
+      retries: 5
+      delay: 2
+      until: proxy_health.rc == 0
+      changed_when: false
+
+- name: Template Codex config.toml for proxy routing
+  ansible.builtin.template:
+    src: codex-config.toml.j2
+    dest: /home/ubuntu/.openclaw/codex-config.toml
+    mode: "0644"
+  when: codex_auth_json | default('') | length > 0
+
+- name: Flush handlers to ensure proxy is restarted before image build
+  ansible.builtin.meta: flush_handlers
+
 - name: Ensure agent workspace directories exist for Codex containers
   ansible.builtin.file:
     path: "{{ item.cwd }}"
@@ -192,6 +274,52 @@
     - name: Smoke test Codex MCP image
       ansible.builtin.shell: |
         docker run --rm "{{ openclaw_mcp_adapter.codex_docker_image }}" codex --version
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: codex_image_build is changed
+
+    - name: Smoke test Codex MCP image with hardened flags (credential-free)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm \
+          --network=codex-proxy-net \
+          --cap-drop ALL \
+          --security-opt no-new-privileges \
+          --read-only \
+          --tmpfs /tmp \
+          --tmpfs /home/node/.codex:uid=1000,gid=1000 \
+          --tmpfs /home/node/.npm:uid=1000,gid=1000 \
+          --tmpfs /home/node/.config:uid=1000,gid=1000 \
+          --tmpfs /home/node/.cache:uid=1000,gid=1000 \
+          --pids-limit 100 \
+          --cpus 2 \
+          --memory 2g --memory-swap 2g \
+          "{{ openclaw_mcp_adapter.codex_docker_image }}" \
+          sh -c 'test ! -f /home/node/.codex/auth.json && echo "no-creds-ok"'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: codex_image_build is changed
+
+    - name: Smoke test proxy connectivity from Codex container
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm \
+          --network=codex-proxy-net \
+          --cap-drop ALL \
+          --security-opt no-new-privileges \
+          --read-only \
+          --tmpfs /tmp \
+          "{{ openclaw_mcp_adapter.codex_docker_image }}" \
+          sh -c 'node -e "
+            const http = require(\"http\");
+            http.get(\"http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health\", (res) => {
+              let d = \"\";
+              res.on(\"data\", c => d += c);
+              res.on(\"end\", () => { console.log(d); process.exit(res.statusCode === 200 ? 0 : 1); });
+            }).on(\"error\", e => { console.error(e.message); process.exit(1); });
+          "'
       args:
         executable: /bin/bash
       changed_when: false
@@ -308,11 +436,12 @@
     {% endfor %}
 
     # Codex servers — containerized with docker run -i (stdio piped through Docker)
-    # Security: containers only see the agent's workspace + auth.json (read-only).
-    # No access to gateway config, other agents' workspaces, SSH keys, etc.
+    # Security: containers have NO credentials. Auth is injected by codex-token-proxy
+    # running on codex-proxy-net. Sandbox containers on default bridge cannot reach proxy.
     CODEX_IMAGE="{{ openclaw_mcp_adapter.codex_docker_image }}"
     CODEX_MEM="{{ openclaw_mcp_adapter.codex_memory_limit | default('2g') }}"
-    if [ -f "/home/ubuntu/.codex/auth.json" ]; then
+    PROXY_GW="{{ codex_proxy_gateway_ip | default('') }}"
+    if [ -f "/home/ubuntu/.codex/auth.json" ] && [ -n "$PROXY_GW" ]; then
     {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'codex') %}
         DOCKER_ARGS=$(jq -n \
             --arg ws "{{ srv.cwd }}" \
@@ -321,15 +450,28 @@
             --arg mem "$CODEX_MEM" \
             --arg sandbox "$CODEX_SANDBOX" \
             --arg approval "$CODEX_APPROVAL" \
-            '["run","--rm","-i","--init","--net=bridge",
+            '["run","--rm","-i","--init","--network=codex-proxy-net",
+              "--cap-drop","ALL",
+              "--security-opt","no-new-privileges",
+              "--read-only",
+              "--tmpfs","/tmp",
+              "--tmpfs","/home/node/.codex:uid=1000,gid=1000",
+              "--tmpfs","/home/node/.npm:uid=1000,gid=1000",
+              "--tmpfs","/home/node/.config:uid=1000,gid=1000",
+              "--tmpfs","/home/node/.cache:uid=1000,gid=1000",
+              "--pids-limit","100",
+              "--cpus","2",
               ("--memory=" + $mem),("--memory-swap=" + $mem),
               "--label","openclaw-role=codex-mcp",
               "--label",("openclaw-agent=" + $agent),
               "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-              "--mount","type=bind,source=/home/ubuntu/.codex/auth.json,target=/home/node/.codex/auth.json,readonly",
+              "--mount","type=bind,source=/home/ubuntu/.openclaw/codex-config.toml,target=/home/node/.codex/config.toml,readonly",
+              "-e","CODEX_PROXY_TOKEN=proxy",
               "-w","/workspace",
               $img,
-              "codex","mcp-server","-c",("sandbox_mode=" + $sandbox),"-c",("approval_policy=" + $approval)]')
+              "codex","mcp-server",
+              "-c",("sandbox_mode=" + $sandbox),
+              "-c",("approval_policy=" + $approval)]')
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
             '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
     {% endfor %}

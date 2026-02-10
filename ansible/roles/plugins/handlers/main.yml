@@ -6,3 +6,12 @@
     scope: user
   environment:
     XDG_RUNTIME_DIR: "/run/user/1000"
+
+- name: restart codex-token-proxy
+  ansible.builtin.systemd:
+    name: codex-token-proxy
+    state: restarted
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
