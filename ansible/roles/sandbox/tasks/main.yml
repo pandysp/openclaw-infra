@@ -48,7 +48,54 @@
   args:
     executable: /bin/bash
   when: force_sandbox_rebuild | bool or dockerfile_changed.changed or base_dockerfile_changed.changed or custom_image_check.rc != 0
+  register: custom_image_build
 
 - name: Verify custom sandbox image was built
   ansible.builtin.command: docker image inspect openclaw-sandbox-custom:latest
   changed_when: false
+
+- name: Remove running sandbox containers after image rebuild
+  ansible.builtin.shell: |
+    set -euo pipefail
+    containers=$(docker ps -q --filter "name=openclaw-sbx-")
+    if [ -n "$containers" ]; then
+      echo "$containers" | xargs docker rm -f
+    fi
+  args:
+    executable: /bin/bash
+  register: container_removal
+  changed_when: container_removal.stdout | length > 0
+  when: custom_image_build is changed
+
+- name: Verify no sandbox containers are running
+  ansible.builtin.shell: |
+    set -euo pipefail
+    count=$(docker ps -q --filter "name=openclaw-sbx-" | wc -l)
+    if [ "$count" -ne 0 ]; then
+      echo "ERROR: $count sandbox containers still running after removal"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: container_removal is changed
+
+- name: Restart gateway to pick up new sandbox image
+  ansible.builtin.systemd:
+    name: openclaw-gateway
+    state: restarted
+    scope: user
+  become: false
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: custom_image_build is changed
+  register: gateway_restart
+
+- name: Wait for gateway to be healthy after restart
+  ansible.builtin.command: openclaw health
+  register: health_check
+  retries: 5
+  delay: 3
+  until: health_check.rc == 0
+  changed_when: false
+  when: gateway_restart is changed
