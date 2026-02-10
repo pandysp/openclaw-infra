@@ -117,18 +117,39 @@ openclaw_cron_jobs:
 # MCP plugin configuration
 openclaw_mcp_adapter:
   source: "https://github.com/pandysp/openclaw-mcp-adapter.git"
-  npm_package: "@modelcontextprotocol/server-github"
+  npm_packages:
+    - "@modelcontextprotocol/server-github"
+    - "@openai/codex"
   tool_prefix: true
+  codex_sandbox: "workspace-write"
+  codex_approval: "never"
   servers:
+    # GitHub MCP servers (one per agent, each with its own PAT)
     - name: "github"
+      type: "github"
       token_var: "github_token"
       agent_id: "main"
     - name: "github-manon"
+      type: "github"
       token_var: "github_token_manon"
       agent_id: "manon"
     - name: "github-tl"
+      type: "github"
       token_var: "github_token_tl"
       agent_id: "tl"
+    # Codex MCP servers (one per agent, uses cached ~/.codex/auth.json, workspace-scoped cwd)
+    - name: "codex"
+      type: "codex"
+      agent_id: "main"
+      cwd: "/home/ubuntu/.openclaw/workspace"
+    - name: "codex-manon"
+      type: "codex"
+      agent_id: "manon"
+      cwd: "/home/ubuntu/.openclaw/workspace-manon"
+    - name: "codex-tl"
+      type: "codex"
+      agent_id: "tl"
+      cwd: "/home/ubuntu/.openclaw/workspace-tl"
 
 # Workspace git sync definitions (per-agent)
 openclaw_workspaces:

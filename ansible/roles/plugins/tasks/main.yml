@@ -1,5 +1,5 @@
 ---
-# Install and configure the mcp-adapter plugin with GitHub MCP servers.
+# Install and configure the mcp-adapter plugin with GitHub and Codex MCP servers.
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
 
@@ -11,6 +11,23 @@
 - name: Install mcp-adapter plugin
   when: not plugin_dir.stat.exists or force_plugin_reinstall | bool
   block:
+    - name: Remove stale plugin config entry before reinstall
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 -c "
+        import json
+        with open('/home/ubuntu/.openclaw/openclaw.json') as f:
+            cfg = json.load(f)
+        if 'openclaw-mcp-adapter' in cfg.get('plugins', {}).get('entries', {}):
+            del cfg['plugins']['entries']['openclaw-mcp-adapter']
+            with open('/home/ubuntu/.openclaw/openclaw.json', 'w') as f:
+                json.dump(cfg, f, indent=2)
+        "
+      args:
+        executable: /bin/bash
+      when: force_plugin_reinstall | bool
+      changed_when: false
+
     - name: Remove existing plugin directory (reinstall)
       ansible.builtin.file:
         path: /home/ubuntu/.openclaw/extensions/openclaw-mcp-adapter
@@ -57,13 +74,22 @@
     line: 'export PATH="$HOME/.npm-global/bin:$PATH"'
     state: present
 
-- name: Install GitHub MCP server npm package globally
+- name: Determine which npm packages to install
+  ansible.builtin.set_fact:
+    mcp_npm_packages: >-
+      {{ openclaw_mcp_adapter.npm_packages
+         | reject('equalto', '@openai/codex')
+         | list
+         + (['@openai/codex'] if (codex_auth_json | default('') | length > 0) else []) }}
+
+- name: Install MCP server npm packages globally
   community.general.npm:
-    name: "{{ openclaw_mcp_adapter.npm_package }}"
+    name: "{{ item }}"
     global: true
     state: present
   environment:
     PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_env.PATH }}"
+  loop: "{{ mcp_npm_packages }}"
 
 - name: Resolve mcp-server-github binary path
   ansible.builtin.shell: |
@@ -77,8 +103,40 @@
     echo "$BINARY"
   args:
     executable: /bin/bash
-  register: mcp_binary
+  register: github_mcp_binary
   changed_when: false
+
+- name: Resolve codex binary path
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH="{{ (npm_prefix.stdout_lines | last) | trim }}/bin:$PATH"
+    BINARY=$(which codex) || {
+        echo "ERROR: codex not found in PATH after npm install"
+        echo "Expected at: {{ (npm_prefix.stdout_lines | last) | trim }}/bin/codex"
+        exit 1
+    }
+    echo "$BINARY"
+  args:
+    executable: /bin/bash
+  register: codex_mcp_binary
+  changed_when: false
+  when: codex_auth_json | default('') | length > 0
+
+- name: Deploy Codex auth credentials
+  when: codex_auth_json | default('') | length > 0
+  block:
+    - name: Ensure .codex directory exists
+      ansible.builtin.file:
+        path: /home/ubuntu/.codex
+        state: directory
+        mode: "0700"
+
+    - name: Write Codex auth.json
+      ansible.builtin.copy:
+        content: "{{ codex_auth_json }}"
+        dest: /home/ubuntu/.codex/auth.json
+        mode: "0600"
+      no_log: true
 
 - name: Validate token variable names are defined
   ansible.builtin.assert:
@@ -88,30 +146,32 @@
       Server '{{ item.name }}' references token_var '{{ item.token_var }}'
       which is not a defined variable. Check group_vars/all.yml and provision.sh.
     quiet: true
-  loop: "{{ openclaw_mcp_adapter.servers }}"
+  loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
 
-- name: Write server tokens to temp files
+- name: Write server tokens to temp files (de-duplicated by token_var)
   ansible.builtin.copy:
-    content: "{{ lookup('vars', item.token_var, default='') }}"
-    dest: "/tmp/ansible-mcp-token-{{ item.name }}"
+    content: "{{ lookup('vars', item, default='') }}"
+    dest: "/tmp/ansible-mcp-token-{{ item }}"
     mode: "0600"
   no_log: true
-  loop: "{{ openclaw_mcp_adapter.servers }}"
-  loop_control:
-    label: "{{ item.name }}"
+  loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
 - name: Build and write plugin config JSON
   ansible.builtin.shell: |
     set -euo pipefail
-    BINARY="{{ mcp_binary.stdout | trim }}"
+    GITHUB_BINARY="{{ github_mcp_binary.stdout | trim }}"
+    CODEX_BINARY="{{ (codex_mcp_binary.stdout | default('')) | trim }}"
     TOOL_PREFIX='{{ openclaw_mcp_adapter.tool_prefix | to_json }}'
-
-    # Build servers array — only include servers with non-empty tokens
+    CODEX_SANDBOX="{{ openclaw_mcp_adapter.codex_sandbox | default('workspace-write') }}"
+    CODEX_APPROVAL="{{ openclaw_mcp_adapter.codex_approval | default('never') }}"
+    # Build servers array
     SERVERS="[]"
-    {% for srv in openclaw_mcp_adapter.servers %}
-    TOKEN_FILE="/tmp/ansible-mcp-token-{{ srv.name }}"
+
+    # GitHub servers — only include when token is non-empty
+    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') %}
+    TOKEN_FILE="/tmp/ansible-mcp-token-{{ srv.token_var }}"
     if [ ! -f "$TOKEN_FILE" ]; then
         echo "ERROR: Token file $TOKEN_FILE is missing — write task may have failed"
         exit 1
@@ -119,11 +179,23 @@
     TOKEN=$(cat "$TOKEN_FILE")
     if [ -n "$TOKEN" ]; then
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
-            --arg cmd "$BINARY" \
+            --arg cmd "$GITHUB_BINARY" \
             --arg token "$TOKEN" \
             '. + [{name: $name, transport: "stdio", command: $cmd, env: {GITHUB_PERSONAL_ACCESS_TOKEN: $token}}]')
     fi
     {% endfor %}
+
+    # Codex servers — always included when auth.json is deployed (no env vars, uses cached auth)
+    if [ -f "/home/ubuntu/.codex/auth.json" ]; then
+    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'codex') %}
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
+            --arg cmd "$CODEX_BINARY" \
+            --arg sandbox "$CODEX_SANDBOX" \
+            --arg approval "$CODEX_APPROVAL" \
+            --arg cwd "{{ srv.cwd }}" \
+            '. + [{name: $name, transport: "stdio", command: $cmd, args: ["mcp-server", "-c", ("sandbox_mode=" + $sandbox), "-c", ("approval_policy=" + $approval)], cwd: $cwd}]')
+    {% endfor %}
+    fi
 
     # Build final config
     CONFIG=$(jq -n --argjson prefix "$TOOL_PREFIX" --argjson servers "$SERVERS" \
@@ -174,11 +246,9 @@
 
     - name: Clean up token temp files
       ansible.builtin.file:
-        path: "/tmp/ansible-mcp-token-{{ item.name }}"
+        path: "/tmp/ansible-mcp-token-{{ item }}"
         state: absent
-      loop: "{{ openclaw_mcp_adapter.servers }}"
-      loop_control:
-        label: "{{ item.name }}"
+      loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
 - name: Flush handlers to restart gateway before verification
   ansible.builtin.meta: flush_handlers
@@ -215,12 +285,12 @@
   ansible.builtin.debug:
     var: mcp_logs.stdout_lines
 
-# --- Per-agent GitHub tool scoping ---
+# --- Per-agent MCP tool scoping ---
 # Each agent denies all MCP server tool prefixes except its own.
-# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*").
+# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "codex-tl_*").
 # Safe because toolPrefix uses "_" while server names use "-" as separator,
 # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*"]
+# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "codex-manon_*", "codex-tl_*"]
 
 - name: Validate server agent_id values match defined agents
   ansible.builtin.assert:
@@ -244,7 +314,7 @@
   register: agents_list_json
   changed_when: false
 
-- name: Set per-agent tool deny rules for GitHub MCP tools
+- name: Set per-agent tool deny rules for MCP tools
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000

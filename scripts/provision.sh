@@ -117,6 +117,19 @@ echo "  github_mcp (main): $([ -n "$github_token" ] && echo "configured" || echo
 echo "  github_mcp (manon): $([ -n "$github_token_manon" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (tl): $([ -n "$github_token_tl" ] && echo "configured" || echo "skipped")"
 
+# Read Codex auth credentials from local machine (optional)
+# Run `codex login` locally to create ~/.codex/auth.json before deploying.
+codex_auth_json=""
+CODEX_AUTH_FILE="${HOME}/.codex/auth.json"
+if [ -f "$CODEX_AUTH_FILE" ]; then
+    codex_auth_json=$(cat "$CODEX_AUTH_FILE")
+    if [ -n "$codex_auth_json" ] && ! echo "$codex_auth_json" | jq empty 2>/dev/null; then
+        echo "ERROR: ~/.codex/auth.json is not valid JSON. Run 'codex login' to regenerate."
+        exit 1
+    fi
+fi
+echo "  codex_auth: $([ -n "$codex_auth_json" ] && echo "found (~/.codex/auth.json)" || echo "skipped (run 'codex login' to enable)")"
+
 # Write secrets to temp YAML file
 SECRETS_FILE="$SECRETS_DIR/secrets.yml"
 cat > "$SECRETS_FILE" <<EOF
@@ -149,6 +162,9 @@ append_deploy_key() {
 append_deploy_key "workspace_deploy_key" "$workspace_deploy_private_key" "$SECRETS_FILE"
 append_deploy_key "workspace_manon_deploy_key" "$workspace_manon_deploy_key" "$SECRETS_FILE"
 append_deploy_key "workspace_tl_deploy_key" "$workspace_tl_deploy_key" "$SECRETS_FILE"
+
+# Append Codex auth credentials (block scalar preserves JSON structure)
+append_deploy_key "codex_auth_json" "$codex_auth_json" "$SECRETS_FILE"
 chmod 600 "$SECRETS_FILE"
 
 echo "=== Waiting for Tailscale SSH connectivity ==="
