@@ -1,15 +1,6 @@
 FROM openclaw-sandbox:trixie
 
-# --- Layer 1: Add external apt repositories ---
-# gh (GitHub CLI) — official apt repository (https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
-RUN mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list
-
-# --- Layer 2: System packages ---
+# --- Layer 1: System packages ---
 # Some packages may already exist in base image; listed explicitly for reproducibility
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -60,27 +51,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Node.js (via Debian packages)
     nodejs \
     npm \
-    # GitHub CLI (via external apt repo added in Layer 1)
-    gh \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && git lfs install --system \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Layer 3: uv + uvx (official Docker method — https://docs.astral.sh/uv/guides/integration/docker/) ---
+# --- Layer 2: uv + uvx (official Docker method — https://docs.astral.sh/uv/guides/integration/docker/) ---
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# --- Layer 4: yq (official Docker method — https://github.com/mikefarah/yq) ---
+# --- Layer 3: yq (official Docker method — https://github.com/mikefarah/yq) ---
 COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq
 
-# --- Layer 5: pnpm via corepack (recommended — https://pnpm.io/installation) ---
+# --- Layer 4: pnpm via corepack (recommended — https://pnpm.io/installation) ---
 RUN npm install -g corepack@latest && corepack enable pnpm
 
-# --- Layer 6: Strip setuid bits to prevent privilege escalation ---
+# --- Layer 5: Strip setuid bits to prevent privilege escalation ---
 # Runs AFTER all package installs to cover apt, COPY --from, and binary downloads
 # -xdev avoids descending into /proc, /sys, and other virtual filesystems
 RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
 
-# --- Layer 7: Unprivileged user ---
+# --- Layer 6: Unprivileged user ---
 RUN (getent group 1000 || groupadd -g 1000 node) && \
     (id -u 1000 2>/dev/null || useradd -u 1000 -g 1000 -m -s /bin/bash node)
 
