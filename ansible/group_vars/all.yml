@@ -37,6 +37,9 @@ force_sandbox_rebuild: false
 # Force Codex MCP Docker image rebuild (override with -e force_codex_rebuild=true)
 force_codex_rebuild: false
 
+# Force Claude Code MCP Docker image rebuild (override with -e force_claude_code_rebuild=true)
+force_claude_code_rebuild: false
+
 # Force plugin reinstall (override with -e force_plugin_reinstall=true)
 force_plugin_reinstall: false
 
@@ -82,40 +85,40 @@ openclaw_cron_jobs:
     agent: "main"
     schedule: "0 10 * * 1"
     message: "Weekly planning. Review past week, plan upcoming week priorities."
-  # manon
-  - name: "manon: Daily Standup"
-    agent: "manon"
-    schedule: "0 10 * * *"
-    message: "Good morning! Summarize what needs my attention today."
-  - name: "manon: Night Shift"
-    agent: "manon"
-    schedule: "30 23 * * *"
-    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "manon: Weekly Review"
-    agent: "manon"
-    schedule: "30 15 * * 5"
-    message: "Weekly review. What was accomplished this week? What is pending?"
-  - name: "manon: Weekly Planning"
-    agent: "manon"
-    schedule: "30 10 * * 1"
-    message: "Weekly planning. Review past week, plan upcoming week priorities."
-  # tl (team lieblingsmensch)
-  - name: "tl: Daily Standup"
-    agent: "tl"
-    schedule: "45 9 * * *"
-    message: "Good morning team! Summarize what needs attention today."
-  - name: "tl: Night Shift"
-    agent: "tl"
-    schedule: "15 23 * * *"
-    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "tl: Weekly Review"
-    agent: "tl"
-    schedule: "15 15 * * 5"
-    message: "Weekly review. What was accomplished this week? What is pending?"
-  - name: "tl: Weekly Planning"
-    agent: "tl"
-    schedule: "15 10 * * 1"
-    message: "Weekly planning. Review past week, plan upcoming week priorities."
+  # manon (temporarily disabled)
+  # - name: "manon: Daily Standup"
+  #   agent: "manon"
+  #   schedule: "0 10 * * *"
+  #   message: "Good morning! Summarize what needs my attention today."
+  # - name: "manon: Night Shift"
+  #   agent: "manon"
+  #   schedule: "30 23 * * *"
+  #   message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
+  # - name: "manon: Weekly Review"
+  #   agent: "manon"
+  #   schedule: "30 15 * * 5"
+  #   message: "Weekly review. What was accomplished this week? What is pending?"
+  # - name: "manon: Weekly Planning"
+  #   agent: "manon"
+  #   schedule: "30 10 * * 1"
+  #   message: "Weekly planning. Review past week, plan upcoming week priorities."
+  # tl (temporarily disabled)
+  # - name: "tl: Daily Standup"
+  #   agent: "tl"
+  #   schedule: "45 9 * * *"
+  #   message: "Good morning team! Summarize what needs attention today."
+  # - name: "tl: Night Shift"
+  #   agent: "tl"
+  #   schedule: "15 23 * * *"
+  #   message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
+  # - name: "tl: Weekly Review"
+  #   agent: "tl"
+  #   schedule: "15 15 * * 5"
+  #   message: "Weekly review. What was accomplished this week? What is pending?"
+  # - name: "tl: Weekly Planning"
+  #   agent: "tl"
+  #   schedule: "15 10 * * 1"
+  #   message: "Weekly planning. Review past week, plan upcoming week priorities."
 
 # MCP plugin configuration
 openclaw_mcp_adapter:
@@ -130,6 +133,11 @@ openclaw_mcp_adapter:
   codex_version: "0.98.0"        # Pin for reproducibility; update intentionally
   codex_memory_limit: "2g"       # Prevent runaway Codex from exhausting VPS RAM
   codex_proxy_port: 8787         # Port for the credential-injecting reverse proxy
+  # Claude Code settings
+  claude_code_docker_image: "claude-code-mcp:latest"
+  claude_code_version: "2.1.38"     # Pin @anthropic-ai/claude-code CLI for reproducibility
+  claude_code_mcp_version: "2.0.3"  # Pin @pandysp/claude-code-mcp server for reproducibility
+  claude_code_memory_limit: "2g"    # Monitor and adjust — Claude Code may need more than Codex
   servers:
     # GitHub MCP servers (one per agent, each with its own PAT)
     - name: "github"
@@ -155,6 +163,19 @@ openclaw_mcp_adapter:
       cwd: "/home/ubuntu/.openclaw/workspace-manon"
     - name: "codex-tl"
       type: "codex"
+      agent_id: "tl"
+      cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    # Claude Code MCP servers (one per agent, reuses claude_setup_token, workspace-scoped cwd)
+    - name: "claude"
+      type: "claude-code"
+      agent_id: "main"
+      cwd: "/home/ubuntu/.openclaw/workspace"
+    - name: "claude-manon"
+      type: "claude-code"
+      agent_id: "manon"
+      cwd: "/home/ubuntu/.openclaw/workspace-manon"
+    - name: "claude-tl"
+      type: "claude-code"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
 

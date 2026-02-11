@@ -1,0 +1,8 @@
+FROM node:20-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code@{{ openclaw_mcp_adapter.claude_code_version }} \
+                      @pandysp/claude-code-mcp@{{ openclaw_mcp_adapter.claude_code_mcp_version }} \
+    && find / -xdev -perm /4000 -type f -exec chmod u-s {} +
+USER node

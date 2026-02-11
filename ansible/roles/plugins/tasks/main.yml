@@ -236,6 +236,16 @@
     label: "{{ item.name }}"
   when: codex_auth_json | default('') | length > 0
 
+- name: Ensure agent workspace directories exist for Claude Code containers
+  ansible.builtin.file:
+    path: "{{ item.cwd }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: claude_setup_token | default('') | length > 0
+
 - name: Build Codex MCP Docker image
   when: codex_auth_json | default('') | length > 0
   block:
@@ -389,6 +399,129 @@
           {{ gateway_crash_logs.stdout | default('(no logs captured)') }}
           Manual recovery: ssh ubuntu@<host> 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100'
 
+- name: Build Claude Code MCP Docker image
+  when: claude_setup_token | default('') | length > 0
+  block:
+    - name: Check if Claude Code MCP image exists
+      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.claude_code_docker_image }}\""
+      register: claude_code_image_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create Claude Code MCP build directory
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/claude-code-mcp-build
+        state: directory
+        mode: "0755"
+
+    - name: Template Claude Code MCP Dockerfile
+      ansible.builtin.template:
+        src: Dockerfile.claude-code-mcp.j2
+        dest: /home/ubuntu/.openclaw/claude-code-mcp-build/Dockerfile
+        mode: "0644"
+      register: claude_code_dockerfile_changed
+
+    - name: Build Claude Code MCP Docker image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker build -t "{{ openclaw_mcp_adapter.claude_code_docker_image }}" /home/ubuntu/.openclaw/claude-code-mcp-build/
+      args:
+        executable: /bin/bash
+      when: claude_code_image_check.rc != 0 or claude_code_dockerfile_changed.changed or (force_claude_code_rebuild | bool)
+      register: claude_code_image_build
+
+    - name: Verify Claude Code MCP image was built
+      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.claude_code_docker_image }}\""
+      changed_when: false
+
+    - name: Smoke test Claude Code MCP image (version check)
+      ansible.builtin.shell: |
+        docker run --rm "{{ openclaw_mcp_adapter.claude_code_docker_image }}" claude --version
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: claude_code_image_build is changed
+
+    - name: Smoke test Claude Code MCP image with hardened flags
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm \
+          --cap-drop ALL \
+          --security-opt no-new-privileges \
+          --read-only \
+          --tmpfs /tmp:size=256m \
+          --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+          "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
+          sh -c 'test -x $(which claude) && test -x $(which claude-code-mcp) && echo "binaries-ok"'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: claude_code_image_build is changed
+
+    - name: Remove Claude Code MCP containers after image rebuild
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -aq --filter "label=openclaw-role=claude-code-mcp")
+        if [ -n "$containers" ]; then
+          echo "$containers" | xargs docker rm -f
+        fi
+      args:
+        executable: /bin/bash
+      register: claude_code_container_removal
+      changed_when: claude_code_container_removal.stdout | length > 0
+      when: claude_code_image_build is changed
+
+    - name: Verify no Claude Code MCP containers remain after cleanup
+      ansible.builtin.shell: |
+        set -euo pipefail
+        count=$(docker ps -aq --filter "label=openclaw-role=claude-code-mcp" | wc -l)
+        if [ "$count" -ne 0 ]; then
+          echo "ERROR: $count Claude Code MCP containers still present after removal"
+          docker ps -a --filter "label=openclaw-role=claude-code-mcp" --format '{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Image{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}'
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: claude_code_container_removal is changed
+
+    - name: Restart gateway to pick up new Claude Code MCP image
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: restarted
+        scope: user
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      when: claude_code_image_build is changed
+
+    - name: Wait for gateway to be healthy after Claude Code image rebuild
+      ansible.builtin.command: openclaw health
+      register: claude_code_health_check
+      retries: 5
+      delay: 3
+      until: claude_code_health_check.rc == 0
+      changed_when: false
+      when: claude_code_image_build is changed
+
+  rescue:
+    - name: Capture gateway logs for Claude Code diagnosis
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR=/run/user/1000
+        journalctl --user -u openclaw-gateway --since "2 minutes ago" --no-pager | tail -50
+      args:
+        executable: /bin/bash
+      register: gateway_crash_logs_claude
+      failed_when: false
+
+    - name: Report gateway failure with Claude Code diagnostic context
+      ansible.builtin.fail:
+        msg: |
+          Gateway failed health check after Claude Code MCP image rebuild.
+          Recent gateway logs:
+          {{ gateway_crash_logs_claude.stdout | default('(no logs captured)') }}
+          Manual recovery: ssh ubuntu@<host> 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100'
+
 - name: Validate token variable names are defined
   ansible.builtin.assert:
     that:
@@ -408,6 +541,14 @@
     mode: "0600"
   no_log: true
   loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
+
+- name: Write Claude setup token to temp file
+  ansible.builtin.copy:
+    content: "{{ claude_setup_token }}"
+    dest: "/tmp/ansible-mcp-claude-setup-token"
+    mode: "0600"
+  no_log: true
+  when: claude_setup_token | default('') | length > 0
 
 - name: Build and write plugin config JSON
   ansible.builtin.shell: |
@@ -477,6 +618,46 @@
     {% endfor %}
     fi
 
+    # Claude Code servers — containerized with docker run -i (stdio piped through Docker)
+    # Security: containers receive claude_setup_token as ANTHROPIC_API_KEY env var.
+    # Token has user:inference scope only — same as what powers the gateway.
+    CLAUDE_IMAGE="{{ openclaw_mcp_adapter.claude_code_docker_image }}"
+    CLAUDE_MEM="{{ openclaw_mcp_adapter.claude_code_memory_limit | default('2g') }}"
+    CLAUDE_TOKEN_FILE="/tmp/ansible-mcp-claude-setup-token"
+    if [ -f "$CLAUDE_TOKEN_FILE" ]; then
+        CLAUDE_TOKEN=$(cat "$CLAUDE_TOKEN_FILE")
+        if [ -z "$CLAUDE_TOKEN" ]; then
+            echo "ERROR: Claude setup token file exists but is empty"
+            exit 1
+        fi
+    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') %}
+        DOCKER_ARGS=$(jq -n \
+            --arg ws "{{ srv.cwd }}" \
+            --arg img "$CLAUDE_IMAGE" \
+            --arg agent "{{ srv.agent_id }}" \
+            --arg mem "$CLAUDE_MEM" \
+            --arg api_key "$CLAUDE_TOKEN" \
+            '["run","--rm","-i","--init","--net=bridge",
+              "--cap-drop","ALL",
+              "--security-opt","no-new-privileges",
+              "--read-only",
+              "--tmpfs","/tmp:size=256m",
+              "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
+              "--pids-limit","100",
+              "--cpus","2",
+              ("--memory=" + $mem),("--memory-swap=" + $mem),
+              "--label","openclaw-role=claude-code-mcp",
+              "--label",("openclaw-agent=" + $agent),
+              "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+              "-e",("CLAUDE_CODE_OAUTH_TOKEN=" + $api_key),
+              "-w","/workspace",
+              $img,
+              "claude-code-mcp"]')
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
+    {% endfor %}
+    fi
+
     # Build final config
     CONFIG=$(jq -n --argjson prefix "$TOOL_PREFIX" --argjson servers "$SERVERS" \
         '{toolPrefix: $prefix, servers: $servers}')
@@ -530,6 +711,11 @@
         state: absent
       loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
+    - name: Clean up Claude setup token temp file
+      ansible.builtin.file:
+        path: /tmp/ansible-mcp-claude-setup-token
+        state: absent
+
 - name: Flush handlers to restart gateway before verification
   ansible.builtin.meta: flush_handlers
 
@@ -570,7 +756,7 @@
 # Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "codex-tl_*").
 # Safe because toolPrefix uses "_" while server names use "-" as separator,
 # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "codex-manon_*", "codex-tl_*"]
+# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "codex-manon_*", "codex-tl_*", "claude-manon_*", "claude-tl_*"]
 
 - name: Validate server agent_id values match defined agents
   ansible.builtin.assert:

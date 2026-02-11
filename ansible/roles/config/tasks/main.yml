@@ -114,6 +114,7 @@
         openclaw config set agents.defaults.sandbox.workspaceAccess {{ openclaw_sandbox_workspace_access }}
         openclaw config set agents.defaults.sandbox.docker.network {{ openclaw_sandbox_docker_network }}
         openclaw config set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
+        openclaw config set agents.defaults.sandbox.docker.workdir /workspace
       args:
         executable: /bin/bash
       notify: restart openclaw-gateway
