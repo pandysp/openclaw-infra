@@ -1,4 +1,27 @@
 ---
+# Resolve codex-proxy-net gateway IP if not already set (e.g. standalone --tags sandbox runs).
+# Needed by the plugins role for workspace git config files, not baked into the image.
+- name: Check if codex-proxy-net exists
+  ansible.builtin.command: docker network inspect codex-proxy-net
+  register: sandbox_proxy_net_check
+  changed_when: false
+  failed_when: false
+  when: codex_proxy_gateway_ip is not defined
+
+- name: Resolve codex-proxy-net gateway IP for standalone runs
+  ansible.builtin.shell: |
+    docker network inspect codex-proxy-net --format '{{ '{{' }}range .IPAM.Config{{ '}}{{' }}.Gateway{{ '}}{{' }}end{{ '}}' }}'
+  args:
+    executable: /bin/bash
+  register: sandbox_proxy_net_info
+  changed_when: false
+  when: codex_proxy_gateway_ip is not defined and sandbox_proxy_net_check.rc == 0
+
+- name: Set codex proxy gateway IP fact (standalone)
+  ansible.builtin.set_fact:
+    codex_proxy_gateway_ip: "{{ sandbox_proxy_net_info.stdout | trim }}"
+  when: codex_proxy_gateway_ip is not defined and sandbox_proxy_net_check.rc == 0
+
 - name: Check if base sandbox image exists
   ansible.builtin.command: docker image inspect openclaw-sandbox:trixie
   register: base_image_check

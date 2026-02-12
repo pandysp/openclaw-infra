@@ -28,7 +28,7 @@ openclaw_elevated_default: "off"
 # Sandbox settings
 openclaw_sandbox_mode: "all"
 openclaw_sandbox_workspace_access: "rw"
-openclaw_sandbox_docker_network: "bridge"
+openclaw_sandbox_docker_network: "codex-proxy-net"
 openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
 

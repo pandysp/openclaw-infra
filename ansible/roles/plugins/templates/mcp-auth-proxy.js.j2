@@ -3,9 +3,11 @@
 // on the codex-proxy-net Docker network.
 //
 // Routes:
-//   /*          → chatgpt.com (Bearer token injection for Codex)
-//   /anthropic/* → api.anthropic.com (credential injection for Claude Code + Pi)
-//                  Auto-detects token type: OAuth (sk-ant-oat*) → Bearer, API key → x-api-key
+//   /health         → health check with per-service status
+//   /github-<id>/*  → github.com (per-agent PAT injection for git clone)
+//   /anthropic/*    → api.anthropic.com (credential injection for Claude Code + Pi)
+//                     Auto-detects token type: OAuth (sk-ant-oat*) → Bearer, API key → x-api-key
+//   /*              → chatgpt.com (Bearer token injection for Codex)
 //
 // Zero npm dependencies. Listens on the Docker network gateway IP only,
 // so sandbox containers on the default bridge cannot reach it.
@@ -17,6 +19,7 @@
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const path = require('path');
 const { pipeline } = require('stream');
 
 const LISTEN_HOST = process.env.CODEX_PROXY_LISTEN || '127.0.0.1';
@@ -135,6 +138,51 @@ if (!watchAnthropicToken()) {
   const retryWatch = setInterval(() => {
     if (watchAnthropicToken()) clearInterval(retryWatch);
   }, 30000);
+}
+
+// --- GitHub token management (per-agent PATs from directory) ---
+
+const GITHUB_TOKENS_DIR = process.env.GITHUB_TOKENS_DIR || '/home/ubuntu/.openclaw/github-tokens';
+const GITHUB_OVERALL_TIMEOUT_MS = 600000; // 10 min for large git pushes
+const githubTokenCache = new Map(); // agent-id → { token, mtime }
+
+function getGitHubToken(agentId) {
+  const filePath = path.join(GITHUB_TOKENS_DIR, agentId);
+  try {
+    const stat = fs.statSync(filePath);
+    const cached = githubTokenCache.get(agentId);
+    if (cached && stat.mtimeMs === cached.mtime) return cached.token;
+    const token = fs.readFileSync(filePath, 'utf8').trim();
+    if (!token) return null;
+    githubTokenCache.set(agentId, { token, mtime: stat.mtimeMs });
+    log('info', 'Loaded GitHub token', { agent: agentId });
+    return token;
+  } catch (err) {
+    if (err.code !== 'ENOENT') log('error', 'Failed to read GitHub token', { agent: agentId, error: err.message });
+    return null;
+  }
+}
+
+function getGitHubAgents() {
+  try {
+    return fs.readdirSync(GITHUB_TOKENS_DIR).filter(f => !f.startsWith('.'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') log('warn', 'Cannot read GitHub tokens directory', { error: err.message });
+    return [];
+  }
+}
+
+// Watch for token rotation
+try {
+  fs.watch(GITHUB_TOKENS_DIR, (_, filename) => {
+    if (filename) {
+      log('info', 'GitHub token file changed, invalidating cache', { agent: filename });
+      githubTokenCache.delete(filename);
+    }
+  });
+  log('info', 'Watching GitHub tokens directory for changes');
+} catch (err) {
+  if (err.code !== 'ENOENT') log('warn', 'Cannot watch GitHub tokens directory', { error: err.message });
 }
 
 // --- Token refresh ---
@@ -391,6 +439,81 @@ function proxyAnthropicRequest(clientReq, clientRes, body) {
   clientRes.on('close', () => clearTimeout(overallTimer));
 }
 
+// --- GitHub proxy (streaming, per-agent PAT injection) ---
+
+function proxyGitHubRequest(clientReq, clientRes) {
+  // Parse /github-<agent-id>/owner/repo.git/... from URL
+  const match = clientReq.url.match(/^\/github-([^/]+)(\/.*)?$/);
+  if (!match) {
+    clientRes.writeHead(400, { 'Content-Type': 'application/json' });
+    clientRes.end(JSON.stringify({ error: 'bad_request', detail: 'Invalid GitHub proxy URL format' }));
+    return;
+  }
+
+  const agentId = match[1];
+  const upstreamPath = match[2] || '/';
+  const token = getGitHubToken(agentId);
+  if (!token) {
+    clientRes.writeHead(404, { 'Content-Type': 'application/json' });
+    clientRes.end(JSON.stringify({ error: 'no_token', detail: `No GitHub token for agent '${agentId}'` }));
+    return;
+  }
+
+  const headers = Object.assign({}, clientReq.headers);
+  delete headers.host;
+  delete headers.authorization;
+  headers.host = 'github.com';
+  headers.authorization = 'token ' + token;
+
+  const options = {
+    hostname: 'github.com',
+    port: 443,
+    path: upstreamPath,
+    method: clientReq.method,
+    headers: headers,
+    timeout: CONNECT_TIMEOUT_MS,
+  };
+
+  const upReq = https.request(options, (upRes) => {
+    clientRes.writeHead(upRes.statusCode, upRes.headers);
+    pipeline(upRes, clientRes, (err) => {
+      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE')
+        log('error', 'GitHub stream error', { error: err.message, agent: agentId });
+    });
+  });
+
+  upReq.on('timeout', () => upReq.destroy(new Error('GitHub connect timeout')));
+  upReq.on('socket', (socket) => {
+    socket.once('connect', () => {
+      upReq.setTimeout(RESPONSE_TIMEOUT_MS, () =>
+        upReq.destroy(new Error('GitHub response timeout')));
+    });
+  });
+  upReq.on('error', (err) => {
+    log('error', 'GitHub upstream error', { error: err.message, path: upstreamPath, agent: agentId });
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { 'Content-Type': 'application/json' });
+      clientRes.end(JSON.stringify({ error: 'upstream_error', detail: err.message }));
+    } else {
+      clientRes.destroy();
+    }
+    clientReq.destroy();
+  });
+
+  // Stream request body (git packfiles can be huge — do NOT buffer)
+  clientReq.on('error', (err) => {
+    log('error', 'GitHub client request error', { error: err.message, agent: agentId });
+    upReq.destroy();
+  });
+  clientReq.pipe(upReq);
+
+  const overallTimer = setTimeout(() => {
+    upReq.destroy(new Error('GitHub overall timeout'));
+    clientReq.destroy();
+  }, GITHUB_OVERALL_TIMEOUT_MS);
+  clientRes.on('close', () => clearTimeout(overallTimer));
+}
+
 // --- HTTP server ---
 
 const server = http.createServer((req, res) => {
@@ -398,15 +521,23 @@ const server = http.createServer((req, res) => {
   if (req.url === '/health' && req.method === 'GET') {
     const codexToken = getAccessToken();
     const anthropicToken = getAnthropicToken();
+    const githubAgents = getGitHubAgents();
     const codexHealthy = !!codexToken && !circuitOpen;
     const anthropicHealthy = !!anthropicToken;
-    const healthy = codexHealthy || anthropicHealthy;
+    const healthy = codexHealthy || anthropicHealthy || githubAgents.length > 0;
     res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: healthy ? 'healthy' : 'unhealthy',
       codex: { hasToken: !!codexToken, healthy: codexHealthy, circuitOpen, circuitOpenUntil: circuitOpen ? new Date(circuitOpenUntil).toISOString() : null },
       anthropic: { hasToken: !!anthropicToken, healthy: anthropicHealthy, authMethod: anthropicToken && anthropicToken.startsWith('sk-ant-oat') ? 'bearer' : 'api-key' },
+      github: { agents: githubAgents, hasTokens: githubAgents.length > 0 },
     }));
+    return;
+  }
+
+  // GitHub route — per-agent PAT injection for git clone/push (streaming, no body buffering)
+  if (req.url.match(/^\/github-[^/]+/)) {
+    proxyGitHubRequest(req, res);
     return;
   }
 

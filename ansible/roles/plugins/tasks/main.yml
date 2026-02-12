@@ -152,10 +152,38 @@
   no_log: true
   when: claude_setup_token | default('') | length > 0
 
+- name: Set proxy_required fact
+  ansible.builtin.set_fact:
+    proxy_required: >-
+      {{ (codex_auth_json | default('') | length > 0) or
+         (claude_setup_token | default('') | length > 0) or
+         (github_token | default('') | length > 0) or
+         (github_token_manon | default('') | length > 0) or
+         (github_token_tl | default('') | length > 0) }}
+
+- name: Ensure GitHub tokens directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw/github-tokens
+    state: directory
+    mode: "0700"
+  when: proxy_required | bool
+
+- name: Write per-agent GitHub token files
+  ansible.builtin.copy:
+    content: "{{ lookup('vars', item.token_var, default='') }}"
+    dest: "/home/ubuntu/.openclaw/github-tokens/{{ item.agent_id }}"
+    mode: "0600"
+  no_log: true
+  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | list }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  when: lookup('vars', item.token_var, default='') | length > 0
+  register: github_tokens_changed
+
 - name: Create codex-proxy-net Docker network
   community.docker.docker_network:
     name: codex-proxy-net
-  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
+  when: proxy_required | bool
 
 - name: Get codex-proxy-net gateway IP
   ansible.builtin.shell: |
@@ -164,12 +192,12 @@
     executable: /bin/bash
   register: codex_proxy_net_info
   changed_when: false
-  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
+  when: proxy_required | bool
 
 - name: Set codex proxy gateway IP fact
   ansible.builtin.set_fact:
     codex_proxy_gateway_ip: "{{ codex_proxy_net_info.stdout | trim }}"
-  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
+  when: proxy_required | bool
 
 - name: Allow codex-proxy-net containers to reach proxy port
   become: true
@@ -178,10 +206,10 @@
     from_ip: "{{ codex_proxy_gateway_ip | regex_replace('\\.[0-9]+$', '.0/16') }}"
     to_port: "{{ openclaw_mcp_adapter.codex_proxy_port }}"
     proto: tcp
-  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
+  when: proxy_required | bool
 
 - name: Deploy mcp-auth-proxy
-  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
+  when: proxy_required | bool
   block:
     - name: Ensure systemd user directory exists
       ansible.builtin.file:
@@ -244,6 +272,46 @@
       delay: 2
       until: proxy_health.rc == 0
       changed_when: false
+
+- name: Ensure agent workspace directories exist for git proxy config
+  ansible.builtin.file:
+    path: "{{ item.workspace_dir }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  when:
+    - codex_proxy_gateway_ip is defined
+    - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
+
+- name: Write per-agent workspace .git-proxy-config files
+  ansible.builtin.copy:
+    content: |
+      [url "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/github-{{ item.agent_id }}/"]
+          insteadOf = https://github.com/
+          insteadOf = git@github.com:
+    dest: "{{ item.workspace_dir }}/.git-proxy-config"
+    mode: "0644"
+  loop: "{{ openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  when:
+    - codex_proxy_gateway_ip is defined
+    - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
+
+- name: Ensure .git-proxy-config is in workspace .gitignore
+  ansible.builtin.lineinfile:
+    path: "{{ item.workspace_dir }}/.gitignore"
+    line: ".git-proxy-config"
+    create: true
+    mode: "0644"
+  loop: "{{ openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  when:
+    - codex_proxy_gateway_ip is defined
+    - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
 
 - name: Template Codex config.toml for proxy routing
   ansible.builtin.template:
@@ -377,8 +445,9 @@
       --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
       -e "ANTHROPIC_BASE_URL=http://custom-test-host:9999/anthropic" \
       -v /tmp/validate-pi-sdk.js:/tmp/validate-pi-sdk.js:ro \
+      --entrypoint node \
       "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
-      node /tmp/validate-pi-sdk.js
+      /tmp/validate-pi-sdk.js
     echo "=== Network test ==="
     docker run --rm \
       --network=codex-proxy-net \
@@ -386,8 +455,9 @@
       --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
       -e "PROXY_HEALTH_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health" \
       -v /tmp/validate-proxy-network.js:/tmp/validate-proxy-network.js:ro \
+      --entrypoint node \
       "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
-      node /tmp/validate-proxy-network.js
+      /tmp/validate-proxy-network.js
     echo "VALIDATED: Pi SDK respects ANTHROPIC_BASE_URL + proxy reachable"
   args:
     executable: /bin/bash
@@ -753,7 +823,7 @@
 
     - name: Smoke test Pi MCP image (binary check)
       ansible.builtin.shell: |
-        docker run --rm "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" sh -c 'which pi-mcp-server && echo "binary-ok"'
+        docker run --rm --entrypoint sh "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" -c 'which pi-mcp-server && echo "binary-ok"'
       args:
         executable: /bin/bash
       changed_when: false
@@ -769,11 +839,11 @@
           --read-only \
           --tmpfs /tmp:size=256m \
           --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
-          -e PI_MCP_API_KEY=proxy \
-          -e ANTHROPIC_API_KEY=proxy \
+          -e ANTHROPIC_OAUTH_TOKEN=sk-ant-oat-proxy \
           -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+          --entrypoint sh \
           "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
-          sh -c 'test -x $(which pi-mcp-server) && echo "hardened-ok"'
+          -c 'test -x $(which pi-mcp-server) && echo "hardened-ok"'
       args:
         executable: /bin/bash
       changed_when: false
@@ -788,15 +858,14 @@
           --cap-drop ALL --security-opt no-new-privileges --read-only \
           --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
           --network=codex-proxy-net \
-          -e PI_MCP_API_KEY=proxy \
-          -e ANTHROPIC_API_KEY=proxy \
+          -e ANTHROPIC_OAUTH_TOKEN=sk-ant-oat-proxy \
           -e PI_MCP_PROVIDER=anthropic \
           -e "PI_MCP_MODEL={{ openclaw_mcp_adapter.pi_mcp_model }}" \
           -e PI_MCP_CWD=/tmp \
           -e PI_MCP_SANDBOX=false \
           -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
           "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
-          pi-mcp-server 2>&1 || true)
+          2>&1 || true)
         if echo "$RESULT" | grep -q "pi-mcp-server started"; then
             echo "auth-smoke-ok: server initialized via proxy"
         elif echo "$RESULT" | grep -qi "invalid.*api.*key\|unauthorized\|authentication"; then
@@ -1043,8 +1112,7 @@
               "--label","openclaw-role=pi-mcp",
               "--label",("openclaw-agent=" + $agent),
               "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-              "-e","PI_MCP_API_KEY=proxy",
-              "-e","ANTHROPIC_API_KEY=proxy",
+              "-e","ANTHROPIC_OAUTH_TOKEN=sk-ant-oat-proxy",
               "-e","PI_MCP_PROVIDER=anthropic",
               "-e",("PI_MCP_MODEL=" + $model),
               "-e",("PI_MCP_THINKING=" + $thinking),
@@ -1054,8 +1122,7 @@
               "-e","PI_MCP_SESSION_IDLE_TIMEOUT=1800",
               "-e",("ANTHROPIC_BASE_URL=" + $base_url),
               "-w","/workspace",
-              $img,
-              "pi-mcp-server"]')
+              $img]')
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
             '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
     {% endfor %}
