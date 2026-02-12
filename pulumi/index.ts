@@ -17,8 +17,8 @@ const claudeSetupToken = config.requireSecret("claudeSetupToken");
 const telegramBotToken = config.getSecret("telegramBotToken");
 const telegramUserId = config.get("telegramUserId");
 
-// Optional Brave Search API key (set via `pulumi config set --secret`)
-const braveApiKey = config.getSecret("braveApiKey");
+// Optional xAI API key for Grok web search (set via `pulumi config set --secret`)
+const xaiApiKey = config.getSecret("xaiApiKey");
 
 // Optional GitHub PATs for MCP adapter (set via `pulumi config set --secret`)
 const githubToken = config.getSecret("githubToken");
@@ -125,7 +125,7 @@ const ansibleProvision = new command.local.Command(
             PROVISION_WORKSPACE_TL_DEPLOY_KEY:
                 workspaceDeployKeyTl.privateKeyOpenssh,
             PROVISION_TAILSCALE_HOSTNAME: serverName,
-            PROVISION_BRAVE_API_KEY: braveApiKey || "",
+            PROVISION_XAI_API_KEY: xaiApiKey || "",
             PROVISION_GITHUB_TOKEN: githubToken || "",
             PROVISION_GITHUB_TOKEN_MANON: githubTokenManon || "",
             PROVISION_GITHUB_TOKEN_TL: githubTokenTl || "",

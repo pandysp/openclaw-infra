@@ -21,8 +21,8 @@
 #   # Workspace git sync (backs up ~/.openclaw/workspace to a private repo)
 #   pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
 #
-#   # Web search via Brave Search API (free tier: 2,000 queries/mo)
-#   pulumi config set braveApiKey --secret            # From brave.com/search/api
+#   # Web search via Grok (xAI) — agentic search with page reading
+#   pulumi config set xaiApiKey --secret              # From x.ai/api
 #
 #   # Ready-to-use URL in Pulumi outputs (cosmetic, not required for access)
 #   pulumi config set tailnetDnsName "your-tailnet.ts.net"

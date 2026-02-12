@@ -8,8 +8,8 @@
   loop:
     - content: "{{ gateway_token }}"
       dest: /tmp/ansible-gateway-token
-    - content: "{{ brave_api_key | default('') }}"
-      dest: /tmp/ansible-brave-api-key
+    - content: "{{ xai_api_key | default('') }}"
+      dest: /tmp/ansible-xai-api-key
     - content: "{{ openclaw_custom_models | to_json }}"
       dest: /tmp/ansible-custom-models
     - content: "{{ openclaw_model_fallbacks | to_json }}"
@@ -21,23 +21,27 @@
       ansible.builtin.shell: |
         set -euo pipefail
         GATEWAY_TOKEN=$(cat /tmp/ansible-gateway-token)
-        BRAVE_API_KEY=$(cat /tmp/ansible-brave-api-key)
+        XAI_API_KEY=$(cat /tmp/ansible-xai-api-key)
 
         # Auth: token mode
         openclaw config set gateway.auth.mode token
         openclaw config set gateway.auth.token "$GATEWAY_TOKEN"
         openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
 
-        # Web search (Brave)
-        {% if brave_api_key is defined and brave_api_key | length > 0 %}
-        if [ -z "$BRAVE_API_KEY" ]; then
-            echo "ERROR: Brave API key template was non-empty but runtime value is empty"
+        # Web search (Grok / xAI)
+        {% if xai_api_key is defined and xai_api_key | length > 0 %}
+        if [ -z "$XAI_API_KEY" ]; then
+            echo "ERROR: xAI API key template was non-empty but runtime value is empty"
             exit 1
         fi
-        openclaw config set tools.web.search.provider brave
-        openclaw config set tools.web.search.apiKey "$BRAVE_API_KEY"
+        # Set new Grok provider FIRST
+        openclaw config set tools.web.search.provider grok
+        openclaw config set tools.web.search.grok.apiKey "$XAI_API_KEY"
+        openclaw config set tools.web.search.timeoutSeconds 60
+        # Clean up old Brave config path (idempotent for fresh installs)
+        openclaw config unset tools.web.search.apiKey 2>/dev/null || true
         {% else %}
-        for key in tools.web.search.provider tools.web.search.apiKey; do
+        for key in tools.web.search.provider tools.web.search.apiKey tools.web.search.grok.apiKey tools.web.search.timeoutSeconds; do
             output=$(openclaw config unset "$key" 2>&1) || {
                 if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
                     true
@@ -143,6 +147,6 @@
         state: absent
       loop:
         - /tmp/ansible-gateway-token
-        - /tmp/ansible-brave-api-key
+        - /tmp/ansible-xai-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
