@@ -13,3 +13,8 @@ Thumbs.db
 .npm-packages/
 .bin/
 node_modules/
+
+# Ephemeral sandbox caches (pip, npm, model weights, etc.)
+.cache/
+.local/
+.npm/
