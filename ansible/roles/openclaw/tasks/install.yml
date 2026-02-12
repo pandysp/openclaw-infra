@@ -4,12 +4,28 @@
     path: /home/ubuntu/.npm-global/bin/openclaw
   register: openclaw_binary
 
-- name: Install OpenClaw via official script
+- name: Get installed OpenClaw version
+  ansible.builtin.command: openclaw --version
+  register: openclaw_installed_version
+  changed_when: false
+  when: openclaw_binary.stat.exists
+
+- name: Get latest available OpenClaw version
+  ansible.builtin.shell: npm view openclaw version 2>/dev/null
+  register: openclaw_latest_version
+  changed_when: false
+  when: openclaw_binary.stat.exists and not (force_openclaw_reinstall | default(false))
+
+- name: Install or upgrade OpenClaw via official script
   ansible.builtin.shell: |
     export OPENCLAW_NO_ONBOARD=1
     export OPENCLAW_NO_PROMPT=1
     curl -fsSL https://openclaw.ai/install.sh | bash
-  when: not openclaw_binary.stat.exists
+  when: >
+    not openclaw_binary.stat.exists
+    or (force_openclaw_reinstall | default(false))
+    or (openclaw_latest_version.stdout | default('') != ''
+        and openclaw_installed_version.stdout | default('') != openclaw_latest_version.stdout | default(''))
 
 - name: Create PATH profile script
   become: true
