@@ -202,6 +202,26 @@ openclaw_mcp_adapter:
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
 
+# Claude Code plugins for MCP containers
+claude_code_plugins:
+  config_dir: "/home/ubuntu/.openclaw/claude-code-plugins"
+  marketplaces:
+    - repo: "anthropics/claude-plugins-official"
+    - repo: "pandysp/claude-plugins"
+  plugins:
+    - "code-review"
+    - "code-simplifier"
+    - "commit-commands"
+    - "feature-dev"
+    - "frontend-design"
+    - "hookify"
+    - "plugin-dev"
+    - "pr-review-toolkit"
+    - "ralph-loop"
+    - "security-guidance"
+    - "ty-lsp@pandysp"
+    - "typescript-lsp@pandysp"
+
 # Workspace git sync definitions (per-agent)
 openclaw_workspaces:
   - agent_id: "main"

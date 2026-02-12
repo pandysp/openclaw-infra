@@ -95,8 +95,132 @@
     global: true
     state: present
   environment:
-    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_env.PATH }}"
+    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
   loop: "{{ mcp_npm_packages }}"
+
+- name: Install Claude Code CLI on host for plugin management
+  community.general.npm:
+    name: "@anthropic-ai/claude-code"
+    version: "{{ openclaw_mcp_adapter.claude_code_version }}"
+    global: true
+    state: present
+  environment:
+    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
+  when: claude_code_plugins is defined and claude_code_plugins.plugins | length > 0
+
+- name: Verify Claude Code CLI version
+  ansible.builtin.command: claude --version
+  environment:
+    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
+  register: claude_cli_version
+  changed_when: false
+  failed_when: openclaw_mcp_adapter.claude_code_version not in claude_cli_version.stdout
+  when: claude_code_plugins is defined and claude_code_plugins.plugins | length > 0
+
+- name: Install Claude Code plugins for MCP containers
+  when: claude_code_plugins is defined and claude_code_plugins.plugins | length > 0
+  block:
+    - name: Ensure plugins config directory exists
+      ansible.builtin.file:
+        path: "{{ claude_code_plugins.config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Add plugin marketplaces
+      ansible.builtin.shell: |
+        set -euo pipefail
+        output=$(claude plugin marketplace add "{{ item.repo }}" 2>&1) || {
+          if echo "$output" | grep -qi "already added\|already exists\|already registered\|already installed"; then
+            echo "OK_EXISTS"
+            exit 0
+          fi
+          echo "FAILED: $output" >&2
+          exit 1
+        }
+        echo "$output"
+      args:
+        executable: /bin/bash
+      environment:
+        CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
+        PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
+      loop: "{{ claude_code_plugins.marketplaces }}"
+      loop_control:
+        label: "{{ item.repo }}"
+      register: marketplace_result
+      changed_when: "'Successfully added' in marketplace_result.stdout"
+
+    - name: Update plugin marketplaces
+      ansible.builtin.shell: |
+        set -euo pipefail
+        claude plugin marketplace update 2>&1
+      args:
+        executable: /bin/bash
+      environment:
+        CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
+        PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
+      register: marketplace_update_result
+      changed_when: false
+
+    - name: Install plugins
+      ansible.builtin.shell: |
+        set -euo pipefail
+        output=$(claude plugin install "{{ item }}" 2>&1) || {
+          if echo "$output" | grep -qi "already installed"; then
+            echo "OK_EXISTS"
+            exit 0
+          fi
+          echo "FAILED: $output" >&2
+          exit 1
+        }
+        echo "$output"
+      args:
+        executable: /bin/bash
+      environment:
+        CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
+        PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
+      loop: "{{ claude_code_plugins.plugins }}"
+      loop_control:
+        label: "{{ item }}"
+      register: plugin_result
+      changed_when: "'Successfully installed' in plugin_result.stdout"
+
+    - name: Verify plugins directory exists
+      ansible.builtin.stat:
+        path: "{{ claude_code_plugins.config_dir }}/plugins"
+      register: plugins_dir
+      failed_when: not plugins_dir.stat.exists or not plugins_dir.stat.isdir
+
+    - name: Remove Claude Code MCP containers to pick up plugin changes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -aq --filter "label=openclaw-role=claude-code-mcp")
+        if [ -n "$containers" ]; then
+          echo "$containers" | xargs docker rm -f
+          echo "REMOVED"
+        else
+          echo "NONE"
+        fi
+      args:
+        executable: /bin/bash
+      register: plugin_container_cleanup
+      changed_when: "'REMOVED' in plugin_container_cleanup.stdout"
+      notify: restart openclaw-gateway
+      when: marketplace_result is changed or plugin_result is changed
+
+  rescue:
+    - name: Plugin installation failed — show diagnostics
+      ansible.builtin.debug:
+        msg: |
+          Plugin installation failed.
+          Marketplace add results: {{ marketplace_result.results | default([]) | map(attribute='stdout') | list }}
+          Marketplace update stdout: {{ marketplace_update_result.stdout | default('(did not run)') }}
+          Marketplace update stderr: {{ marketplace_update_result.stderr | default('(did not run)') }}
+          Plugin results: {{ plugin_result.results | default([]) | map(attribute='stdout') | list }}
+          Config dir: {{ claude_code_plugins.config_dir }}
+
+    - name: Fail with actionable message
+      ansible.builtin.fail:
+        msg: "Claude Code plugin installation failed. Check diagnostics above. Re-run with -vvv for details."
 
 - name: Resolve mcp-server-github binary path
   ansible.builtin.shell: |
@@ -1061,6 +1185,9 @@
             --arg agent "{{ srv.agent_id }}" \
             --arg mem "$CLAUDE_MEM" \
             --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+    {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
+            --arg plugins "{{ claude_code_plugins.config_dir }}/plugins" \
+    {% endif %}
             '["run","--rm","-i","--init","--network=codex-proxy-net",
               "--cap-drop","ALL",
               "--security-opt","no-new-privileges",
@@ -1073,6 +1200,9 @@
               "--label","openclaw-role=claude-code-mcp",
               "--label",("openclaw-agent=" + $agent),
               "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+    {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
+              "--mount",("type=bind,source=" + $plugins + ",target=/home/node/.claude/plugins,readonly"),
+    {% endif %}
               "-e","ANTHROPIC_API_KEY=proxy",
               "-e",("ANTHROPIC_BASE_URL=" + $base_url),
               "-w","/workspace",
