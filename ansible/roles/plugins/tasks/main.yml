@@ -1194,6 +1194,11 @@
     CLAUDE_IMAGE="{{ openclaw_mcp_adapter.claude_code_docker_image }}"
     CLAUDE_MEM="{{ openclaw_mcp_adapter.claude_code_memory_limit | default('2g') }}"
     if [ -n "$PROXY_GW" ]; then
+    {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
+    CLAUDE_CMD="mkdir -p /home/node/.claude && cp -a /opt/claude-config/. /home/node/.claude/ && exec claude-code-mcp"
+    {% else %}
+    CLAUDE_CMD="exec claude-code-mcp"
+    {% endif %}
     {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') %}
         DOCKER_ARGS=$(jq -n \
             --arg ws "{{ srv.cwd }}" \
@@ -1202,8 +1207,9 @@
             --arg mem "$CLAUDE_MEM" \
             --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
     {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-            --arg plugins "{{ claude_code_plugins.config_dir }}/plugins" \
+            --arg config_dir "{{ claude_code_plugins.config_dir }}" \
     {% endif %}
+            --arg cmd "$CLAUDE_CMD" \
             '["run","--rm","-i","--init","--network=codex-proxy-net",
               "--cap-drop","ALL",
               "--security-opt","no-new-privileges",
@@ -1217,13 +1223,13 @@
               "--label",("openclaw-agent=" + $agent),
               "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
     {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-              "--mount",("type=bind,source=" + $plugins + ",target=/home/node/.claude/plugins,readonly"),
+              "--mount",("type=bind,source=" + $config_dir + ",target=/opt/claude-config,readonly"),
     {% endif %}
               "-e","ANTHROPIC_API_KEY=proxy",
               "-e",("ANTHROPIC_BASE_URL=" + $base_url),
               "-w","/workspace",
               $img,
-              "claude-code-mcp"]')
+              "sh","-c",$cmd]')
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
             '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
     {% endfor %}
