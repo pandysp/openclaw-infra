@@ -1,0 +1,333 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["python-docx", "openpyxl"]
+# ///
+"""extract - Text extraction for workspace binary files (server version).
+
+Extracts text from PDFs, images, .docx, and .xlsx files into a JSON cache
+that qmd indexes for search. Uses tesseract for OCR (Linux).
+
+Usage:
+    extract sync [--force]   Walk workspace, extract uncached/stale files, prune orphans
+    extract status           Show cache stats
+    extract clear            Wipe cache
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+VAULT = Path(__file__).resolve().parent.parent
+CACHE_DIR = VAULT / ".scripts" / "extract-cache"
+
+EXTENSIONS_PDF = {".pdf"}
+EXTENSIONS_IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+EXTENSIONS_DOCX = {".docx"}
+EXTENSIONS_XLSX = {".xlsx"}
+EXTENSIONS_ALL = EXTENSIONS_PDF | EXTENSIONS_IMAGE | EXTENSIONS_DOCX | EXTENSIONS_XLSX
+
+ENGINE_VERSIONS = {
+    "pdftotext": "1",
+    "tesseract": "1",
+    "python-docx": "1",
+    "openpyxl": "1",
+}
+
+SUBPROCESS_TIMEOUT = 60
+
+
+def cache_key(relative_path: str) -> str:
+    return hashlib.md5(relative_path.encode()).hexdigest() + ".json"
+
+
+def read_cache_entry(cache_path: Path) -> dict | None:
+    try:
+        return json.loads(cache_path.read_text())
+    except Exception:
+        return None
+
+
+def is_stale(entry: dict, stat: os.stat_result, engine: str) -> bool:
+    if entry.get("source_mtime") != stat.st_mtime:
+        return True
+    if entry.get("source_size") != stat.st_size:
+        return True
+    if entry.get("engine_version") != ENGINE_VERSIONS.get(engine, "1"):
+        return True
+    return False
+
+
+def find_extractable_files() -> list[Path]:
+    files = []
+    for root, dirs, filenames in os.walk(VAULT):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for name in filenames:
+            if Path(name).suffix.lower() in EXTENSIONS_ALL:
+                files.append(Path(root) / name)
+    return files
+
+
+def get_engine(ext: str) -> str:
+    if ext in EXTENSIONS_PDF:
+        return "pdftotext"
+    elif ext in EXTENSIONS_IMAGE:
+        return "tesseract"
+    elif ext in EXTENSIONS_DOCX:
+        return "python-docx"
+    elif ext in EXTENSIONS_XLSX:
+        return "openpyxl"
+    return "unknown"
+
+
+# --- Extraction engines ---
+
+
+def extract_pdf(file_path: Path) -> str:
+    result = subprocess.run(
+        ["pdftotext", str(file_path), "-"],
+        capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
+    )
+    text = result.stdout.strip()
+    if result.stderr.strip():
+        print(f"  pdftotext stderr: {result.stderr.strip()}", file=sys.stderr)
+
+    words = text.split()
+    if len(words) < 5 or (text and sum(c.isalpha() for c in text) / len(text) < 0.5):
+        ocr_text = extract_pdf_ocr(file_path)
+        if ocr_text and len(ocr_text.split()) > len(words):
+            return ocr_text
+
+    return text
+
+
+def extract_pdf_ocr(file_path: Path) -> str:
+    """OCR a scanned PDF by converting pages to images with pdftoppm, then running tesseract."""
+    if not shutil.which("pdftoppm"):
+        print(f"  WARNING: pdftoppm not found, skipping PDF OCR for {file_path.name}", file=sys.stderr)
+        return ""
+    if not shutil.which("tesseract"):
+        print(f"  WARNING: tesseract not found, skipping PDF OCR for {file_path.name}", file=sys.stderr)
+        return ""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Convert PDF pages to PPM images (max 10 pages to limit time)
+        try:
+            subprocess.run(
+                ["pdftoppm", "-r", "200", "-l", "10", str(file_path), os.path.join(tmpdir, "page")],
+                capture_output=True, timeout=SUBPROCESS_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"  WARNING: pdftoppm timed out for {file_path.name}", file=sys.stderr)
+            return ""
+        # OCR each page image
+        pages = sorted(Path(tmpdir).glob("page-*.ppm"))
+        if not pages:
+            return ""
+        texts = []
+        for page_img in pages:
+            try:
+                result = subprocess.run(
+                    ["tesseract", str(page_img), "stdout", "-l", "eng+deu"],
+                    capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
+                )
+                if result.stdout.strip():
+                    texts.append(result.stdout.strip())
+            except subprocess.TimeoutExpired:
+                print(f"  WARNING: tesseract timed out on {page_img.name}", file=sys.stderr)
+        return "\n\n".join(texts)
+
+
+def extract_image_ocr(file_path: Path) -> str:
+    if not shutil.which("tesseract"):
+        print(f"  WARNING: tesseract not found, skipping OCR for {file_path.name}", file=sys.stderr)
+        return ""
+    result = subprocess.run(
+        ["tesseract", str(file_path), "stdout", "-l", "eng+deu"],
+        capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
+    )
+    if result.returncode != 0:
+        print(f"  tesseract stderr: {result.stderr.strip()}", file=sys.stderr)
+    return result.stdout.strip()
+
+
+def extract_docx(file_path: Path) -> str:
+    from docx import Document
+    doc = Document(str(file_path))
+    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+    return "\n".join(paragraphs)
+
+
+def extract_xlsx(file_path: Path) -> str:
+    from openpyxl import load_workbook
+    wb = load_workbook(str(file_path), read_only=True, data_only=True)
+    lines = []
+    for sheet in wb.worksheets:
+        lines.append(f"[{sheet.title}]")
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            if any(cells):
+                lines.append("\t".join(cells))
+    wb.close()
+    return "\n".join(lines)
+
+
+EXTRACTORS = {
+    "pdftotext": extract_pdf,
+    "tesseract": extract_image_ocr,
+    "python-docx": extract_docx,
+    "openpyxl": extract_xlsx,
+}
+
+
+# --- Subcommands ---
+
+
+def cmd_sync(force: bool = False):
+    if not shutil.which("pdftotext"):
+        print("WARNING: pdftotext not found. PDF extraction disabled.", file=sys.stderr)
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    files = find_extractable_files()
+    if not files:
+        print("No extractable files found.")
+        return
+
+    extracted = 0
+    skipped = 0
+    errors = []
+
+    for file_path in sorted(files):
+        rel_path = str(file_path.relative_to(VAULT))
+        ext = file_path.suffix.lower()
+        engine = get_engine(ext)
+        key = cache_key(rel_path)
+        cache_path = CACHE_DIR / key
+
+        if not force and cache_path.exists():
+            entry = read_cache_entry(cache_path)
+            if entry:
+                stat = file_path.stat()
+                if not is_stale(entry, stat, engine):
+                    skipped += 1
+                    continue
+
+        try:
+            stat = file_path.stat()
+            extractor = EXTRACTORS[engine]
+            text = extractor(file_path)
+
+            entry = {
+                "path": rel_path,
+                "text": text,
+                "source_mtime": stat.st_mtime,
+                "source_size": stat.st_size,
+                "engine": engine,
+                "engine_version": ENGINE_VERSIONS[engine],
+            }
+            cache_path.write_text(json.dumps(entry, ensure_ascii=False))
+            extracted += 1
+            print(f"  {engine}: {rel_path}")
+        except Exception as e:
+            errors.append((rel_path, type(e).__name__, str(e)))
+            print(f"  ERROR: {rel_path} ({type(e).__name__}: {e})", file=sys.stderr)
+
+    pruned = 0
+    for cache_file in CACHE_DIR.glob("*.json"):
+        entry = read_cache_entry(cache_file)
+        if entry and not (VAULT / entry["path"]).exists():
+            cache_file.unlink()
+            pruned += 1
+
+    total = extracted + skipped + len(errors)
+    print(f"\nExtracted {extracted}/{total} files. {skipped} cached, {pruned} orphans pruned.")
+    if errors:
+        print(f"{len(errors)} errors:")
+        for path, etype, msg in errors:
+            print(f"  {path} ({etype}: {msg})")
+
+
+def cmd_status():
+    if not CACHE_DIR.exists():
+        print("No cache directory. Run 'extract sync' first.")
+        return
+
+    files = find_extractable_files()
+    file_paths = {str(f.relative_to(VAULT)) for f in files}
+
+    cached = 0
+    stale = 0
+    orphaned = 0
+
+    for cache_file in CACHE_DIR.glob("*.json"):
+        entry = read_cache_entry(cache_file)
+        if not entry:
+            continue
+        path = entry.get("path", "")
+        if path not in file_paths:
+            orphaned += 1
+            continue
+        file_path = VAULT / path
+        if file_path.exists():
+            ext = file_path.suffix.lower()
+            engine = get_engine(ext)
+            stat = file_path.stat()
+            if is_stale(entry, stat, engine):
+                stale += 1
+            else:
+                cached += 1
+
+    cached_paths = set()
+    for cache_file in CACHE_DIR.glob("*.json"):
+        entry = read_cache_entry(cache_file)
+        if entry:
+            cached_paths.add(entry.get("path", ""))
+    missing = len(file_paths - cached_paths)
+
+    print(f"Cache: {CACHE_DIR}")
+    print(f"  Cached:   {cached}")
+    print(f"  Stale:    {stale}")
+    print(f"  Missing:  {missing}")
+    print(f"  Orphaned: {orphaned}")
+    print(f"  Total extractable files: {len(file_paths)}")
+
+
+def cmd_clear():
+    if CACHE_DIR.exists():
+        count = len(list(CACHE_DIR.glob("*.json")))
+        shutil.rmtree(CACHE_DIR)
+        print(f"Cleared {count} cache entries.")
+    else:
+        print("No cache to clear.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Extract text from binary files (PDF, images, docx, xlsx)",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    p_sync = subparsers.add_parser("sync", help="Extract uncached/stale files, prune orphans")
+    p_sync.add_argument("--force", action="store_true", help="Re-extract everything")
+
+    subparsers.add_parser("status", help="Show cache stats")
+    subparsers.add_parser("clear", help="Wipe cache")
+
+    args = parser.parse_args()
+
+    if args.command == "sync":
+        cmd_sync(force=args.force)
+    elif args.command == "status":
+        cmd_status()
+    elif args.command == "clear":
+        cmd_clear()
+
+
+if __name__ == "__main__":
+    main()

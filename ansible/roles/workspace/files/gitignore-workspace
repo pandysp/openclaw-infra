@@ -18,3 +18,9 @@ node_modules/
 .cache/
 .local/
 .npm/
+
+# qmd search index (rebuilt by systemd watcher)
+.qmd/
+
+# Text extraction cache (rebuilt by extract sync)
+.scripts/extract-cache/

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# qmd-watch - Keep qmd index in sync with workspace changes ({{ item.agent_id }})
+# Uses inotifywait for recursive file watching (Linux equivalent of fswatch).
+# Runs as a long-running systemd service.
+set -uo pipefail
+
+export QMD_CONFIG_DIR="{{ item.workspace_dir }}/.qmd"
+export INDEX_PATH="{{ item.workspace_dir }}/.qmd/index.sqlite"
+export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
+
+WORKSPACE="{{ item.workspace_dir }}"
+DEBOUNCE=${QMD_WATCH_DEBOUNCE:-3}
+EMBED_LOCK="/tmp/qmd-embed-global.lock"
+
+do_sync() {
+    # Prevent concurrent syncs for this agent via flock
+    (
+        flock -n 200 || { echo "Sync already running for {{ item.agent_id }}, skipping"; return; }
+
+        # Run text extraction (warn on failure, don't abort)
+        if [ -x "$WORKSPACE/.scripts/extract" ]; then
+            "$WORKSPACE/.scripts/extract" sync 2>&1 || {
+                echo "WARNING: extract sync failed (rc=$?)" >&2
+                logger -t qmd-watch "extract sync failed for {{ item.agent_id }}"
+            }
+        fi
+
+        # Update BM25 index (can run concurrently across agents)
+        qmd update || {
+            echo "ERROR: qmd update failed (rc=$?)" >&2
+            logger -t qmd-watch "qmd update failed for {{ item.agent_id }}"
+            return 1
+        }
+
+        # Serialize embedding across all agents (memory-heavy: loads ~1.5GB GGUF model)
+        flock "$EMBED_LOCK" qmd embed || {
+            echo "ERROR: qmd embed failed (rc=$?)" >&2
+            logger -t qmd-watch "qmd embed failed for {{ item.agent_id }}"
+            return 1
+        }
+    ) 200>/tmp/qmd-watch-{{ item.agent_id }}.lock
+}
+
+cleanup() {
+    echo "Stopped (pid: $$)"
+    exit 0
+}
+trap cleanup INT TERM
+
+# Wait for workspace directory to exist (may not be populated yet on first deploy)
+# Timeout after 30 minutes (180 × 10s) to avoid sitting in running state forever
+if [ ! -d "$WORKSPACE" ]; then
+    echo "Workspace $WORKSPACE does not exist yet, waiting..."
+    WAIT_COUNT=0
+    while [ ! -d "$WORKSPACE" ]; do
+        sleep 10
+        WAIT_COUNT=$((WAIT_COUNT + 1))
+        if [ $WAIT_COUNT -ge 180 ]; then
+            echo "ERROR: Workspace $WORKSPACE did not appear after 30 minutes" >&2
+            logger -t qmd-watch "workspace timeout for {{ item.agent_id }}"
+            exit 1
+        fi
+    done
+    echo "Workspace appeared after $((WAIT_COUNT * 10))s"
+fi
+
+echo "Started (debounce: ${DEBOUNCE}s, pid: $$, workspace: $WORKSPACE)"
+
+# Initial sync on startup (indexes whatever is already in workspace)
+do_sync || echo "WARNING: initial sync failed, will retry on next file change" >&2
+
+# Watch for changes recursively using inotifywait
+# Pattern: wait for event → sleep to debounce → sync → loop
+# inotifywait without --monitor exits after first event (rc=0).
+# rc=1 = error (watch limit, missing dir) → exit for systemd restart.
+while true; do
+    inotifywait -r -q \
+        --event modify,create,delete,move \
+        --exclude '(\.qmd|\.git|extract-cache)' \
+        "$WORKSPACE"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "ERROR: inotifywait exited with code $rc" >&2
+        logger -t qmd-watch "inotifywait error (rc=$rc) for {{ item.agent_id }}"
+        exit 1  # let systemd Restart=on-failure handle it
+    fi
+    # Debounce: sleep to batch rapid changes, then sync
+    sleep "$DEBOUNCE"
+    do_sync || true  # don't exit watcher on sync failure, keep watching
+done

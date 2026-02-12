@@ -19,7 +19,9 @@
     # telegram must run immediately after agents — if sandbox runs in between,
     # agents exist without bindings and incoming messages get misrouted.
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
-    # plugins after agents — deny rules need agents to exist for index resolution.
+    # qmd after telegram — needs workspace dirs from agents role, before plugins registers MCP servers.
+    - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
+    # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
     - role: workspace
@@ -35,16 +37,16 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents, plugins]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd]
 
     - name: Wait for gateway to stabilize
       ansible.builtin.pause:
         seconds: 5
-      tags: [docker, config, openclaw, sandbox, agents, plugins]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd]
 
     - name: Verify gateway is active
       ansible.builtin.command: systemctl --user is-active openclaw-gateway
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
-      tags: [docker, config, openclaw, sandbox, agents, plugins]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd]

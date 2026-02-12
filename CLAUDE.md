@@ -123,6 +123,7 @@ openclaw-infra/
 │       ├── sandbox/   # Pull base image, build custom Docker image
 │       ├── config/    # All `openclaw config set` commands
 │       ├── telegram/  # Channel config, cron jobs (conditional)
+│       ├── qmd/       # qmd semantic search: install, per-agent watchers
 │       └── workspace/ # Deploy key, git sync timer (conditional)
 │
 ├── scripts/
@@ -160,6 +161,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
 | `telegram` | telegram | Update cron prompts or channel config |
+| `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
 ## Local CLI
@@ -622,6 +624,40 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 **Writable rootfs:** Sandbox containers have a writable rootfs (`readOnlyRoot: false`) so agents can install tools at runtime (`pip install`, `npm install -g`, `curl | bash`). The container runs as UID 1000 with `--cap-drop ALL`, so system directories (`/usr/bin/`, `/etc/`) remain unwritable — only `/home/node/` is writable via the overlay layer. Installs persist for the container's lifetime (hours) but are destroyed on container recreation. For persistent installs, agents can use `/workspace/.venv/` or `/workspace/.packages/`. See [docs/SECURITY.md](./docs/SECURITY.md#writable-rootfs-rationale) for the full security analysis.
 
 **Tool access:** Sandbox sessions have access to all standard tool groups (openclaw, runtime, fs, sessions, memory, web, ui, automation, messaging, nodes). Elevated tools (shell, system commands) are enabled. When Telegram is configured, sensitive actions require approval from the configured Telegram user. Without Telegram, elevated tools are enabled without an approval gate. Change via `./scripts/provision.sh --tags config`.
+
+## Semantic Search (qmd)
+
+Each agent has a **qmd** instance providing local hybrid search (BM25 + vector + LLM reranking) over their workspace. Uses GGUF models (~1.5GB, auto-downloaded) — no API keys needed. Replaces the built-in `memorySearch` with 6 MCP tools per agent (18 total).
+
+**Collections per agent:**
+- `workspace` — all `.md`, `.txt`, `.csv` files in the workspace
+- `memory` — memory directory (`.md` files only)
+- `extracted-content` — text extracted from PDFs, images, `.docx`, `.xlsx`
+
+**How it works:**
+- A `qmd-watch-<agent_id>` systemd service watches each workspace with `inotifywait -r`
+- On file changes: debounce → extract text from binaries → `qmd update` (BM25) → `qmd embed` (vectors)
+- Embedding is serialized across agents via `flock` (memory-intensive: ~1.5GB model)
+- Initial sync runs on service startup
+
+**Tool count:** 114 total (96 existing + 18 qmd: 6 tools × 3 agents)
+
+**Operations:**
+```bash
+# Rebuild qmd index (force re-embed all documents)
+./scripts/provision.sh --tags qmd -e force_qmd_reindex=true
+
+# Check watcher status
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status qmd-watch-main'
+
+# View watcher logs
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u qmd-watch-main -f'
+
+# Verify qmd MCP servers in plugin config
+ssh ubuntu@openclaw-vps 'openclaw config get plugins.entries.openclaw-mcp-adapter.config' | jq '.servers[] | select(.name | startswith("qmd"))'
+```
+
+**RAM consideration:** 3 qmd servers on 8GB (CX33). Models load on-demand per query, not resident. Concurrent heavy queries across 3 agents are unlikely. If RAM is tight, upgrade to CX43 (16GB, +€2.40/mo) via `pulumi config set hcloud:serverType cx43`.
 
 ## Troubleshooting
 

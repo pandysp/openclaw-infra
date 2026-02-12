@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch workspace and sync qmd index ({{ item.agent_id }})
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/qmd-watch-{{ item.agent_id }}.sh
+Environment=HOME=/home/ubuntu
+Restart=on-failure
+RestartSec=30
+MemoryMax=1536M
+
+[Install]
+WantedBy=default.target

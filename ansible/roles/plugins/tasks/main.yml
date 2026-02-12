@@ -237,6 +237,22 @@
   register: github_mcp_binary
   changed_when: false
 
+- name: Resolve qmd binary path
+  ansible.builtin.shell: PATH="$HOME/.bun/bin:$PATH" which qmd
+  args:
+    executable: /bin/bash
+  register: qmd_mcp_binary
+  changed_when: false
+  failed_when: false
+
+- name: Assert qmd binary exists when qmd servers are configured
+  ansible.builtin.assert:
+    that: qmd_mcp_binary.rc == 0
+    fail_msg: >-
+      qmd binary not found but qmd servers are configured in group_vars.
+      Run the qmd role first: ./scripts/provision.sh --tags qmd,plugins
+  when: openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'qmd') | list | length > 0
+
 - name: Deploy Codex auth credentials
   when: codex_auth_json | default('') | length > 0
   block:
@@ -1258,6 +1274,23 @@
     {% endfor %}
     fi
 
+    # qmd servers — local semantic search (no tokens/proxy needed)
+    QMD_BINARY="{{ (qmd_mcp_binary.stdout | default('')) | trim }}"
+    if [ -n "$QMD_BINARY" ] && [ -x "$QMD_BINARY" ]; then
+    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'qmd') %}
+        QMD_CONFIG="{{ srv.cwd }}/.qmd"
+        QMD_INDEX="{{ srv.cwd }}/.qmd/index.sqlite"
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
+            --arg cmd "$QMD_BINARY" \
+            --arg cwd "{{ srv.cwd }}" \
+            --arg config_dir "$QMD_CONFIG" \
+            --arg index_path "$QMD_INDEX" \
+            '. + [{name: $name, transport: "stdio", command: $cmd, args: ["mcp"], cwd: $cwd, env: {QMD_CONFIG_DIR: $config_dir, INDEX_PATH: $index_path}}]')
+    {% endfor %}
+    else
+        echo "NOTE: qmd binary not found, skipping qmd MCP servers"
+    fi
+
     # Build final config
     CONFIG=$(jq -n --argjson prefix "$TOOL_PREFIX" --argjson servers "$SERVERS" \
         '{toolPrefix: $prefix, servers: $servers}')
@@ -1412,4 +1445,47 @@
     label: "{{ item.id }}"
   register: deny_result
   changed_when: "'CHANGED' in deny_result.stdout"
+  notify: restart openclaw-gateway
+
+# --- Disable built-in memorySearch when qmd servers are registered ---
+# Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are
+# confirmed in the plugin config. If provisioning fails between qmd and plugins,
+# agents still have memorySearch as fallback.
+
+- name: Check if qmd servers are in plugin config
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    CONFIG=$(openclaw config get plugins.entries.openclaw-mcp-adapter.config 2>/dev/null || echo '{}')
+    QMD_COUNT=$(echo "$CONFIG" | jq '[.servers[]? | select(.name | startswith("qmd"))] | length')
+    echo "$QMD_COUNT"
+  args:
+    executable: /bin/bash
+  register: qmd_server_count
+  changed_when: false
+
+- name: Check current memorySearch state
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    RESULT=$(openclaw config get agents.defaults.memorySearch.enabled 2>&1) || true
+    if echo "$RESULT" | grep -q "not found\|not set\|undefined"; then
+      echo "unset"
+    else
+      echo "$RESULT"
+    fi
+  args:
+    executable: /bin/bash
+  register: memory_search_state
+  changed_when: false
+  when: (qmd_server_count.stdout | int) > 0
+
+- name: Disable built-in memorySearch (replaced by qmd)
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw config set agents.defaults.memorySearch.enabled false
+  args:
+    executable: /bin/bash
+  when:
+    - (qmd_server_count.stdout | int) > 0
+    - memory_search_state.stdout != "false"
   notify: restart openclaw-gateway

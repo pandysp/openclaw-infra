@@ -1,0 +1,10 @@
+collections:
+  workspace:
+    path: {{ item.workspace_dir }}
+    pattern: "**/*.{md,txt,csv}"
+  memory:
+    path: {{ item.workspace_dir }}/memory
+    pattern: "**/*.md"
+  extracted-content:
+    path: {{ item.workspace_dir }}/.scripts/extract-cache
+    pattern: "*.json"

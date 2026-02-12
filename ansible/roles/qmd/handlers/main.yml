@@ -1,0 +1,27 @@
+---
+- name: reload user systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+
+- name: enable qmd-watch services
+  ansible.builtin.systemd:
+    name: "qmd-watch-{{ item.agent_id }}.service"
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: restart openclaw-gateway
+  ansible.builtin.systemd:
+    name: openclaw-gateway
+    state: restarted
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"

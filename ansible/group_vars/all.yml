@@ -47,6 +47,13 @@ force_pi_mcp_rebuild: false
 # Force plugin reinstall (override with -e force_plugin_reinstall=true)
 force_plugin_reinstall: false
 
+# Force qmd reindex (override with -e force_qmd_reindex=true)
+force_qmd_reindex: false
+
+# qmd semantic search settings
+# Pin to commit hash for reproducibility (bun uses github:user/repo#hash syntax)
+qmd_version: "785bbcf319cf60d9e81b8307a1ea89bcdf3159c2"
+
 # Agent definitions
 # "main" is the built-in default agent (andy). manon and tl are additional agents.
 openclaw_agents:
@@ -199,6 +206,19 @@ openclaw_mcp_adapter:
       cwd: "/home/ubuntu/.openclaw/workspace-manon"
     - name: "pi-tl"
       type: "pi"
+      agent_id: "tl"
+      cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    # qmd semantic search servers (one per agent, local — no credentials needed)
+    - name: "qmd"
+      type: "qmd"
+      agent_id: "main"
+      cwd: "/home/ubuntu/.openclaw/workspace"
+    - name: "qmd-manon"
+      type: "qmd"
+      agent_id: "manon"
+      cwd: "/home/ubuntu/.openclaw/workspace-manon"
+    - name: "qmd-tl"
+      type: "qmd"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
 

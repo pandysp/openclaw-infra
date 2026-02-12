@@ -1,0 +1,122 @@
+---
+# Install qmd semantic search engine and configure per-agent watchers.
+# Requires: system role (poppler-utils, tesseract-ocr, inotify-tools)
+# Force reindex with: -e force_qmd_reindex=true
+
+# --- Phase 1: Install toolchain ---
+
+- name: Install bun
+  ansible.builtin.shell: curl -fsSL https://bun.sh/install | bash
+  args:
+    executable: /bin/bash
+    creates: /home/ubuntu/.bun/bin/bun
+
+- name: Install qmd via bun
+  ansible.builtin.shell: |
+    export PATH="$HOME/.bun/bin:$PATH"
+    bun install -g "github:tobi/qmd#{{ qmd_version }}"
+  args:
+    executable: /bin/bash
+    creates: /home/ubuntu/.bun/bin/qmd
+
+- name: Install uv (for extract script inline deps)
+  ansible.builtin.shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    executable: /bin/bash
+    creates: /home/ubuntu/.local/bin/uv
+
+- name: Verify qmd binary
+  ansible.builtin.command: /home/ubuntu/.bun/bin/qmd status
+  changed_when: false
+  failed_when: false
+
+# --- Phase 2: Determine active workspaces ---
+
+- name: Determine active workspaces for qmd
+  ansible.builtin.set_fact:
+    qmd_workspaces: >-
+      {{ openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}
+
+# --- Phase 3: Per-agent setup ---
+
+- name: Create .qmd directories
+  ansible.builtin.file:
+    path: "{{ item.workspace_dir }}/.qmd"
+    state: directory
+    mode: "0755"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Template qmd index config
+  ansible.builtin.template:
+    src: qmd-index.yml.j2
+    dest: "{{ item.workspace_dir }}/.qmd/index.yml"
+    mode: "0644"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Create .scripts directories
+  ansible.builtin.file:
+    path: "{{ item.workspace_dir }}/.scripts/extract-cache"
+    state: directory
+    mode: "0755"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Template extract script
+  ansible.builtin.template:
+    src: extract.j2
+    dest: "{{ item.workspace_dir }}/.scripts/extract"
+    mode: "0755"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Install qmd watcher scripts
+  ansible.builtin.template:
+    src: qmd-watch.sh.j2
+    dest: "/home/ubuntu/.local/bin/qmd-watch-{{ item.agent_id }}.sh"
+    mode: "0755"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  notify:
+    - reload user systemd
+    - enable qmd-watch services
+
+- name: Ensure systemd user directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user
+    state: directory
+    mode: "0755"
+
+- name: Install qmd watcher systemd services
+  ansible.builtin.template:
+    src: qmd-watch.service.j2
+    dest: "/home/ubuntu/.config/systemd/user/qmd-watch-{{ item.agent_id }}.service"
+    mode: "0644"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  notify:
+    - reload user systemd
+    - enable qmd-watch services
+
+# --- Phase 4: Force reindex support ---
+
+- name: Force re-embed all documents
+  ansible.builtin.shell: |
+    export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
+    export QMD_CONFIG_DIR="{{ item.workspace_dir }}/.qmd"
+    export INDEX_PATH="{{ item.workspace_dir }}/.qmd/index.sqlite"
+    qmd update
+    qmd embed -f
+  args:
+    executable: /bin/bash
+  when: force_qmd_reindex | bool
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"

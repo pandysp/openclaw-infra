@@ -19,7 +19,24 @@
       - jq
       - python3
       - git
+      - unzip               # Required by bun installer
+      - poppler-utils       # pdftotext for qmd text extraction
+      - tesseract-ocr       # OCR for images (replaces macOS Vision API)
+      - tesseract-ocr-deu   # German language data for tesseract
+      - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
+
+- name: Increase inotify watch limit for qmd watchers
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^fs\.inotify\.max_user_watches'
+    line: "fs.inotify.max_user_watches = 524288"
+    state: present
+  register: sysctl_inotify
+
+- name: Apply sysctl changes
+  ansible.builtin.command: sysctl -p
+  when: sysctl_inotify is changed
 
 - name: Install unattended-upgrades
   ansible.builtin.apt:
