@@ -147,7 +147,7 @@ openclaw_mcp_adapter:
   # Claude Code settings
   claude_code_docker_image: "claude-code-mcp:latest"
   claude_code_version: "2.1.38"     # Pin @anthropic-ai/claude-code CLI for reproducibility
-  claude_code_mcp_version: "2.1.0"  # Pin @pandysp/claude-code-mcp server for reproducibility
+  claude_code_mcp_version: "2.2.0"  # Pin @pandysp/claude-code-mcp server for reproducibility
   claude_code_memory_limit: "2g"    # Monitor and adjust — Claude Code may need more than Codex
   # Pi MCP settings
   pi_mcp_docker_image: "pi-mcp:latest"

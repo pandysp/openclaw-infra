@@ -1216,7 +1216,7 @@
               "--read-only",
               "--tmpfs","/tmp:size=256m",
               "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
-              "--pids-limit","100",
+              "--pids-limit","300",
               "--cpus","2",
               ("--memory=" + $mem),("--memory-swap=" + $mem),
               "--label","openclaw-role=claude-code-mcp",
