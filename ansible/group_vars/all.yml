@@ -146,8 +146,8 @@ openclaw_mcp_adapter:
   pi_mcp_docker_image: "pi-mcp:latest"
   pi_mcp_version: "0.1.2"
   pi_mcp_memory_limit: "1g"    # Lower than Codex/Claude Code — Pi is lighter (session trees, not full IDE)
-  pi_mcp_model: "claude-sonnet-4-5-20250929"  # Sub-agent model (cheaper than primary)
-  pi_mcp_thinking: "medium"                    # Thinking level for Pi agent
+  pi_mcp_model: "claude-opus-4-6"
+  pi_mcp_thinking: "xhigh"
   servers:
     # GitHub MCP servers (one per agent, each with its own PAT)
     - name: "github"
