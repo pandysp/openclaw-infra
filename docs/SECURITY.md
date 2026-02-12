@@ -103,6 +103,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - **`agents.defaults.sandbox.mode: "all"`** — all sessions (including web chat) run in Docker containers, preventing direct host access
 - `agents.defaults.sandbox.docker.image: "openclaw-sandbox-custom:latest"` — custom image with dev toolchain and setuid bits stripped
 - `agents.defaults.sandbox.docker.network: "bridge"` — allows web research and git push while isolating from host filesystem, gateway config, and sudo
+- **`agents.defaults.sandbox.docker.readOnlyRoot: false`** — rootfs is writable to allow runtime package installation (`pip install`, `npm install`, `curl` binaries). Container runs as UID 1000 with `--cap-drop ALL`, so Unix file permissions still prevent writing to system directories (`/usr/bin/`, `/etc/`, `/usr/lib/`). Only `/home/node/` is writable. Writable layer is disk-backed (overlay) and destroyed on container recreation. See [Writable Rootfs Rationale](#writable-rootfs-rationale) below.
 - Tailscale-only access limits who can send prompts
 - Dedicated VPS with no other services
 - `agents.defaults.thinkingDefault: high` — extended thinking improves prompt injection resistance
@@ -210,6 +211,32 @@ Plugins run in-process — they have the same access as the gateway itself (conf
 - Workspace repo should be private
 
 **Residual Risk**: Low. Deploy key scope is narrow, but a compromised server could push arbitrary content to the workspace repo.
+
+### Writable Rootfs Rationale
+
+Sandbox containers run with `readOnlyRoot: false` (Docker `--read-only` disabled). This is a deliberate tradeoff to allow agents to install tools at runtime.
+
+**Why**: Agents need to improvise — `pip install whisper`, `curl | bash` to install Deno, `npm install -g` for CLI tools. A read-only rootfs blocks all of these because they write to system paths or `$HOME`.
+
+**What UID 1000 can actually write to** (verified empirically):
+
+| Path | Writable? | Why |
+|------|-----------|-----|
+| `/usr/bin/`, `/usr/local/bin/`, `/etc/`, `/usr/lib/` | No | root:root 755, no DAC_OVERRIDE capability |
+| `/home/node/` (pip --user, cargo, deno, etc.) | Yes | Owned by UID 1000 |
+| `/workspace/` | Yes (already) | Bind mount, always writable |
+| `/tmp/`, `/var/tmp/` | Yes (already) | tmpfs mounts |
+
+**What this does NOT enable**:
+- Modifying system binaries (blocked by Unix permissions — `--cap-drop ALL` removes `DAC_OVERRIDE`)
+- Privilege escalation (blocked by `--security-opt no-new-privileges` + stripped setuid bits)
+- Container escape (blocked by capability restrictions + namespace isolation)
+- Persisting across container recreation (overlay layer destroyed when container is removed)
+
+**What this does enable**:
+- A prompt-injected session could install malicious pip packages that persist for the container's lifetime (6-33+ hours). However, this is strictly weaker than the existing `/workspace` write access, which persists indefinitely and gets synced to GitHub.
+
+**Compensating controls**: `--cap-drop ALL`, `--security-opt no-new-privileges`, UID 1000, setuid bits stripped, bridge networking, Tailscale-only access.
 
 ## Credential Storage
 

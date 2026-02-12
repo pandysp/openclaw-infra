@@ -7,9 +7,9 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/1000"
 
-- name: restart codex-token-proxy
+- name: restart mcp-auth-proxy
   ansible.builtin.systemd:
-    name: codex-token-proxy
+    name: mcp-auth-proxy
     state: restarted
     scope: user
     daemon_reload: true

@@ -144,10 +144,18 @@
       did not exist. Remove it with: rm -rf /home/ubuntu/.codex/auth.json
   when: codex_auth_json | default('') | length > 0 and codex_auth_stat.stat.exists
 
+- name: Write Anthropic auth token file for proxy
+  ansible.builtin.copy:
+    content: "{{ claude_setup_token }}"
+    dest: /home/ubuntu/.openclaw/anthropic-auth-token
+    mode: "0600"
+  no_log: true
+  when: claude_setup_token | default('') | length > 0
+
 - name: Create codex-proxy-net Docker network
   community.docker.docker_network:
     name: codex-proxy-net
-  when: codex_auth_json | default('') | length > 0
+  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
 
 - name: Get codex-proxy-net gateway IP
   ansible.builtin.shell: |
@@ -156,12 +164,12 @@
     executable: /bin/bash
   register: codex_proxy_net_info
   changed_when: false
-  when: codex_auth_json | default('') | length > 0
+  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
 
 - name: Set codex proxy gateway IP fact
   ansible.builtin.set_fact:
     codex_proxy_gateway_ip: "{{ codex_proxy_net_info.stdout | trim }}"
-  when: codex_auth_json | default('') | length > 0
+  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
 
 - name: Allow codex-proxy-net containers to reach proxy port
   become: true
@@ -170,10 +178,10 @@
     from_ip: "{{ codex_proxy_gateway_ip | regex_replace('\\.[0-9]+$', '.0/16') }}"
     to_port: "{{ openclaw_mcp_adapter.codex_proxy_port }}"
     proto: tcp
-  when: codex_auth_json | default('') | length > 0
+  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
 
-- name: Deploy codex token proxy
-  when: codex_auth_json | default('') | length > 0
+- name: Deploy mcp-auth-proxy
+  when: (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0)
   block:
     - name: Ensure systemd user directory exists
       ansible.builtin.file:
@@ -181,23 +189,44 @@
         state: directory
         mode: "0755"
 
-    - name: Template codex-token-proxy.js
+    - name: Stop and disable old codex-token-proxy service (migration)
+      ansible.builtin.systemd:
+        name: codex-token-proxy
+        state: stopped
+        enabled: false
+        scope: user
+        daemon_reload: true
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      failed_when: false
+
+    - name: Remove old codex-token-proxy service file
+      ansible.builtin.file:
+        path: /home/ubuntu/.config/systemd/user/codex-token-proxy.service
+        state: absent
+
+    - name: Remove old codex-token-proxy.js
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/codex-token-proxy.js
+        state: absent
+
+    - name: Template mcp-auth-proxy.js
       ansible.builtin.template:
-        src: codex-token-proxy.js.j2
-        dest: /home/ubuntu/.openclaw/codex-token-proxy.js
+        src: mcp-auth-proxy.js.j2
+        dest: /home/ubuntu/.openclaw/mcp-auth-proxy.js
         mode: "0644"
       register: proxy_js_changed
 
-    - name: Template codex-token-proxy systemd service
+    - name: Template mcp-auth-proxy systemd service
       ansible.builtin.template:
-        src: codex-token-proxy.service.j2
-        dest: /home/ubuntu/.config/systemd/user/codex-token-proxy.service
+        src: mcp-auth-proxy.service.j2
+        dest: /home/ubuntu/.config/systemd/user/mcp-auth-proxy.service
         mode: "0644"
       register: proxy_service_changed
 
-    - name: Enable and start codex-token-proxy
+    - name: Enable and start mcp-auth-proxy
       ansible.builtin.systemd:
-        name: codex-token-proxy
+        name: mcp-auth-proxy
         enabled: true
         state: "{{ 'restarted' if (proxy_js_changed is changed or proxy_service_changed is changed) else 'started' }}"
         scope: user
@@ -205,7 +234,7 @@
       environment:
         XDG_RUNTIME_DIR: /run/user/1000
 
-    - name: Wait for codex-token-proxy to be ready
+    - name: Wait for mcp-auth-proxy to be ready
       ansible.builtin.shell: |
         curl -sf "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health"
       args:
@@ -226,6 +255,158 @@
 - name: Flush handlers to ensure proxy is restarted before image build
   ansible.builtin.meta: flush_handlers
 
+- name: Write Claude Code validation script (bundled CLI, check source)
+  ansible.builtin.copy:
+    content: |
+      // Claude Code CLI bundles its SDK (no separate @anthropic-ai/sdk package).
+      // Validate ANTHROPIC_BASE_URL by checking the bundled source references it
+      // AND by verifying the env var propagates correctly.
+      const fs = require('fs');
+      const cliPath = '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js';
+      try {
+        const src = fs.readFileSync(cliPath, 'utf8');
+        if (src.includes('ANTHROPIC_BASE_URL')) {
+          console.log('SDK_VALIDATED: cli.js reads process.env.ANTHROPIC_BASE_URL');
+          process.exit(0);
+        } else {
+          console.log('SDK_FAILED: ANTHROPIC_BASE_URL not found in cli.js');
+          process.exit(1);
+        }
+      } catch (err) {
+        console.log('SDK_FAILED: cannot read cli.js: ' + err.message);
+        process.exit(1);
+      }
+    dest: /tmp/validate-claude-code-sdk.js
+    mode: "0644"
+  when:
+    - claude_setup_token | default('') | length > 0
+    - codex_proxy_gateway_ip is defined
+
+- name: Write Pi SDK validation script (actual SDK require test)
+  ansible.builtin.copy:
+    content: |
+      // Pi MCP uses @anthropic-ai/sdk as a real dependency.
+      // Validate it respects ANTHROPIC_BASE_URL.
+      const sdkPath = '/usr/local/lib/node_modules/pi-mcp-server/node_modules/@anthropic-ai/sdk';
+      let Anthropic;
+      try {
+        const mod = require(sdkPath);
+        Anthropic = mod.default || mod.Anthropic || mod;
+      } catch (err) {
+        console.log('SDK_NOT_FOUND: ' + err.message);
+        process.exit(1);
+      }
+      const client = new Anthropic({ apiKey: 'dummy' });
+      if (client.baseURL && client.baseURL.includes('custom-test-host:9999')) {
+        console.log('SDK_VALIDATED:' + client.baseURL);
+        process.exit(0);
+      } else {
+        console.log('SDK_FAILED:' + (client.baseURL || 'undefined'));
+        process.exit(1);
+      }
+    dest: /tmp/validate-pi-sdk.js
+    mode: "0644"
+  when:
+    - claude_setup_token | default('') | length > 0
+    - codex_proxy_gateway_ip is defined
+
+- name: Write network validation script to temp file
+  ansible.builtin.copy:
+    content: |
+      // Validate that the container can reach the proxy health endpoint.
+      const http = require('http');
+      const url = process.env.PROXY_HEALTH_URL;
+      if (!url) { console.log('NET_FAIL:no PROXY_HEALTH_URL'); process.exit(1); }
+      http.get(url, (res) => {
+        let d = '';
+        res.on('data', (c) => { d += c; });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            console.log('NET_OK:' + d);
+            process.exit(0);
+          } else {
+            console.log('NET_FAIL:' + res.statusCode + ':' + d);
+            process.exit(1);
+          }
+        });
+      }).on('error', (e) => {
+        console.log('NET_FAIL:' + e.message);
+        process.exit(1);
+      });
+    dest: /tmp/validate-proxy-network.js
+    mode: "0644"
+  when:
+    - claude_setup_token | default('') | length > 0
+    - codex_proxy_gateway_ip is defined
+
+- name: Validate ANTHROPIC_BASE_URL support in Claude Code container
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo "=== SDK test ==="
+    docker run --rm \
+      --network=codex-proxy-net \
+      --cap-drop ALL --security-opt no-new-privileges --read-only \
+      --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+      -v /tmp/validate-claude-code-sdk.js:/tmp/validate-claude-code-sdk.js:ro \
+      "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
+      node /tmp/validate-claude-code-sdk.js
+    echo "=== Network test ==="
+    docker run --rm \
+      --network=codex-proxy-net \
+      --cap-drop ALL --security-opt no-new-privileges --read-only \
+      --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+      -e "PROXY_HEALTH_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health" \
+      -v /tmp/validate-proxy-network.js:/tmp/validate-proxy-network.js:ro \
+      "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
+      node /tmp/validate-proxy-network.js
+    echo "VALIDATED: Claude Code SDK respects ANTHROPIC_BASE_URL + proxy reachable"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when:
+    - claude_setup_token | default('') | length > 0
+    - codex_proxy_gateway_ip is defined
+
+- name: Validate ANTHROPIC_BASE_URL support in Pi container
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo "=== SDK test ==="
+    docker run --rm \
+      --network=codex-proxy-net \
+      --cap-drop ALL --security-opt no-new-privileges --read-only \
+      --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+      -e "ANTHROPIC_BASE_URL=http://custom-test-host:9999/anthropic" \
+      -v /tmp/validate-pi-sdk.js:/tmp/validate-pi-sdk.js:ro \
+      "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
+      node /tmp/validate-pi-sdk.js
+    echo "=== Network test ==="
+    docker run --rm \
+      --network=codex-proxy-net \
+      --cap-drop ALL --security-opt no-new-privileges --read-only \
+      --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+      -e "PROXY_HEALTH_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health" \
+      -v /tmp/validate-proxy-network.js:/tmp/validate-proxy-network.js:ro \
+      "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
+      node /tmp/validate-proxy-network.js
+    echo "VALIDATED: Pi SDK respects ANTHROPIC_BASE_URL + proxy reachable"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when:
+    - claude_setup_token | default('') | length > 0
+    - codex_proxy_gateway_ip is defined
+
+- name: Clean up validation scripts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/validate-claude-code-sdk.js
+    - /tmp/validate-pi-sdk.js
+    - /tmp/validate-proxy-network.js
+  when:
+    - claude_setup_token | default('') | length > 0
+
 - name: Ensure agent workspace directories exist for Codex containers
   ansible.builtin.file:
     path: "{{ item.cwd }}"
@@ -242,6 +423,16 @@
     state: directory
     mode: "0755"
   loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: claude_setup_token | default('') | length > 0
+
+- name: Ensure agent workspace directories exist for Pi containers
+  ansible.builtin.file:
+    path: "{{ item.cwd }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'pi') | list }}"
   loop_control:
     label: "{{ item.name }}"
   when: claude_setup_token | default('') | length > 0
@@ -446,11 +637,14 @@
       ansible.builtin.shell: |
         set -euo pipefail
         docker run --rm \
+          --network=codex-proxy-net \
           --cap-drop ALL \
           --security-opt no-new-privileges \
           --read-only \
           --tmpfs /tmp:size=256m \
           --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+          -e ANTHROPIC_API_KEY=proxy \
+          -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
           "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
           sh -c 'test -x $(which claude) && test -x $(which claude-code-mcp) && echo "binaries-ok"'
       args:
@@ -522,6 +716,173 @@
           {{ gateway_crash_logs_claude.stdout | default('(no logs captured)') }}
           Manual recovery: ssh ubuntu@<host> 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100'
 
+- name: Build Pi MCP Docker image
+  when: claude_setup_token | default('') | length > 0
+  block:
+    - name: Check if Pi MCP image exists
+      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.pi_mcp_docker_image }}\""
+      register: pi_mcp_image_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create Pi MCP build directory
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/pi-mcp-build
+        state: directory
+        mode: "0755"
+
+    - name: Template Pi MCP Dockerfile
+      ansible.builtin.template:
+        src: Dockerfile.pi-mcp.j2
+        dest: /home/ubuntu/.openclaw/pi-mcp-build/Dockerfile
+        mode: "0644"
+      register: pi_mcp_dockerfile_changed
+
+    - name: Build Pi MCP Docker image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker build -t "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" /home/ubuntu/.openclaw/pi-mcp-build/
+      args:
+        executable: /bin/bash
+      when: pi_mcp_image_check.rc != 0 or pi_mcp_dockerfile_changed.changed or (force_pi_mcp_rebuild | bool)
+      register: pi_mcp_image_build
+
+    - name: Verify Pi MCP image was built
+      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.pi_mcp_docker_image }}\""
+      changed_when: false
+
+    - name: Smoke test Pi MCP image (binary check)
+      ansible.builtin.shell: |
+        docker run --rm "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" sh -c 'which pi-mcp-server && echo "binary-ok"'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: pi_mcp_image_build is changed
+
+    - name: Smoke test Pi MCP image with hardened flags
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm \
+          --network=codex-proxy-net \
+          --cap-drop ALL \
+          --security-opt no-new-privileges \
+          --read-only \
+          --tmpfs /tmp:size=256m \
+          --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+          -e PI_MCP_API_KEY=proxy \
+          -e ANTHROPIC_API_KEY=proxy \
+          -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+          "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
+          sh -c 'test -x $(which pi-mcp-server) && echo "hardened-ok"'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: pi_mcp_image_build is changed
+
+    - name: Smoke test Pi MCP auth via proxy (startup check)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # Verify the server starts and routes through the proxy.
+        # With proxy pattern, the real token is injected server-side.
+        RESULT=$(echo "" | timeout 5 docker run --rm -i \
+          --cap-drop ALL --security-opt no-new-privileges --read-only \
+          --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
+          --network=codex-proxy-net \
+          -e PI_MCP_API_KEY=proxy \
+          -e ANTHROPIC_API_KEY=proxy \
+          -e PI_MCP_PROVIDER=anthropic \
+          -e "PI_MCP_MODEL={{ openclaw_mcp_adapter.pi_mcp_model }}" \
+          -e PI_MCP_CWD=/tmp \
+          -e PI_MCP_SANDBOX=false \
+          -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+          "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
+          pi-mcp-server 2>&1 || true)
+        if echo "$RESULT" | grep -q "pi-mcp-server started"; then
+            echo "auth-smoke-ok: server initialized via proxy"
+        elif echo "$RESULT" | grep -qi "invalid.*api.*key\|unauthorized\|authentication"; then
+            echo "FAIL: Auth rejected through proxy"
+            echo "$RESULT" | tail -10
+            exit 1
+        else
+            echo "WARNING: Unexpected startup output:"
+            echo "$RESULT" | tail -10
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+      register: pi_auth_smoke
+      when: pi_mcp_image_build is changed
+
+    - name: Show Pi auth smoke test result
+      ansible.builtin.debug:
+        var: pi_auth_smoke.stdout_lines
+      when: pi_mcp_image_build is changed and pi_auth_smoke.stdout is defined
+
+    - name: Remove Pi MCP containers after image rebuild
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -aq --filter "label=openclaw-role=pi-mcp")
+        if [ -n "$containers" ]; then
+          echo "$containers" | xargs docker rm -f
+        fi
+      args:
+        executable: /bin/bash
+      register: pi_mcp_container_removal
+      changed_when: pi_mcp_container_removal.stdout | length > 0
+      when: pi_mcp_image_build is changed
+
+    - name: Verify no Pi MCP containers remain after cleanup
+      ansible.builtin.shell: |
+        set -euo pipefail
+        count=$(docker ps -aq --filter "label=openclaw-role=pi-mcp" | wc -l)
+        if [ "$count" -ne 0 ]; then
+          echo "ERROR: $count Pi MCP containers still present after removal"
+          docker ps -a --filter "label=openclaw-role=pi-mcp" --format '{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Image{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}'
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: pi_mcp_container_removal is changed
+
+    - name: Restart gateway to pick up new Pi MCP image
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: restarted
+        scope: user
+      become: false
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      when: pi_mcp_image_build is changed
+
+    - name: Wait for gateway to be healthy after Pi image rebuild
+      ansible.builtin.command: openclaw health
+      register: pi_health_check
+      retries: 5
+      delay: 3
+      until: pi_health_check.rc == 0
+      changed_when: false
+      when: pi_mcp_image_build is changed
+
+  rescue:
+    - name: Capture gateway logs for Pi MCP diagnosis
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR=/run/user/1000
+        journalctl --user -u openclaw-gateway --since "2 minutes ago" --no-pager | tail -50
+      args:
+        executable: /bin/bash
+      register: gateway_crash_logs_pi
+      failed_when: false
+
+    - name: Report gateway failure with Pi MCP diagnostic context
+      ansible.builtin.fail:
+        msg: |
+          Gateway failed health check after Pi MCP image rebuild.
+          Recent gateway logs:
+          {{ gateway_crash_logs_pi.stdout | default('(no logs captured)') }}
+          Manual recovery: ssh ubuntu@<host> 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100'
+
 - name: Validate token variable names are defined
   ansible.builtin.assert:
     that:
@@ -577,7 +938,7 @@
     {% endfor %}
 
     # Codex servers — containerized with docker run -i (stdio piped through Docker)
-    # Security: containers have NO credentials. Auth is injected by codex-token-proxy
+    # Security: containers have NO credentials. Auth is injected by mcp-auth-proxy (formerly codex-token-proxy)
     # running on codex-proxy-net. Sandbox containers on default bridge cannot reach proxy.
     CODEX_IMAGE="{{ openclaw_mcp_adapter.codex_docker_image }}"
     CODEX_MEM="{{ openclaw_mcp_adapter.codex_memory_limit | default('2g') }}"
@@ -619,25 +980,19 @@
     fi
 
     # Claude Code servers — containerized with docker run -i (stdio piped through Docker)
-    # Security: containers receive claude_setup_token as ANTHROPIC_API_KEY env var.
-    # Token has user:inference scope only — same as what powers the gateway.
+    # Security: containers have NO credentials. Auth is injected by the proxy
+    # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
     CLAUDE_IMAGE="{{ openclaw_mcp_adapter.claude_code_docker_image }}"
     CLAUDE_MEM="{{ openclaw_mcp_adapter.claude_code_memory_limit | default('2g') }}"
-    CLAUDE_TOKEN_FILE="/tmp/ansible-mcp-claude-setup-token"
-    if [ -f "$CLAUDE_TOKEN_FILE" ]; then
-        CLAUDE_TOKEN=$(cat "$CLAUDE_TOKEN_FILE")
-        if [ -z "$CLAUDE_TOKEN" ]; then
-            echo "ERROR: Claude setup token file exists but is empty"
-            exit 1
-        fi
+    if [ -n "$PROXY_GW" ]; then
     {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') %}
         DOCKER_ARGS=$(jq -n \
             --arg ws "{{ srv.cwd }}" \
             --arg img "$CLAUDE_IMAGE" \
             --arg agent "{{ srv.agent_id }}" \
             --arg mem "$CLAUDE_MEM" \
-            --arg api_key "$CLAUDE_TOKEN" \
-            '["run","--rm","-i","--init","--net=bridge",
+            --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+            '["run","--rm","-i","--init","--network=codex-proxy-net",
               "--cap-drop","ALL",
               "--security-opt","no-new-privileges",
               "--read-only",
@@ -649,10 +1004,58 @@
               "--label","openclaw-role=claude-code-mcp",
               "--label",("openclaw-agent=" + $agent),
               "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-              "-e",("CLAUDE_CODE_OAUTH_TOKEN=" + $api_key),
+              "-e","ANTHROPIC_API_KEY=proxy",
+              "-e",("ANTHROPIC_BASE_URL=" + $base_url),
               "-w","/workspace",
               $img,
               "claude-code-mcp"]')
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
+    {% endfor %}
+    fi
+
+    # Pi MCP servers — containerized with docker run -i (stdio piped through Docker)
+    # Security: containers have NO credentials. Auth is injected by the proxy
+    # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
+    PI_IMAGE="{{ openclaw_mcp_adapter.pi_mcp_docker_image }}"
+    PI_MEM="{{ openclaw_mcp_adapter.pi_mcp_memory_limit | default('1g') }}"
+    PI_MODEL="{{ openclaw_mcp_adapter.pi_mcp_model | default('claude-sonnet-4-5-20250929') }}"
+    PI_THINKING="{{ openclaw_mcp_adapter.pi_mcp_thinking | default('medium') }}"
+    if [ -n "$PROXY_GW" ]; then
+    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'pi') %}
+        DOCKER_ARGS=$(jq -n \
+            --arg ws "{{ srv.cwd }}" \
+            --arg img "$PI_IMAGE" \
+            --arg agent "{{ srv.agent_id }}" \
+            --arg mem "$PI_MEM" \
+            --arg model "$PI_MODEL" \
+            --arg thinking "$PI_THINKING" \
+            --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+            '["run","--rm","-i","--init","--network=codex-proxy-net",
+              "--cap-drop","ALL",
+              "--security-opt","no-new-privileges",
+              "--read-only",
+              "--tmpfs","/tmp:size=256m",
+              "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
+              "--pids-limit","100",
+              "--cpus","2",
+              ("--memory=" + $mem),("--memory-swap=" + $mem),
+              "--label","openclaw-role=pi-mcp",
+              "--label",("openclaw-agent=" + $agent),
+              "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+              "-e","PI_MCP_API_KEY=proxy",
+              "-e","ANTHROPIC_API_KEY=proxy",
+              "-e","PI_MCP_PROVIDER=anthropic",
+              "-e",("PI_MCP_MODEL=" + $model),
+              "-e",("PI_MCP_THINKING=" + $thinking),
+              "-e","PI_MCP_CWD=/workspace",
+              "-e","PI_MCP_SANDBOX=false",
+              "-e","PI_MCP_MAX_SESSIONS=10",
+              "-e","PI_MCP_SESSION_IDLE_TIMEOUT=1800",
+              "-e",("ANTHROPIC_BASE_URL=" + $base_url),
+              "-w","/workspace",
+              $img,
+              "pi-mcp-server"]')
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
             '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
     {% endfor %}

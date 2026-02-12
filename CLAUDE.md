@@ -616,7 +616,10 @@ agents.defaults.sandbox.mode: all
 agents.defaults.sandbox.workspaceAccess: rw
 agents.defaults.sandbox.docker.network: bridge
 agents.defaults.sandbox.docker.image: openclaw-sandbox-custom:latest
+agents.defaults.sandbox.docker.readOnlyRoot: false
 ```
+
+**Writable rootfs:** Sandbox containers have a writable rootfs (`readOnlyRoot: false`) so agents can install tools at runtime (`pip install`, `npm install -g`, `curl | bash`). The container runs as UID 1000 with `--cap-drop ALL`, so system directories (`/usr/bin/`, `/etc/`) remain unwritable — only `/home/node/` is writable via the overlay layer. Installs persist for the container's lifetime (hours) but are destroyed on container recreation. For persistent installs, agents can use `/workspace/.venv/` or `/workspace/.packages/`. See [docs/SECURITY.md](./docs/SECURITY.md#writable-rootfs-rationale) for the full security analysis.
 
 **Tool access:** Sandbox sessions have access to all standard tool groups (openclaw, runtime, fs, sessions, memory, web, ui, automation, messaging, nodes). Elevated tools (shell, system commands) are enabled. When Telegram is configured, sensitive actions require approval from the configured Telegram user. Without Telegram, elevated tools are enabled without an approval gate. Change via `./scripts/provision.sh --tags config`.
 

@@ -114,9 +114,26 @@
         openclaw config set agents.defaults.sandbox.workspaceAccess {{ openclaw_sandbox_workspace_access }}
         openclaw config set agents.defaults.sandbox.docker.network {{ openclaw_sandbox_docker_network }}
         openclaw config set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
-        openclaw config set agents.defaults.sandbox.docker.workdir /workspace
+        openclaw config set agents.defaults.sandbox.docker.readOnlyRoot {{ openclaw_sandbox_read_only_root }}
       args:
         executable: /bin/bash
+      notify: restart openclaw-gateway
+
+    - name: Remove stale sandbox containers after config change
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -q --filter "name=openclaw-sbx-" 2>/dev/null || true)
+        if [ -n "$containers" ]; then
+          count=$(echo "$containers" | wc -l)
+          echo "Removing $count sandbox container(s) to apply new Docker flags"
+          echo "$containers" | xargs docker rm -f
+        else
+          echo "No running sandbox containers to remove"
+        fi
+      args:
+        executable: /bin/bash
+      register: sandbox_container_removal
+      changed_when: sandbox_container_removal.stdout is search('Removing')
       notify: restart openclaw-gateway
 
   always:

@@ -6,3 +6,10 @@ Thumbs.db
 *.tmp
 *.swp
 *~
+
+# Package installs (persistent but not synced to git)
+.venv/
+.packages/
+.npm-packages/
+.bin/
+node_modules/

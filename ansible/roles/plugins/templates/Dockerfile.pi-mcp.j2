@@ -1,0 +1,10 @@
+FROM node:20-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g pi-mcp-server@{{ openclaw_mcp_adapter.pi_mcp_version }} \
+    && find / -xdev -perm /4000 -type f -exec chmod u-s {} + \
+    && sed -i 's|baseURL: model\.baseUrl,|baseURL: process.env.ANTHROPIC_BASE_URL \|\| model.baseUrl,|g' \
+       /usr/local/lib/node_modules/pi-mcp-server/node_modules/@mariozechner/pi-ai/dist/providers/anthropic.js
+USER node
+ENTRYPOINT ["pi-mcp-server"]

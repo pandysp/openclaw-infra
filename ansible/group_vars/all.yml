@@ -30,6 +30,7 @@ openclaw_sandbox_mode: "all"
 openclaw_sandbox_workspace_access: "rw"
 openclaw_sandbox_docker_network: "bridge"
 openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
+openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
@@ -39,6 +40,9 @@ force_codex_rebuild: false
 
 # Force Claude Code MCP Docker image rebuild (override with -e force_claude_code_rebuild=true)
 force_claude_code_rebuild: false
+
+# Force Pi MCP Docker image rebuild (override with -e force_pi_mcp_rebuild=true)
+force_pi_mcp_rebuild: false
 
 # Force plugin reinstall (override with -e force_plugin_reinstall=true)
 force_plugin_reinstall: false
@@ -138,6 +142,12 @@ openclaw_mcp_adapter:
   claude_code_version: "2.1.38"     # Pin @anthropic-ai/claude-code CLI for reproducibility
   claude_code_mcp_version: "2.0.3"  # Pin @pandysp/claude-code-mcp server for reproducibility
   claude_code_memory_limit: "2g"    # Monitor and adjust — Claude Code may need more than Codex
+  # Pi MCP settings
+  pi_mcp_docker_image: "pi-mcp:latest"
+  pi_mcp_version: "0.1.2"
+  pi_mcp_memory_limit: "1g"    # Lower than Codex/Claude Code — Pi is lighter (session trees, not full IDE)
+  pi_mcp_model: "claude-sonnet-4-5-20250929"  # Sub-agent model (cheaper than primary)
+  pi_mcp_thinking: "medium"                    # Thinking level for Pi agent
   servers:
     # GitHub MCP servers (one per agent, each with its own PAT)
     - name: "github"
@@ -176,6 +186,19 @@ openclaw_mcp_adapter:
       cwd: "/home/ubuntu/.openclaw/workspace-manon"
     - name: "claude-tl"
       type: "claude-code"
+      agent_id: "tl"
+      cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    # Pi MCP servers (one per agent, reuses claude_setup_token, workspace-scoped cwd)
+    - name: "pi"
+      type: "pi"
+      agent_id: "main"
+      cwd: "/home/ubuntu/.openclaw/workspace"
+    - name: "pi-manon"
+      type: "pi"
+      agent_id: "manon"
+      cwd: "/home/ubuntu/.openclaw/workspace-manon"
+    - name: "pi-tl"
+      type: "pi"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
 

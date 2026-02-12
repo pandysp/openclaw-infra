@@ -114,6 +114,77 @@
   loop_control:
     label: "{{ item.item.agent_id }}"
 
+- name: Add sandbox path workaround to AGENTS.md
+  ansible.builtin.blockinfile:
+    path: "{{ item.item.workspace_dir }}/AGENTS.md"
+    marker: "<!-- {mark} sandbox-path-workaround -->"
+    insertafter: "^## Safety"
+    block: |
+      ## File Operations (Sandbox Bug Workaround)
+
+      There is a known OpenClaw bug (#9560) where the Read/Write/Edit tools
+      validate paths against the host filesystem path instead of the container path.
+
+      **Always use RELATIVE paths for file operations:**
+      - `SOUL.md` not `/workspace/SOUL.md`
+      - `memory/2026-02-11.md` not `/workspace/memory/2026-02-11.md`
+      - `subdir/file.txt` not `/home/ubuntu/.openclaw/workspace/subdir/file.txt`
+
+      Your working directory is already the workspace root. Relative paths work
+      correctly. Absolute paths (both /workspace/... and /home/ubuntu/...) will
+      be rejected with "escapes sandbox root."
+
+      The exec tool (shell commands) is NOT affected -- absolute /workspace/ paths
+      work fine in exec since it runs inside the container.
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
+- name: Add sandbox environment guide to AGENTS.md
+  ansible.builtin.blockinfile:
+    path: "{{ item.item.workspace_dir }}/AGENTS.md"
+    marker: "<!-- {mark} sandbox-environment -->"
+    insertafter: "<!-- END sandbox-path-workaround -->"
+    block: |
+      ## Sandbox Environment
+
+      You run inside a Docker container with a writable filesystem.
+
+      ### Installing Packages
+
+      Installs outside `/workspace/` are **ephemeral** — destroyed on container restart
+      (gateway restart, reprovisioning). Fine for one-off tasks.
+
+      **One-off tools** — use `uvx` (runs without installing):
+      ```
+      uvx cowsay hello
+      uvx ruff check .
+      ```
+
+      **Persistent installs** — install to `/workspace/` so they survive restarts:
+
+      - **Python:** `uv venv /workspace/.venv && source /workspace/.venv/bin/activate && uv pip install <pkg>`
+        (next session: `source /workspace/.venv/bin/activate`)
+      - **Python (target):** `uv pip install --target /workspace/.packages <pkg>`
+        (set `PYTHONPATH=/workspace/.packages:$PYTHONPATH PATH=/workspace/.packages/bin:$PATH`)
+      - **npm:** `npm install --prefix /workspace/.npm-packages -g <pkg>`
+        (set `PATH=/workspace/.npm-packages/bin:$PATH`)
+      - **Binaries:** download to `/workspace/.bin/` and add to PATH
+
+      **Rule of thumb:** Need it tomorrow → `/workspace/`. One-off → `uvx` or install normally.
+
+      ### Filesystem Access
+
+      - **Writable:** `/home/node/`, `/workspace/`, `/tmp/`, `/var/tmp/`
+      - **Read-only:** `/usr/bin/`, `/etc/`, `/usr/lib/` (root-owned, you're UID 1000)
+      - **Network:** Outbound internet (bridge). No access to host services.
+      - **Isolation:** Only `/workspace/` is mounted from host. No gateway config, no other agents.
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
 - name: Initial workspace commit and push
   ansible.builtin.shell: |
     set -euo pipefail

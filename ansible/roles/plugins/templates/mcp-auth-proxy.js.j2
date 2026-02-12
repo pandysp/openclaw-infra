@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-// Codex Token Proxy — reverse proxy that injects ChatGPT OAuth bearer token
-// for Codex MCP containers on the codex-proxy-net Docker network.
+// MCP Auth Proxy — reverse proxy that injects credentials for MCP containers
+// on the codex-proxy-net Docker network.
+//
+// Routes:
+//   /*          → chatgpt.com (Bearer token injection for Codex)
+//   /anthropic/* → api.anthropic.com (credential injection for Claude Code + Pi)
+//                  Auto-detects token type: OAuth (sk-ant-oat*) → Bearer, API key → x-api-key
 //
 // Zero npm dependencies. Listens on the Docker network gateway IP only,
 // so sandbox containers on the default bridge cannot reach it.
@@ -84,6 +89,52 @@ try {
   });
 } catch (err) {
   log('warn', 'Cannot watch auth.json, token reload requires restart', { error: err.message });
+}
+
+// --- Anthropic token management (static key from file, no refresh) ---
+
+const ANTHROPIC_AUTH_PATH = process.env.ANTHROPIC_AUTH_PATH || '/home/ubuntu/.openclaw/anthropic-auth-token';
+let cachedAnthropicToken = null;
+let anthropicTokenMtime = 0;
+
+function getAnthropicToken() {
+  try {
+    const stat = fs.statSync(ANTHROPIC_AUTH_PATH);
+    if (cachedAnthropicToken && stat.mtimeMs === anthropicTokenMtime) return cachedAnthropicToken;
+    const token = fs.readFileSync(ANTHROPIC_AUTH_PATH, 'utf8').trim();
+    if (!token) {
+      log('error', 'Anthropic token file exists but is empty', { path: ANTHROPIC_AUTH_PATH });
+      return null;
+    }
+    cachedAnthropicToken = token;
+    anthropicTokenMtime = stat.mtimeMs;
+    log('info', 'Loaded Anthropic token from file');
+    return cachedAnthropicToken;
+  } catch (err) {
+    log('error', 'Failed to read Anthropic token', { error: err.message });
+    return null;
+  }
+}
+
+// Watch for rotation, with retry if file doesn't exist yet
+function watchAnthropicToken() {
+  try {
+    fs.watch(ANTHROPIC_AUTH_PATH, () => {
+      log('info', 'Anthropic token file changed, invalidating cache');
+      cachedAnthropicToken = null;
+      anthropicTokenMtime = 0;
+    });
+    log('info', 'Watching Anthropic token file for changes');
+    return true;
+  } catch (err) {
+    log('warn', 'Cannot watch Anthropic token file, retrying in 30s', { error: err.message });
+    return false;
+  }
+}
+if (!watchAnthropicToken()) {
+  const retryWatch = setInterval(() => {
+    if (watchAnthropicToken()) clearInterval(retryWatch);
+  }, 30000);
 }
 
 // --- Token refresh ---
@@ -270,24 +321,110 @@ function proxyRequest(clientReq, clientRes, body, token, isRetry) {
   clientRes.on('close', () => clearTimeout(overallTimer));
 }
 
+function proxyAnthropicRequest(clientReq, clientRes, body) {
+  const token = getAnthropicToken();
+  if (!token) {
+    clientRes.writeHead(503, { 'Content-Type': 'application/json' });
+    clientRes.end(JSON.stringify({ error: 'no_token', detail: 'Cannot read Anthropic token' }));
+    return;
+  }
+
+  const upstreamPath = clientReq.url.slice('/anthropic'.length) || '/';
+  const headers = Object.assign({}, clientReq.headers);
+  delete headers.host;
+  delete headers['x-api-key'];
+  delete headers['authorization'];
+  delete headers['transfer-encoding'];
+  headers.host = 'api.anthropic.com';
+  // Auto-detect token type: OAuth setup tokens (sk-ant-oat*) require Bearer auth
+  // with the oauth-2025-04-20 beta flag. Standard API keys use x-api-key header.
+  if (token.startsWith('sk-ant-oat')) {
+    headers['authorization'] = 'Bearer ' + token;
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+    // Merge oauth-2025-04-20 into anthropic-beta (preserve existing beta flags)
+    const existing = (headers['anthropic-beta'] || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!existing.includes('oauth-2025-04-20')) existing.push('oauth-2025-04-20');
+    headers['anthropic-beta'] = existing.join(',');
+  } else {
+    headers['x-api-key'] = token;
+  }
+  headers['content-length'] = Buffer.byteLength(body);
+
+  const options = {
+    hostname: 'api.anthropic.com',
+    port: 443,
+    path: upstreamPath,
+    method: clientReq.method,
+    headers: headers,
+    timeout: CONNECT_TIMEOUT_MS,
+  };
+
+  const upReq = https.request(options, (upRes) => {
+    clientRes.writeHead(upRes.statusCode, upRes.headers);
+    pipeline(upRes, clientRes, (err) => {
+      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE')
+        log('error', 'Anthropic stream error', { error: err.message });
+    });
+  });
+
+  upReq.on('timeout', () => upReq.destroy(new Error('Anthropic connect timeout')));
+  upReq.on('socket', (socket) => {
+    socket.once('connect', () => {
+      upReq.setTimeout(RESPONSE_TIMEOUT_MS, () =>
+        upReq.destroy(new Error('Anthropic response timeout')));
+    });
+  });
+  upReq.on('error', (err) => {
+    log('error', 'Anthropic upstream error', { error: err.message, path: upstreamPath });
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { 'Content-Type': 'application/json' });
+      clientRes.end(JSON.stringify({ error: 'upstream_error', detail: err.message }));
+    }
+  });
+
+  upReq.write(body);
+  upReq.end();
+
+  const overallTimer = setTimeout(() => {
+    upReq.destroy(new Error('Anthropic overall timeout'));
+  }, OVERALL_TIMEOUT_MS);
+  clientRes.on('close', () => clearTimeout(overallTimer));
+}
+
 // --- HTTP server ---
 
 const server = http.createServer((req, res) => {
-  // Health check
+  // Health check — per-service status
   if (req.url === '/health' && req.method === 'GET') {
-    const token = getAccessToken();
-    const healthy = !!token && !circuitOpen;
+    const codexToken = getAccessToken();
+    const anthropicToken = getAnthropicToken();
+    const codexHealthy = !!codexToken && !circuitOpen;
+    const anthropicHealthy = !!anthropicToken;
+    const healthy = codexHealthy || anthropicHealthy;
     res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: healthy ? 'healthy' : 'unhealthy',
-      hasToken: !!token,
-      circuitOpen: circuitOpen,
-      circuitOpenUntil: circuitOpen ? new Date(circuitOpenUntil).toISOString() : null,
+      codex: { hasToken: !!codexToken, healthy: codexHealthy, circuitOpen, circuitOpenUntil: circuitOpen ? new Date(circuitOpenUntil).toISOString() : null },
+      anthropic: { hasToken: !!anthropicToken, healthy: anthropicHealthy, authMethod: anthropicToken && anthropicToken.startsWith('sk-ant-oat') ? 'bearer' : 'api-key' },
     }));
     return;
   }
 
-  // Proxy all other requests
+  // Anthropic route — Claude Code + Pi containers
+  if (req.url.startsWith('/anthropic/') || req.url === '/anthropic') {
+    bufferBody(req).then((body) => {
+      proxyAnthropicRequest(req, res, body);
+    }).catch((err) => {
+      log('error', 'Failed to buffer Anthropic request body', { error: err.message });
+      if (!res.headersSent) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad_request', detail: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Default: Codex route (existing behavior, unchanged)
   const token = getAccessToken();
   if (!token) {
     res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -307,9 +444,9 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  log('info', 'Codex token proxy started', { host: LISTEN_HOST, port: LISTEN_PORT });
-  // Pre-load token
+  log('info', 'MCP auth proxy started', { host: LISTEN_HOST, port: LISTEN_PORT });
   getAccessToken();
+  getAnthropicToken();
 });
 
 server.on('error', (err) => {
