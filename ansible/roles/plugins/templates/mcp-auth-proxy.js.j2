@@ -463,7 +463,8 @@ function proxyGitHubRequest(clientReq, clientRes) {
   delete headers.host;
   delete headers.authorization;
   headers.host = 'github.com';
-  headers.authorization = 'token ' + token;
+  // GitHub git smart HTTP requires Basic auth (not Bearer)
+  headers.authorization = 'Basic ' + Buffer.from('x-access-token:' + token).toString('base64');
 
   const options = {
     hostname: 'github.com',
