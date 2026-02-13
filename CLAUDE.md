@@ -127,9 +127,10 @@ openclaw-infra/
 │       └── workspace/ # Deploy key, git sync timer (conditional)
 │
 ├── scripts/
-│   ├── provision.sh   # Ansible wrapper (reads secrets from Pulumi)
-│   ├── verify.sh      # Post-deployment checks
-│   └── backup.sh      # Data backup
+│   ├── provision.sh       # Ansible wrapper (reads secrets from Pulumi)
+│   ├── setup-mac-node.sh  # One-time Mac node host installation
+│   ├── verify.sh          # Post-deployment checks
+│   └── backup.sh          # Data backup
 │
 └── docs/
     ├── BROWSER-CONTROL-PLANNING.md  # Future browser automation approaches
@@ -159,7 +160,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall/update OpenClaw binary |
 | `sandbox` | sandbox | Rebuild custom Docker image |
-| `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
+| `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings, node exec |
 | `telegram` | telegram | Update cron prompts or channel config |
 | `obsidian` | obsidian | Clone/update Obsidian vaults in agent workspaces |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
@@ -625,6 +626,85 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 **Writable rootfs:** Sandbox containers have a writable rootfs (`readOnlyRoot: false`) so agents can install tools at runtime (`pip install`, `npm install -g`, `curl | bash`). The container runs as UID 1000 with `--cap-drop ALL`, so system directories (`/usr/bin/`, `/etc/`) remain unwritable — only `/home/node/` is writable via the overlay layer. Installs persist for the container's lifetime (hours) but are destroyed on container recreation. For persistent installs, agents can use `/workspace/.venv/` or `/workspace/.packages/`. See [docs/SECURITY.md](./docs/SECURITY.md#writable-rootfs-rationale) for the full security analysis.
 
 **Tool access:** Sandbox sessions have access to all standard tool groups (openclaw, runtime, fs, sessions, memory, web, ui, automation, messaging, nodes). Elevated tools (shell, system commands) are enabled. When Telegram is configured, sensitive actions require approval from the configured Telegram user. Without Telegram, elevated tools are enabled without an approval gate. Change via `./scripts/provision.sh --tags config`.
+
+## Remote Node Control (Mac)
+
+Agents can run shell commands on your Mac via the node host feature. This enables tmux-based workflows where a VPS agent controls a Claude Code session on your local machine.
+
+```
+┌──────────────────────┐     ┌────────────────────────┐     ┌──────────────────────┐
+│  VPS Agent           │     │  OpenClaw Gateway      │     │  Mac (Node Host)     │
+│  (sandbox)           │────▶│  tools.exec.host=node  │────▶│  openclaw node run   │
+│                      │     │                        │     │  (LaunchAgent)       │
+│  uses workdir=/tmp   │     │  WebSocket via         │     │  tmux, claude        │
+│  for node commands   │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
+└──────────────────────┘     └────────────────────────┘     └──────────────────────┘
+```
+
+### Setup
+
+**One-time Mac setup:**
+```bash
+./scripts/setup-mac-node.sh
+
+# Then approve pairing on the VPS:
+ssh ubuntu@openclaw-vps 'openclaw devices list'
+ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
+
+# Re-provision to auto-discover and pin the node ID:
+./scripts/provision.sh --tags config
+```
+
+**What `setup-mac-node.sh` does:**
+1. Resolves gateway hostname from Tailscale
+2. Installs a persistent LaunchAgent (`ai.openclaw.node.plist`)
+3. Configures node-side allowlists (broad `*` patterns)
+
+### Config
+
+Gateway-side (set by Ansible):
+```
+tools.exec.host: node           # Route to connected node (not sandbox)
+tools.exec.security: full       # Tighten to "allowlist" after testing
+tools.exec.ask: off             # Tighten to "on-miss" after testing
+tools.exec.node: <auto>         # Auto-discovered during provisioning
+```
+
+Node-side (set by `setup-mac-node.sh`):
+- `~/.openclaw/exec-approvals.json` — allowlist of permitted commands
+- Managed via `openclaw approvals allowlist add/remove`
+
+**Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
+
+### Known Issue: CWD Bug
+
+The gateway sends the agent's VPS workspace path (e.g., `/home/ubuntu/.openclaw/workspace`) as the working directory for node commands. This path doesn't exist on macOS, causing `spawn /bin/sh ENOENT`.
+
+**Workaround:** Agents must pass `workdir=/tmp` or `workdir=/Users/<user>` in every command targeting a node. Tracked in [openclaw/openclaw#15441](https://github.com/openclaw/openclaw/issues/15441).
+
+### Operations
+
+```bash
+# Check node status
+ssh ubuntu@openclaw-vps 'openclaw nodes status'
+
+# Test from VPS
+ssh ubuntu@openclaw-vps 'openclaw nodes run --cwd /tmp echo hello'
+
+# Manage Mac node host
+openclaw node status          # Check LaunchAgent
+openclaw node restart         # Restart after updates
+openclaw node stop            # Stop the service
+
+# Reset node ID pin (e.g., after re-pairing)
+ssh ubuntu@openclaw-vps 'openclaw config unset tools.exec.node'
+./scripts/provision.sh --tags config   # Re-discovers and pins
+
+# View node host logs
+tail -f ~/.openclaw/logs/node.log
+```
+
+**Note:** The node host disconnects on gateway restarts but auto-reconnects (LaunchAgent handles restarts). If the node ID changes (re-pairing), re-run `./scripts/provision.sh --tags config` to update the pin.
 
 ## Semantic Search (qmd)
 

@@ -15,6 +15,11 @@
 #
 # Then re-provision to auto-discover and pin the node ID:
 #   ./scripts/provision.sh --tags config
+#
+# Known issue: The gateway sends the VPS workspace path as the working
+# directory for node commands. Since this path doesn't exist on macOS,
+# agents must pass workdir=/tmp or workdir=/Users/<user> in every exec
+# call. See: https://github.com/openclaw/openclaw/issues/15441
 
 set -euo pipefail
 
