@@ -26,3 +26,49 @@
   register: agent_create
   changed_when: "'already exists' not in agent_create.stdout"
   notify: restart openclaw-gateway
+
+- name: Refresh agent list for heartbeat targeting
+  ansible.builtin.shell: |
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw agents list --json
+  args:
+    executable: /bin/bash
+  register: agents_current
+  changed_when: false
+
+- name: Set per-agent heartbeat targeting to Telegram
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    AGENTS_JSON='{{ agents_current.stdout }}'
+    AGENT_INDEX=$(echo "$AGENTS_JSON" | jq -r 'to_entries[] | select(.value.id == "{{ item.id }}") | .key')
+    if [ -z "$AGENT_INDEX" ]; then
+        echo "ERROR: Agent '{{ item.id }}' not found in agents list after creation step" >&2
+        echo "Agents list: $AGENTS_JSON" >&2
+        exit 1
+    fi
+    DESIRED='{"target":"telegram","to":"{{ item.deliver_to }}"}'
+    CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
+        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+            CURRENT="{}"
+        else
+            echo "ERROR reading heartbeat config for {{ item.id }}: $CURRENT" >&2
+            exit 1
+        fi
+    }
+    C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED" | jq -cS '.')
+    if [ "$C_NORM" = "$D_NORM" ]; then
+        echo "OK"
+    else
+        openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
+        echo "UPDATED: {{ item.id }} heartbeat → telegram:{{ item.deliver_to }}"
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ openclaw_agents | selectattr('deliver_to', 'ne', '') | list }}"
+  loop_control:
+    label: "{{ item.id }} → {{ item.deliver_to }}"
+  register: heartbeat_result
+  changed_when: "'UPDATED' in heartbeat_result.stdout"
+  notify: restart openclaw-gateway

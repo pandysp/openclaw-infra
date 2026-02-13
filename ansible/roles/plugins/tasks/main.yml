@@ -1429,13 +1429,20 @@
         echo "SKIP: Agent '{{ item.id }}' not found in agents list"
         exit 0
     fi
-    CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.tools.deny" 2>/dev/null || echo "[]")
+    CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.tools.deny" 2>&1) || {
+        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+            CURRENT="[]"
+        else
+            echo "ERROR reading tools.deny for {{ item.id }}: $CURRENT" >&2
+            exit 1
+        fi
+    }
     DESIRED='{{ deny_list | to_json }}'
     if [ "$CURRENT" = "$DESIRED" ]; then
-        echo "UNCHANGED"
+        echo "OK"
     else
         openclaw config set "agents.list.${AGENT_INDEX}.tools.deny" --json "$DESIRED"
-        echo "CHANGED"
+        echo "UPDATED"
     fi
   args:
     executable: /bin/bash
@@ -1450,7 +1457,7 @@
   loop_control:
     label: "{{ item.id }}"
   register: deny_result
-  changed_when: "'CHANGED' in deny_result.stdout"
+  changed_when: "'UPDATED' in deny_result.stdout"
   notify: restart openclaw-gateway
 
 # --- Disable built-in memorySearch when qmd servers are registered ---
@@ -1462,7 +1469,14 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    CONFIG=$(openclaw config get plugins.entries.openclaw-mcp-adapter.config 2>/dev/null || echo '{}')
+    CONFIG=$(openclaw config get plugins.entries.openclaw-mcp-adapter.config 2>&1) || {
+        if echo "$CONFIG" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+            CONFIG='{}'
+        else
+            echo "ERROR reading plugin config: $CONFIG" >&2
+            exit 1
+        fi
+    }
     QMD_COUNT=$(echo "$CONFIG" | jq '[.servers[]? | select(.name | startswith("qmd"))] | length')
     echo "$QMD_COUNT"
   args:
