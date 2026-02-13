@@ -113,6 +113,18 @@
         # Heartbeat interval
         openclaw config set agents.defaults.heartbeat.every {{ openclaw_heartbeat_interval }}
 
+        # Message queue: collect messages while agent is busy, coalesce into one followup turn
+        openclaw config set messages.queue.mode collect
+
+        # Concurrency: allow more parallel sessions across all agents
+        openclaw config set agents.defaults.maxConcurrent 8
+        openclaw config set agents.defaults.subagents.maxConcurrent 16
+
+        # Node exec configuration (for remote Mac node control)
+        openclaw config set tools.exec.host {{ openclaw_exec_host }}
+        openclaw config set tools.exec.security {{ openclaw_exec_security }}
+        openclaw config set tools.exec.ask {{ openclaw_exec_ask }}
+
         # Sandbox configuration
         openclaw config set agents.defaults.sandbox.mode {{ openclaw_sandbox_mode }}
         openclaw config set agents.defaults.sandbox.workspaceAccess {{ openclaw_sandbox_workspace_access }}
@@ -122,6 +134,29 @@
       args:
         executable: /bin/bash
       notify: restart openclaw-gateway
+
+    - name: Auto-discover connected system node for exec
+      ansible.builtin.shell: |
+        set -euo pipefail
+        NODE_ID=$(openclaw nodes status --json 2>/dev/null \
+          | jq -r '[.nodes // . // [] | .[] | select(.connected == true) | select(.capabilities | index("system")) | .id] | first // empty' 2>/dev/null || true)
+        if [ -n "$NODE_ID" ]; then
+            echo "Pinning exec to connected system node: ${NODE_ID:0:12}..."
+            openclaw config set tools.exec.node "$NODE_ID"
+        else
+            echo "WARNING: No connected system node found — tools.exec.node not set"
+            echo "  Start the node host on your Mac: openclaw node install --host <gateway> --port 443 --tls"
+            EXISTING=$(openclaw config get tools.exec.node 2>/dev/null || true)
+            if echo "$EXISTING" | grep -q "not found"; then
+                echo "  No existing tools.exec.node pin — node exec will fail until a node connects"
+            else
+                echo "  Keeping existing pin: $EXISTING"
+            fi
+        fi
+      args:
+        executable: /bin/bash
+      register: node_discovery
+      changed_when: node_discovery.stdout is search('Pinning')
 
     - name: Remove stale sandbox containers after config change
       ansible.builtin.shell: |

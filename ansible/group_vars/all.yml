@@ -25,6 +25,14 @@ openclaw_custom_models:
 openclaw_heartbeat_interval: "30m"
 openclaw_elevated_default: "off"
 
+# Node exec settings (for remote Mac node control)
+# Set openclaw_exec_host to "node" to enable exec on connected nodes.
+# Node ID is NOT configured here — it's dynamic (changes on re-pairing).
+# Pin it manually after pairing: openclaw config set tools.exec.node <id>
+openclaw_exec_host: "node"
+openclaw_exec_security: "full"     # Tighten to "allowlist" after testing
+openclaw_exec_ask: "off"           # Tighten to "on-miss" after testing
+
 # Sandbox settings
 openclaw_sandbox_mode: "all"
 openclaw_sandbox_workspace_access: "rw"
