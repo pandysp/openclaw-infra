@@ -50,7 +50,11 @@ def cache_key(relative_path: str) -> str:
 def read_cache_entry(cache_path: Path) -> dict | None:
     try:
         return json.loads(cache_path.read_text())
-    except Exception:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"  WARNING: corrupt cache entry {cache_path.name}: {e}", file=sys.stderr)
+        return None
+    except OSError as e:
+        print(f"  WARNING: cannot read cache entry {cache_path.name}: {e}", file=sys.stderr)
         return None
 
 
@@ -218,10 +222,14 @@ def cmd_sync(force: bool = False):
                     skipped += 1
                     continue
 
+        if engine not in EXTRACTORS:
+            errors.append((rel_path, "UnsupportedEngine", f"no extractor for {ext}"))
+            print(f"  SKIP: {rel_path} (unsupported extension {ext})", file=sys.stderr)
+            continue
+
         try:
             stat = file_path.stat()
-            extractor = EXTRACTORS[engine]
-            text = extractor(file_path)
+            text = EXTRACTORS[engine](file_path)
 
             entry = {
                 "path": rel_path,
@@ -234,7 +242,7 @@ def cmd_sync(force: bool = False):
             cache_path.write_text(json.dumps(entry, ensure_ascii=False))
             extracted += 1
             print(f"  {engine}: {rel_path}")
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
             errors.append((rel_path, type(e).__name__, str(e)))
             print(f"  ERROR: {rel_path} ({type(e).__name__}: {e})", file=sys.stderr)
 
