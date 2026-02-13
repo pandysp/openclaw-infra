@@ -25,13 +25,17 @@ openclaw_custom_models:
 openclaw_heartbeat_interval: "30m"
 openclaw_elevated_default: "off"
 
+# Concurrency settings
+openclaw_max_concurrent: 8
+openclaw_subagents_max_concurrent: 16
+
 # Node exec settings (for remote Mac node control)
 # Set openclaw_exec_host to "node" to enable exec on connected nodes.
 # Node ID is NOT configured here — it's dynamic (changes on re-pairing).
 # Pin it manually after pairing: openclaw config set tools.exec.node <id>
 openclaw_exec_host: "node"
-openclaw_exec_security: "full"     # Tighten to "allowlist" after testing
-openclaw_exec_ask: "off"           # Tighten to "on-miss" after testing
+openclaw_exec_security: "full"      # DEVELOPMENT: wide open while iterating. Target: "allowlist"
+openclaw_exec_ask: "off"            # DEVELOPMENT: no approval prompts. Target: "on-miss"
 
 # Sandbox settings
 openclaw_sandbox_mode: "all"

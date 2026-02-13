@@ -117,8 +117,8 @@
         openclaw config set messages.queue.mode collect
 
         # Concurrency: allow more parallel sessions across all agents
-        openclaw config set agents.defaults.maxConcurrent 8
-        openclaw config set agents.defaults.subagents.maxConcurrent 16
+        openclaw config set agents.defaults.maxConcurrent {{ openclaw_max_concurrent }}
+        openclaw config set agents.defaults.subagents.maxConcurrent {{ openclaw_subagents_max_concurrent }}
 
         # Node exec configuration (for remote Mac node control)
         # NOTE: Gateway sends VPS workspace path as CWD to nodes — doesn't exist on Mac.
@@ -140,15 +140,32 @@
     - name: Auto-discover connected system node for exec
       ansible.builtin.shell: |
         set -euo pipefail
-        NODE_ID=$(openclaw nodes status --json 2>/dev/null \
-          | jq -r '[.nodes // . // [] | .[] | select(.connected == true) | select(.capabilities | index("system")) | .id] | first // empty' 2>/dev/null || true)
+
+        # Step 1: Get nodes status JSON (fail visibly if gateway is down)
+        NODES_RAW=$(openclaw nodes status --json 2>&1) || {
+            echo "WARNING: 'openclaw nodes status --json' failed (rc=$?): $NODES_RAW"
+            echo "  Gateway may not be running. Check: systemctl --user status openclaw-gateway"
+            NODES_RAW=""
+        }
+
+        # Step 2: Parse JSON to find connected system node
+        NODE_ID=""
+        if [ -n "$NODES_RAW" ]; then
+            NODE_ID=$(echo "$NODES_RAW" | jq -r '[.nodes // . // [] | .[] | select(.connected == true) | select(.capabilities | index("system")) | .id] | first // empty' 2>&1) || {
+                echo "WARNING: Failed to parse nodes JSON: $NODE_ID"
+                echo "  Raw output: $NODES_RAW"
+                NODE_ID=""
+            }
+        fi
+
+        # Step 3: Pin or warn
         if [ -n "$NODE_ID" ]; then
             echo "Pinning exec to connected system node: ${NODE_ID:0:12}..."
             openclaw config set tools.exec.node "$NODE_ID"
         else
             echo "WARNING: No connected system node found — tools.exec.node not set"
             echo "  Start the node host on your Mac: openclaw node install --host <gateway> --port 443 --tls"
-            EXISTING=$(openclaw config get tools.exec.node 2>/dev/null || true)
+            EXISTING=$(openclaw config get tools.exec.node 2>&1) || true
             if echo "$EXISTING" | grep -q "not found"; then
                 echo "  No existing tools.exec.node pin — node exec will fail until a node connects"
             else

@@ -23,20 +23,44 @@
 
 set -euo pipefail
 
-# --- Resolve gateway hostname from Tailscale ---
-GATEWAY_HOST=$(tailscale status 2>/dev/null | grep -m1 'openclaw-vps' | awk '{print $2}')
-if [ -z "$GATEWAY_HOST" ]; then
-    echo "ERROR: Cannot find openclaw-vps in tailscale status"
+# --- Resolve gateway hostname from Tailscale (using JSON for reliability) ---
+TS_JSON=$(tailscale status --json 2>&1) || {
+    echo "ERROR: 'tailscale status --json' failed: $TS_JSON"
     echo "  Make sure Tailscale is connected and the VPS is online"
+    exit 1
+}
+
+GATEWAY_HOST=$(echo "$TS_JSON" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for peer in (data.get('Peer') or {}).values():
+    if 'openclaw-vps' in peer.get('HostName', ''):
+        print(peer['HostName'])
+        break
+" 2>&1) || {
+    echo "ERROR: Failed to parse Tailscale JSON: $GATEWAY_HOST"
+    exit 1
+}
+
+if [ -z "$GATEWAY_HOST" ]; then
+    echo "ERROR: Cannot find openclaw-vps in Tailscale peers"
+    echo "  Make sure the VPS is online and joined to your tailnet"
     exit 1
 fi
 
-MAGIC_DNS_SUFFIX=$(tailscale status --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('MagicDNSSuffix',''))" 2>/dev/null || true)
-if [ -n "$MAGIC_DNS_SUFFIX" ]; then
-    GATEWAY_FQDN="${GATEWAY_HOST}.${MAGIC_DNS_SUFFIX}"
-else
-    GATEWAY_FQDN="$GATEWAY_HOST"
+MAGIC_DNS_SUFFIX=$(echo "$TS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('MagicDNSSuffix',''))" 2>&1) || {
+    echo "ERROR: Failed to extract MagicDNS suffix: $MAGIC_DNS_SUFFIX"
+    exit 1
+}
+
+if [ -z "$MAGIC_DNS_SUFFIX" ]; then
+    echo "ERROR: Could not determine Tailscale MagicDNS suffix"
+    echo "  Ensure MagicDNS is enabled in your Tailscale admin console"
+    echo "  Fallback: set GATEWAY_FQDN manually and re-run"
+    exit 1
 fi
+
+GATEWAY_FQDN="${GATEWAY_HOST}.${MAGIC_DNS_SUFFIX}"
 
 echo "Gateway: $GATEWAY_FQDN (port 443, TLS via Tailscale Serve)"
 
@@ -64,13 +88,35 @@ echo ""
 echo "Node host installed and running."
 openclaw node status
 
-# --- Configure exec approvals (allow all for now) ---
+# --- Configure exec approvals ---
 echo ""
 echo "Configuring node-side exec approvals..."
-openclaw approvals allowlist add --agent "*" "/bin/*" 2>/dev/null || true
-openclaw approvals allowlist add --agent "*" "/usr/bin/*" 2>/dev/null || true
-openclaw approvals allowlist add --agent "*" "/opt/homebrew/bin/*" 2>/dev/null || true
-openclaw approvals allowlist add --agent "*" "*" 2>/dev/null || true
+
+APPROVAL_FAILED=0
+add_approval() {
+    local pattern="$1"
+    if ! openclaw approvals allowlist add --agent "*" "$pattern" 2>&1; then
+        echo "  WARNING: Failed to add allowlist pattern: $pattern"
+        APPROVAL_FAILED=1
+    fi
+}
+
+# Standard system paths
+add_approval "/bin/*"
+add_approval "/usr/bin/*"
+add_approval "/opt/homebrew/bin/*"
+
+# Specific commands needed for tmux-based workflows
+for cmd in tmux claude ps sleep echo hostname which grep cat tail head ls; do
+    add_approval "$cmd"
+done
+
+if [ "$APPROVAL_FAILED" -ne 0 ]; then
+    echo ""
+    echo "WARNING: Some exec approval patterns failed to add."
+    echo "  Check: openclaw approvals allowlist list"
+    echo "  Add manually: openclaw approvals allowlist add --agent '*' '<pattern>'"
+fi
 
 echo ""
 echo "=== Setup complete ==="
