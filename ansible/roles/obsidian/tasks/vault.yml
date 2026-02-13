@@ -1,0 +1,106 @@
+---
+# Per-vault tasks, included from main.yml with loop.
+# item.0 = vault dict, item.1 = agent_id string
+
+# --- Assertions ---
+
+- name: "Assert GitHub PAT is set for {{ item.1 }}"
+  ansible.builtin.assert:
+    that:
+      - openclaw_obsidian_github_tokens[item.1] | default('') | length > 0
+    fail_msg: >-
+      Obsidian vault '{{ item.0.name }}' is assigned to agent '{{ item.1 }}'
+      but no GitHub PAT is configured. Set the matching github_token in Pulumi config.
+    quiet: true
+
+- name: "Assert repo URL is HTTPS for {{ item.0.name }}"
+  ansible.builtin.assert:
+    that:
+      - item.0.repo_url is match('^https://')
+    fail_msg: >-
+      Obsidian vault '{{ item.0.name }}' repo_url must start with https://
+      (got '{{ item.0.repo_url }}'). SSH URLs are not supported for Obsidian vaults.
+    quiet: true
+
+- name: "Resolve workspace dir for {{ item.1 }}"
+  ansible.builtin.set_fact:
+    _obsidian_workspace_dir: >-
+      {{ (openclaw_workspaces | selectattr('agent_id', 'equalto', item.1) | first).workspace_dir }}
+
+- name: "Assert workspace dir exists for {{ item.1 }}"
+  ansible.builtin.stat:
+    path: "{{ _obsidian_workspace_dir }}"
+  register: _obsidian_ws_stat
+
+- name: "Fail if workspace dir missing for {{ item.1 }}"
+  ansible.builtin.assert:
+    that:
+      - _obsidian_ws_stat.stat.exists
+      - _obsidian_ws_stat.stat.isdir
+    fail_msg: >-
+      Workspace directory '{{ _obsidian_workspace_dir }}' does not exist for agent '{{ item.1 }}'.
+      Run the agents role first (--tags agents) to create workspace directories.
+    quiet: true
+
+# --- Gitignore safety (handles --tags obsidian without --tags workspace) ---
+
+- name: "Ensure .gitignore has obsidian/ for {{ item.1 }}"
+  ansible.builtin.lineinfile:
+    path: "{{ _obsidian_workspace_dir }}/.gitignore"
+    line: "obsidian/"
+    create: true
+    mode: "0644"
+
+- name: "Ensure .gitignore has .deploy-keys/ for {{ item.1 }}"
+  ansible.builtin.lineinfile:
+    path: "{{ _obsidian_workspace_dir }}/.gitignore"
+    line: ".deploy-keys/"
+    create: true
+    mode: "0644"
+
+# --- Clone / update vault ---
+
+- name: "Ensure Obsidian directory exists for {{ item.1 }}"
+  ansible.builtin.file:
+    path: "{{ _obsidian_workspace_dir }}/Obsidian"
+    state: directory
+    mode: "0755"
+
+- name: "Check if vault already cloned: {{ item.0.name }} ({{ item.1 }})"
+  ansible.builtin.stat:
+    path: "{{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }}/.git"
+  register: _obsidian_vault_git
+
+- name: "Build authenticated URL for {{ item.0.name }}"
+  ansible.builtin.set_fact:
+    _obsidian_auth_url: >-
+      {{ item.0.repo_url | regex_replace('https://([^@]*@)?', 'https://' + openclaw_obsidian_github_tokens[item.1] + '@') }}
+
+- name: "Clone vault {{ item.0.name }} for {{ item.1 }}"
+  ansible.builtin.command:
+    cmd: >-
+      git clone {{ _obsidian_auth_url }}
+      {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }}
+  when: not _obsidian_vault_git.stat.exists
+  no_log: true
+
+- name: "Update remote URL for {{ item.0.name }} ({{ item.1 }})"
+  ansible.builtin.command:
+    cmd: >-
+      git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }}
+      remote set-url origin {{ _obsidian_auth_url }}
+  when: _obsidian_vault_git.stat.exists
+  no_log: true
+
+- name: "Pull latest for {{ item.0.name }} ({{ item.1 }})"
+  ansible.builtin.command:
+    cmd: git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }} pull --ff-only
+  register: _obsidian_pull
+  failed_when: false
+  changed_when: "'Already up to date' not in _obsidian_pull.stdout"
+
+- name: "Set git identity for {{ item.0.name }} ({{ item.1 }})"
+  ansible.builtin.shell: |
+    git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }} config user.name "OpenClaw Agent ({{ item.1 }})"
+    git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }} config user.email "openclaw-{{ item.1 }}@localhost"
+  changed_when: false

@@ -19,7 +19,11 @@
     # telegram must run immediately after agents — if sandbox runs in between,
     # agents exist without bindings and incoming messages get misrouted.
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
-    # qmd after telegram — needs workspace dirs from agents role, before plugins registers MCP servers.
+    # obsidian before qmd — vaults must be cloned before watchers start (prevents thundering herd).
+    - role: obsidian
+      tags: [obsidian]
+      when: openclaw_obsidian_vaults is defined
+    # qmd after obsidian — needs workspace dirs from agents role, before plugins registers MCP servers.
     - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
     # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }

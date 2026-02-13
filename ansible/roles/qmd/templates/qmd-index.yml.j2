@@ -8,3 +8,14 @@ collections:
   extracted-content:
     path: {{ item.workspace_dir }}/.scripts/extract-cache
     pattern: "*.json"
+{% set has_obsidian = [] %}
+{% for vault in openclaw_obsidian_vaults | default([]) %}
+{% if vault.repo_url | default('') != '' and item.agent_id in vault.agents %}
+{% if has_obsidian.append(1) %}{% endif %}
+{% endif %}
+{% endfor %}
+{% if has_obsidian | length > 0 %}
+  obsidian:
+    path: {{ item.workspace_dir }}/obsidian
+    pattern: "**/*.{md,txt,csv}"
+{% endif %}

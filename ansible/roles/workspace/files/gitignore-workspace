@@ -19,6 +19,9 @@ node_modules/
 .local/
 .npm/
 
+# Obsidian vaults (separate git repos)
+obsidian/
+
 # qmd search index (rebuilt by systemd watcher)
 .qmd/
 

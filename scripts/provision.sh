@@ -44,6 +44,9 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     github_token="${PROVISION_GITHUB_TOKEN:-}"
     github_token_manon="${PROVISION_GITHUB_TOKEN_MANON:-}"
     github_token_tl="${PROVISION_GITHUB_TOKEN_TL:-}"
+    obsidian_andy_vault_repo_url="${PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL:-}"
+    obsidian_manon_vault_repo_url="${PROVISION_OBSIDIAN_MANON_VAULT_REPO_URL:-}"
+    obsidian_tl_vault_repo_url="${PROVISION_OBSIDIAN_TL_VAULT_REPO_URL:-}"
 else
     echo "Reading secrets from Pulumi CLI"
     cd "$PULUMI_DIR"
@@ -70,6 +73,9 @@ else
     github_token=$(pulumi config get githubToken 2>/dev/null || echo "")
     github_token_manon=$(pulumi config get githubTokenManon 2>/dev/null || echo "")
     github_token_tl=$(pulumi config get githubTokenTl 2>/dev/null || echo "")
+    obsidian_andy_vault_repo_url=$(pulumi config get obsidianAndyVaultRepoUrl 2>/dev/null || echo "")
+    obsidian_manon_vault_repo_url=$(pulumi config get obsidianManonVaultRepoUrl 2>/dev/null || echo "")
+    obsidian_tl_vault_repo_url=$(pulumi config get obsidianTlVaultRepoUrl 2>/dev/null || echo "")
 fi
 
 # Validate required secrets
@@ -116,6 +122,9 @@ echo "  grok_search: $([ -n "$xai_api_key" ] && echo "configured" || echo "skipp
 echo "  github_mcp (main): $([ -n "$github_token" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (manon): $([ -n "$github_token_manon" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (tl): $([ -n "$github_token_tl" ] && echo "configured" || echo "skipped")"
+echo "  obsidian (andy): $([ -n "$obsidian_andy_vault_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  obsidian (manon): $([ -n "$obsidian_manon_vault_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  obsidian (tl): $([ -n "$obsidian_tl_vault_repo_url" ] && echo "configured" || echo "skipped")"
 
 # Read Codex auth credentials from local machine (optional)
 # Run `codex login` locally to create ~/.codex/auth.json before deploying.
@@ -147,6 +156,9 @@ workspace_tl_repo_url: "$workspace_tl_repo_url"
 github_token: "$(echo "$github_token" | sed 's/"/\\"/g')"
 github_token_manon: "$(echo "$github_token_manon" | sed 's/"/\\"/g')"
 github_token_tl: "$(echo "$github_token_tl" | sed 's/"/\\"/g')"
+obsidian_andy_vault_repo_url: "$obsidian_andy_vault_repo_url"
+obsidian_manon_vault_repo_url: "$obsidian_manon_vault_repo_url"
+obsidian_tl_vault_repo_url: "$obsidian_tl_vault_repo_url"
 EOF
 
 # Append deploy keys (block scalar when non-empty, explicit empty string otherwise)

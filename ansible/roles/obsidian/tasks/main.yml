@@ -1,0 +1,11 @@
+---
+# Clone Obsidian vaults into agent workspaces (<workspace>/Obsidian/<vault-name>/).
+# Uses HTTPS + GitHub PAT (reuses existing MCP PATs). No deploy keys.
+# Agents pull/push manually from Docker sandbox.
+
+# subelements flattens vaults × agents into (vault, agent_id) pairs
+- name: Clone and update Obsidian vaults
+  ansible.builtin.include_tasks: vault.yml
+  loop: "{{ openclaw_obsidian_vaults | selectattr('repo_url', 'ne', '') | list | subelements('agents') }}"
+  loop_control:
+    label: "{{ item.0.name }} → {{ item.1 }}"

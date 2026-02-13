@@ -161,6 +161,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
 | `telegram` | telegram | Update cron prompts or channel config |
+| `obsidian` | obsidian | Clone/update Obsidian vaults in agent workspaces |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 

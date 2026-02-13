@@ -242,6 +242,25 @@ claude_code_plugins:
     - "ty-lsp@pandysp"
     - "typescript-lsp@pandysp"
 
+# Obsidian vault definitions (cloned into <workspace>/Obsidian/<name>/)
+# Agents pull/push manually from Docker sandbox. Uses existing GitHub PATs via HTTPS.
+openclaw_obsidian_vaults:
+  - name: "andy-vault"
+    repo_url: "{{ obsidian_andy_vault_repo_url | default('') }}"
+    agents: ["main"]
+  - name: "manon-vault"
+    repo_url: "{{ obsidian_manon_vault_repo_url | default('') }}"
+    agents: ["manon"]
+  - name: "tl-vault"
+    repo_url: "{{ obsidian_tl_vault_repo_url | default('') }}"
+    agents: ["main", "manon", "tl"]
+
+# Explicit agent → GitHub PAT mapping for Obsidian HTTPS clones (reuses existing MCP PATs)
+openclaw_obsidian_github_tokens:
+  main: "{{ github_token | default('') }}"
+  manon: "{{ github_token_manon | default('') }}"
+  tl: "{{ github_token_tl | default('') }}"
+
 # Workspace git sync definitions (per-agent)
 openclaw_workspaces:
   - agent_id: "main"

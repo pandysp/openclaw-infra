@@ -34,6 +34,11 @@ const workspaceRepoUrl = config.get("workspaceRepoUrl");
 const workspaceManonRepoUrl = config.get("workspaceManonRepoUrl");
 const workspaceTlRepoUrl = config.get("workspaceTlRepoUrl");
 
+// Optional Obsidian vault repos (cloned via HTTPS + GitHub PAT, no deploy keys)
+const obsidianAndyVaultRepoUrl = config.get("obsidianAndyVaultRepoUrl");
+const obsidianManonVaultRepoUrl = config.get("obsidianManonVaultRepoUrl");
+const obsidianTlVaultRepoUrl = config.get("obsidianTlVaultRepoUrl");
+
 // Tailscale configuration
 // Find your tailnet name at: https://login.tailscale.com/admin/dns
 const tailnetDnsName = config.get("tailnetDnsName") || "";
@@ -129,6 +134,12 @@ const ansibleProvision = new command.local.Command(
             PROVISION_GITHUB_TOKEN: githubToken || "",
             PROVISION_GITHUB_TOKEN_MANON: githubTokenManon || "",
             PROVISION_GITHUB_TOKEN_TL: githubTokenTl || "",
+            PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL:
+                obsidianAndyVaultRepoUrl || "",
+            PROVISION_OBSIDIAN_MANON_VAULT_REPO_URL:
+                obsidianManonVaultRepoUrl || "",
+            PROVISION_OBSIDIAN_TL_VAULT_REPO_URL:
+                obsidianTlVaultRepoUrl || "",
         },
         // Re-run Ansible whenever the server is replaced
         triggers: [server.id],
