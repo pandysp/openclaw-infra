@@ -120,8 +120,13 @@
         openclaw config set agents.defaults.maxConcurrent {{ openclaw_max_concurrent }}
         openclaw config set agents.defaults.subagents.maxConcurrent {{ openclaw_subagents_max_concurrent }}
 
+        # Context pruning: trim stale tool outputs after 15m, keep last 3 assistant responses
+        openclaw config set agents.defaults.contextPruning.mode cache-ttl
+        openclaw config set agents.defaults.contextPruning.ttl 15m
+        openclaw config set agents.defaults.contextPruning.keepLastAssistants 3
+
         # Node exec configuration (for remote Mac node control)
-        # NOTE: Gateway sends VPS workspace path as CWD to nodes — doesn't exist on Mac.
+        # NOTE: Gateway sends VPS workspace path as CWD to nodes — does not exist on Mac.
         # Agents must pass workdir=/tmp in exec calls. See openclaw/openclaw#15441.
         openclaw config set tools.exec.host {{ openclaw_exec_host }}
         openclaw config set tools.exec.security {{ openclaw_exec_security }}

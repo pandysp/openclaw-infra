@@ -73,14 +73,17 @@ openclaw_agents:
     is_default: true
     deliver_to: "{{ telegram_user_id | default('') }}"
     deliver_type: "dm"
+    heartbeat_every: "15m"
   - id: "manon"
     is_default: false
     deliver_to: "{{ telegram_manon_user_id | default('') }}"
     deliver_type: "dm"
+    heartbeat_every: "1h"
   - id: "tl"
     is_default: false
     deliver_to: "{{ telegram_group_id | default('') }}"
     deliver_type: "group"
+    heartbeat_every: "1h"
 
 # Legacy cron job names (removed during migration to per-agent jobs)
 openclaw_legacy_cron_names:

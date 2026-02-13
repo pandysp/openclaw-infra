@@ -47,7 +47,7 @@
         echo "Agents list: $AGENTS_JSON" >&2
         exit 1
     fi
-    DESIRED='{"target":"telegram","to":"{{ item.deliver_to }}"}'
+    DESIRED='{"target":"telegram","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"}'
     CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
         if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
             CURRENT="{}"
