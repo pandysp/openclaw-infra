@@ -96,8 +96,16 @@
   ansible.builtin.command:
     cmd: git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }} pull --ff-only
   register: _obsidian_pull
-  failed_when: false
+  failed_when: _obsidian_pull.rc > 1
   changed_when: "'Already up to date' not in _obsidian_pull.stdout"
+
+- name: "Warn if pull not fast-forwardable for {{ item.0.name }} ({{ item.1 }})"
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: git pull --ff-only failed for {{ item.0.name }} ({{ item.1 }}).
+      rc={{ _obsidian_pull.rc }}, stderr={{ _obsidian_pull.stderr | default('') }}.
+      The vault may have diverged — manual merge may be needed.
+  when: _obsidian_pull.rc == 1
 
 - name: "Set git identity for {{ item.0.name }} ({{ item.1 }})"
   ansible.builtin.shell: |

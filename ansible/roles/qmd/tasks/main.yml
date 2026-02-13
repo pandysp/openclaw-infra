@@ -28,7 +28,6 @@
 - name: Verify qmd binary
   ansible.builtin.command: /home/ubuntu/.bun/bin/qmd status
   changed_when: false
-  failed_when: false
 
 # --- Phase 2: Determine active workspaces ---
 
