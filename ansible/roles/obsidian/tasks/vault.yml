@@ -51,18 +51,11 @@
     create: true
     mode: "0644"
 
-- name: "Ensure .gitignore has .deploy-keys/ for {{ item.1 }}"
-  ansible.builtin.lineinfile:
-    path: "{{ _obsidian_workspace_dir }}/.gitignore"
-    line: ".deploy-keys/"
-    create: true
-    mode: "0644"
-
 # --- Clone / update vault ---
 
-- name: "Ensure Obsidian directory exists for {{ item.1 }}"
+- name: "Ensure obsidian directory exists for {{ item.1 }}"
   ansible.builtin.file:
-    path: "{{ _obsidian_workspace_dir }}/Obsidian"
+    path: "{{ _obsidian_workspace_dir }}/obsidian"
     state: directory
     mode: "0755"
 
@@ -85,10 +78,21 @@
   no_log: true
 
 - name: "Update remote URL for {{ item.0.name }} ({{ item.1 }})"
-  ansible.builtin.command:
-    cmd: >-
-      git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }}
-      remote set-url origin {{ _obsidian_auth_url }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    DIR="{{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }}"
+    CURRENT=$(git -C "$DIR" remote get-url origin 2>/dev/null || echo "")
+    DESIRED="{{ _obsidian_auth_url }}"
+    if [ "$CURRENT" = "$DESIRED" ]; then
+      echo "OK"
+    else
+      git -C "$DIR" remote set-url origin "$DESIRED"
+      echo "UPDATED"
+    fi
+  args:
+    executable: /bin/bash
+  register: _obsidian_url_result
+  changed_when: "'UPDATED' in _obsidian_url_result.stdout"
   when: _obsidian_vault_git.stat.exists
   no_log: true
 

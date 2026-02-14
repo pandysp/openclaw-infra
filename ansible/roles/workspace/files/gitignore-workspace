@@ -27,3 +27,6 @@ obsidian/
 
 # Text extraction cache (rebuilt by extract sync)
 .scripts/extract-cache/
+
+# Git proxy config (written by plugins role)
+.git-proxy-config

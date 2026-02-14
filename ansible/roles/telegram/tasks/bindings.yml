@@ -2,8 +2,6 @@
 # Configure agent bindings — route Telegram DMs and groups to the correct agent.
 # Uses the root-level `bindings` config path.
 
-# TODO: Add idempotency check (compare current vs desired bindings) to avoid
-# unnecessary gateway restarts. Requires testing `openclaw config get bindings` output format.
 - name: Build and set agent bindings
   ansible.builtin.shell: |
     set -euo pipefail
@@ -20,16 +18,34 @@
     {% endfor %}
 
     {% if bindings | length > 0 %}
-    openclaw config set bindings --json '{{ bindings | to_json }}'
+    DESIRED='{{ bindings | to_json }}'
+    CURRENT=$(openclaw config get bindings 2>&1) || {
+        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+            CURRENT="[]"
+        else
+            echo "ERROR reading bindings: $CURRENT" >&2
+            exit 1
+        fi
+    }
+    C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED" | jq -cS '.')
+    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
+        echo "OK"
+    else
+        openclaw config set bindings --json "$DESIRED"
+        echo "UPDATED"
+    fi
     {% else %}
     # No non-default bindings to set — default agent handles everything
     output=$(openclaw config unset bindings 2>&1) || {
         echo "$output" | grep -qi "not set\|not found\|does not exist" || { echo "ERROR: $output" >&2; exit 1; }
     }
+    echo "OK"
     {% endif %}
   args:
     executable: /bin/bash
-  changed_when: true
+  register: bindings_result
+  changed_when: "'UPDATED' in bindings_result.stdout"
   notify: restart openclaw-gateway
 
 - name: Verify bindings
@@ -40,7 +56,9 @@
     executable: /bin/bash
   register: agents_with_bindings
   changed_when: false
+  check_mode: false
 
 - name: Show agent bindings
   ansible.builtin.debug:
     var: agents_with_bindings.stdout | from_json
+  when: agents_with_bindings.stdout | default('') | length > 0

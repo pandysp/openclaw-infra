@@ -3,6 +3,7 @@
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
+  changed_when: false
 
 - name: Dist-upgrade all packages
   ansible.builtin.apt:
@@ -27,16 +28,11 @@
     state: present
 
 - name: Increase inotify watch limit for qmd watchers
-  ansible.builtin.lineinfile:
-    path: /etc/sysctl.conf
-    regexp: '^fs\.inotify\.max_user_watches'
-    line: "fs.inotify.max_user_watches = 524288"
+  ansible.posix.sysctl:
+    name: fs.inotify.max_user_watches
+    value: "524288"
     state: present
-  register: sysctl_inotify
-
-- name: Apply sysctl changes
-  ansible.builtin.command: sysctl -p
-  when: sysctl_inotify is changed
+    sysctl_set: true
 
 - name: Install unattended-upgrades
   ansible.builtin.apt:
@@ -48,3 +44,54 @@
     content: "Unattended-Upgrade::Automatic-Reboot \"false\";\n"
     dest: /etc/apt/apt.conf.d/51unattended-upgrades-custom
     mode: "0644"
+
+# --- Swap (defense-in-depth against OOM) ---
+
+- name: Check if swapfile exists
+  ansible.builtin.stat:
+    path: /swapfile
+  register: swapfile_stat
+
+- name: Create 2 GB swapfile
+  ansible.builtin.command: fallocate -l 2G /swapfile
+  when: not swapfile_stat.stat.exists
+  changed_when: true
+
+- name: Set swapfile permissions
+  ansible.builtin.file:
+    path: /swapfile
+    mode: "0600"
+    owner: root
+    group: root
+
+- name: Format swapfile
+  ansible.builtin.command: mkswap /swapfile
+  when: not swapfile_stat.stat.exists
+  changed_when: true
+
+- name: Check if swap is active
+  ansible.builtin.shell: swapon --show=NAME --noheadings | grep -q '/swapfile'
+  args:
+    executable: /bin/bash
+  register: swap_active
+  changed_when: false
+  failed_when: false
+
+- name: Enable swapfile
+  ansible.builtin.command: swapon /swapfile
+  when: swap_active.rc != 0
+  changed_when: true
+
+- name: Add swapfile to fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^/swapfile'
+    line: "/swapfile none swap sw 0 0"
+    state: present
+
+- name: Set vm.swappiness to 1 (swap only to avoid OOM)
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "1"
+    state: present
+    sysctl_set: true

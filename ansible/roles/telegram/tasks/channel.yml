@@ -5,21 +5,45 @@
     dest: /tmp/ansible-telegram-bot-token
     mode: "0600"
   no_log: true
+  changed_when: false
 
 - name: Set Telegram bot token
   ansible.builtin.shell: |
     set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
     BOT_TOKEN=$(cat /tmp/ansible-telegram-bot-token)
-    openclaw config set channels.telegram.enabled true
-    openclaw config set channels.telegram.botToken "$BOT_TOKEN"
+    DESIRED_HASH=$(echo -n "$BOT_TOKEN" | sha256sum | cut -d' ' -f1)
+    CURRENT=$(openclaw config get channels.telegram.botToken 2>/dev/null) || CURRENT=""
+    CURRENT_HASH=$(echo -n "$CURRENT" | sha256sum | cut -d' ' -f1)
+    CHANGED=""
+    if [ "$CURRENT_HASH" != "$DESIRED_HASH" ]; then
+        openclaw config set channels.telegram.botToken "$BOT_TOKEN"
+        CHANGED="yes"
+    fi
+    ENABLED=$(openclaw config get channels.telegram.enabled 2>/dev/null) || ENABLED=""
+    if [ "$ENABLED" != "true" ]; then
+        openclaw config set channels.telegram.enabled true
+        CHANGED="yes"
+    fi
+    if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
   args:
     executable: /bin/bash
   no_log: true
+  register: telegram_token_result
+  changed_when: "'UPDATED' in telegram_token_result.stdout"
 
 - name: Configure Telegram channel policies
   ansible.builtin.shell: |
     set -euo pipefail
-    openclaw config set channels.telegram.dmPolicy "allowlist"
+    export XDG_RUNTIME_DIR=/run/user/1000
+    CHANGED=""
+
+    # DM policy
+    CURRENT_DM=$(openclaw config get channels.telegram.dmPolicy 2>/dev/null) || CURRENT_DM=""
+    if [ "$CURRENT_DM" != "allowlist" ]; then
+        openclaw config set channels.telegram.dmPolicy "allowlist"
+        CHANGED="yes"
+    fi
 
     # Clear per-account config (bindings now use peer matching, not accountId,
     # so all messages go through the default account with the flat botToken).
@@ -40,7 +64,14 @@
     {%   endif %}
     {% endfor %}
     {% if dm_allow | length > 0 %}
-    openclaw config set channels.telegram.allowFrom --json '{{ dm_allow | to_json }}'
+    DESIRED_ALLOW='{{ dm_allow | to_json }}'
+    CURRENT_ALLOW=$(openclaw config get channels.telegram.allowFrom 2>/dev/null) || CURRENT_ALLOW="[]"
+    C_NORM=$(echo "$CURRENT_ALLOW" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED_ALLOW" | jq -cS '.')
+    if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
+        openclaw config set channels.telegram.allowFrom --json "$DESIRED_ALLOW"
+        CHANGED="yes"
+    fi
     {% endif %}
 
     # Configure group chat if telegram_group_id is set
@@ -51,13 +82,29 @@
     {%     set _ = group_allow.append(agent.deliver_to | int) %}
     {%   endif %}
     {% endfor %}
-    openclaw config set channels.telegram.groupPolicy "allowlist"
-    openclaw config set channels.telegram.groups --json '{"{{ telegram_group_id }}":{"allowFrom":{{ group_allow | to_json }},"requireMention":false}}'
+    CURRENT_GP=$(openclaw config get channels.telegram.groupPolicy 2>/dev/null) || CURRENT_GP=""
+    if [ "$CURRENT_GP" != "allowlist" ]; then
+        openclaw config set channels.telegram.groupPolicy "allowlist"
+        CHANGED="yes"
+    fi
+    DESIRED_GROUPS='{"{{ telegram_group_id }}":{"allowFrom":{{ group_allow | to_json }},"requireMention":false}}'
+    CURRENT_GROUPS=$(openclaw config get channels.telegram.groups 2>/dev/null) || CURRENT_GROUPS="{}"
+    CG_NORM=$(echo "$CURRENT_GROUPS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    DG_NORM=$(echo "$DESIRED_GROUPS" | jq -cS '.')
+    if [ "$CG_NORM" = "PARSE_FAIL" ] || [ "$CG_NORM" != "$DG_NORM" ]; then
+        openclaw config set channels.telegram.groups --json "$DESIRED_GROUPS"
+        CHANGED="yes"
+    fi
     {% endif %}
+
+    if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
   args:
     executable: /bin/bash
+  register: telegram_policies_result
+  changed_when: "'UPDATED' in telegram_policies_result.stdout"
 
 - name: Clean up Telegram bot token
   ansible.builtin.file:
     path: /tmp/ansible-telegram-bot-token
     state: absent
+  changed_when: false

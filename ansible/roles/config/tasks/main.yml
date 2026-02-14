@@ -5,6 +5,7 @@
     dest: "{{ item.dest }}"
     mode: "0600"
   no_log: true
+  changed_when: false
   loop:
     - content: "{{ gateway_token }}"
       dest: /tmp/ansible-gateway-token
@@ -20,13 +21,42 @@
     - name: Configure gateway secrets (auth tokens, API keys)
       ansible.builtin.shell: |
         set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
         GATEWAY_TOKEN=$(cat /tmp/ansible-gateway-token)
         XAI_API_KEY=$(cat /tmp/ansible-xai-api-key)
+        CHANGED=""
 
         # Auth: token mode
-        openclaw config set gateway.auth.mode token
-        openclaw config set gateway.auth.token "$GATEWAY_TOKEN"
-        openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
+        CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null) || CURRENT_MODE=""
+        if [ "$CURRENT_MODE" != "token" ]; then
+            openclaw config set gateway.auth.mode token
+            CHANGED="yes"
+        fi
+
+        CURRENT_RAW=$(openclaw config get gateway.auth.token 2>/dev/null) || CURRENT_RAW=""
+        if [ -n "$CURRENT_RAW" ]; then
+            CURRENT_HASH=$(echo -n "$CURRENT_RAW" | sha256sum | cut -d' ' -f1)
+        else
+            CURRENT_HASH=""
+        fi
+        DESIRED_HASH=$(echo -n "$GATEWAY_TOKEN" | sha256sum | cut -d' ' -f1)
+        if [ "$CURRENT_HASH" != "$DESIRED_HASH" ]; then
+            openclaw config set gateway.auth.token "$GATEWAY_TOKEN"
+            openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
+            CHANGED="yes"
+        else
+            # Still check remote.token separately
+            REMOTE_RAW=$(openclaw config get gateway.remote.token 2>/dev/null) || REMOTE_RAW=""
+            if [ -n "$REMOTE_RAW" ]; then
+                REMOTE_HASH=$(echo -n "$REMOTE_RAW" | sha256sum | cut -d' ' -f1)
+            else
+                REMOTE_HASH=""
+            fi
+            if [ "$REMOTE_HASH" != "$DESIRED_HASH" ]; then
+                openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
+                CHANGED="yes"
+            fi
+        fi
 
         # Web search (Grok / xAI)
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
@@ -34,10 +64,27 @@
             echo "ERROR: xAI API key template was non-empty but runtime value is empty"
             exit 1
         fi
-        # Set new Grok provider FIRST
-        openclaw config set tools.web.search.provider grok
-        openclaw config set tools.web.search.grok.apiKey "$XAI_API_KEY"
-        openclaw config set tools.web.search.timeoutSeconds 60
+        CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null) || CURRENT_PROVIDER=""
+        if [ "$CURRENT_PROVIDER" != "grok" ]; then
+            openclaw config set tools.web.search.provider grok
+            CHANGED="yes"
+        fi
+        CURRENT_XAI_RAW=$(openclaw config get tools.web.search.grok.apiKey 2>/dev/null) || CURRENT_XAI_RAW=""
+        if [ -n "$CURRENT_XAI_RAW" ]; then
+            CURRENT_XAI_HASH=$(echo -n "$CURRENT_XAI_RAW" | sha256sum | cut -d' ' -f1)
+        else
+            CURRENT_XAI_HASH=""
+        fi
+        DESIRED_XAI_HASH=$(echo -n "$XAI_API_KEY" | sha256sum | cut -d' ' -f1)
+        if [ "$CURRENT_XAI_HASH" != "$DESIRED_XAI_HASH" ]; then
+            openclaw config set tools.web.search.grok.apiKey "$XAI_API_KEY"
+            CHANGED="yes"
+        fi
+        CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null) || CURRENT_TIMEOUT=""
+        if [ "$CURRENT_TIMEOUT" != "60" ]; then
+            openclaw config set tools.web.search.timeoutSeconds 60
+            CHANGED="yes"
+        fi
         # Clean up old Brave config path (idempotent for fresh installs)
         openclaw config unset tools.web.search.apiKey 2>/dev/null || true
         {% else %}
@@ -52,35 +99,65 @@
             }
         done
         {% endif %}
+
+        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
       args:
         executable: /bin/bash
       no_log: true
+      register: config_secrets
+      changed_when: "'UPDATED' in config_secrets.stdout"
       notify: restart openclaw-gateway
 
     - name: Configure gateway settings
       ansible.builtin.shell: |
         set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        CHANGED=""
+
+        # Helper: compare scalar config value, set if different
+        check_set() {
+            local key="$1" desired="$2"
+            local current
+            current=$(openclaw config get "$key" 2>/dev/null) || current=""
+            if [ "$current" != "$desired" ]; then
+                openclaw config set "$key" "$desired"
+                CHANGED="yes"
+            fi
+        }
+
+        # Helper: compare JSON config value (normalized), set if different
+        check_set_json() {
+            local key="$1" desired="$2"
+            local current c_norm d_norm
+            current=$(openclaw config get "$key" 2>/dev/null) || current=""
+            c_norm=$(echo "$current" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+            d_norm=$(echo "$desired" | jq -cS '.')
+            if [ "$c_norm" = "PARSE_FAIL" ] || [ "$c_norm" != "$d_norm" ]; then
+                openclaw config set "$key" --json "$desired"
+                CHANGED="yes"
+            fi
+        }
 
         # Tailscale Serve
-        openclaw config set gateway.tailscale.mode serve
-        openclaw config set gateway.tailscale.resetOnExit true
+        check_set gateway.tailscale.mode serve
+        check_set gateway.tailscale.resetOnExit true
 
         # Trusted proxies: localhost + Tailscale CGNAT range
-        openclaw config set gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
+        check_set_json gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
 
         # Control UI
-        openclaw config set gateway.controlUi.enabled true
-        openclaw config set gateway.controlUi.allowInsecureAuth false
+        check_set gateway.controlUi.enabled true
+        check_set gateway.controlUi.allowInsecureAuth false
 
         # Auth: Tailscale identity
-        openclaw config set gateway.auth.allowTailscale true
+        check_set gateway.auth.allowTailscale true
 
         # Model defaults
-        openclaw config set agents.defaults.model.primary "{{ openclaw_model_primary }}"
-        openclaw config set agents.defaults.model.fallbacks --json "$(cat /tmp/ansible-model-fallbacks)"
-        openclaw config set agents.defaults.thinkingDefault {{ openclaw_thinking_default }}
+        check_set agents.defaults.model.primary "{{ openclaw_model_primary }}"
+        check_set_json agents.defaults.model.fallbacks "$(cat /tmp/ansible-model-fallbacks)"
+        check_set agents.defaults.thinkingDefault "{{ openclaw_thinking_default }}"
 
-        # Custom model definitions
+        # Custom models: always set without tracking change (server enriches with extra fields)
         openclaw config set models --json "$(cat /tmp/ansible-custom-models)"
 
         # Sandbox tool allowlist (all groups + plugins)
@@ -88,10 +165,10 @@
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = tool_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
-        openclaw config set tools.sandbox.tools.allow --json '{{ tool_allow | to_json }}'
+        check_set_json tools.sandbox.tools.allow '{{ tool_allow | to_json }}'
 
         # Elevated tools (allow Telegram users to approve sensitive actions)
-        openclaw config set tools.elevated.enabled true
+        check_set tools.elevated.enabled true
         {% set elevated_users = [] %}
         {% if telegram_user_id is defined and telegram_user_id | length > 0 %}
         {%   set _ = elevated_users.append(telegram_user_id | int) %}
@@ -100,51 +177,56 @@
         {%   set _ = elevated_users.append(telegram_manon_user_id | int) %}
         {% endif %}
         {% if elevated_users | length > 0 %}
-        openclaw config set tools.elevated.allowFrom.telegram --json '{{ elevated_users | to_json }}'
+        check_set_json tools.elevated.allowFrom.telegram '{{ elevated_users | to_json }}'
         {% endif %}
 
         # Elevated default
-        openclaw config set agents.defaults.elevatedDefault {{ openclaw_elevated_default }}
+        check_set agents.defaults.elevatedDefault "{{ openclaw_elevated_default }}"
 
         # Timezone
-        openclaw config set agents.defaults.userTimezone "{{ openclaw_timezone }}"
-        openclaw config set agents.defaults.envelopeTimezone user
+        check_set agents.defaults.userTimezone "{{ openclaw_timezone }}"
+        check_set agents.defaults.envelopeTimezone user
 
         # Heartbeat interval
-        openclaw config set agents.defaults.heartbeat.every {{ openclaw_heartbeat_interval }}
+        check_set agents.defaults.heartbeat.every "{{ openclaw_heartbeat_interval }}"
 
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
-        openclaw config set messages.queue.mode collect
+        check_set messages.queue.mode collect
 
         # Concurrency: allow more parallel sessions across all agents
-        openclaw config set agents.defaults.maxConcurrent {{ openclaw_max_concurrent }}
-        openclaw config set agents.defaults.subagents.maxConcurrent {{ openclaw_subagents_max_concurrent }}
+        check_set agents.defaults.maxConcurrent "{{ openclaw_max_concurrent }}"
+        check_set agents.defaults.subagents.maxConcurrent "{{ openclaw_subagents_max_concurrent }}"
 
         # Context pruning: trim stale tool outputs after 15m, keep last 3 assistant responses
-        openclaw config set agents.defaults.contextPruning.mode cache-ttl
-        openclaw config set agents.defaults.contextPruning.ttl 15m
-        openclaw config set agents.defaults.contextPruning.keepLastAssistants 3
+        check_set agents.defaults.contextPruning.mode cache-ttl
+        check_set agents.defaults.contextPruning.ttl 15m
+        check_set agents.defaults.contextPruning.keepLastAssistants "3"
 
         # Node exec configuration (for remote Mac node control)
         # NOTE: Gateway sends VPS workspace path as CWD to nodes — does not exist on Mac.
         # Agents must pass workdir=/tmp in exec calls. See openclaw/openclaw#15441.
-        openclaw config set tools.exec.host {{ openclaw_exec_host }}
-        openclaw config set tools.exec.security {{ openclaw_exec_security }}
-        openclaw config set tools.exec.ask {{ openclaw_exec_ask }}
+        check_set tools.exec.host "{{ openclaw_exec_host }}"
+        check_set tools.exec.security "{{ openclaw_exec_security }}"
+        check_set tools.exec.ask "{{ openclaw_exec_ask }}"
 
         # Sandbox configuration
-        openclaw config set agents.defaults.sandbox.mode {{ openclaw_sandbox_mode }}
-        openclaw config set agents.defaults.sandbox.workspaceAccess {{ openclaw_sandbox_workspace_access }}
-        openclaw config set agents.defaults.sandbox.docker.network {{ openclaw_sandbox_docker_network }}
-        openclaw config set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
-        openclaw config set agents.defaults.sandbox.docker.readOnlyRoot --json '{{ openclaw_sandbox_read_only_root | to_json }}'
+        check_set agents.defaults.sandbox.mode "{{ openclaw_sandbox_mode }}"
+        check_set agents.defaults.sandbox.workspaceAccess "{{ openclaw_sandbox_workspace_access }}"
+        check_set agents.defaults.sandbox.docker.network "{{ openclaw_sandbox_docker_network }}"
+        check_set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
+        check_set_json agents.defaults.sandbox.docker.readOnlyRoot '{{ openclaw_sandbox_read_only_root | to_json }}'
+
+        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
       args:
         executable: /bin/bash
+      register: config_settings
+      changed_when: "'UPDATED' in config_settings.stdout"
       notify: restart openclaw-gateway
 
     - name: Auto-discover connected system node for exec
       ansible.builtin.shell: |
         set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
 
         # Step 1: Get nodes status JSON (fail visibly if gateway is down)
         NODES_RAW=$(openclaw nodes status --json 2>&1) || {
@@ -163,10 +245,15 @@
             }
         fi
 
-        # Step 3: Pin or warn
+        # Step 3: Pin or warn — only set if different from current
         if [ -n "$NODE_ID" ]; then
-            echo "Pinning exec to connected system node: ${NODE_ID:0:12}..."
-            openclaw config set tools.exec.node "$NODE_ID"
+            CURRENT_NODE=$(openclaw config get tools.exec.node 2>/dev/null) || CURRENT_NODE=""
+            if [ "$CURRENT_NODE" = "$NODE_ID" ]; then
+                echo "Node pin already correct: ${NODE_ID:0:12}..."
+            else
+                echo "Pinning exec to connected system node: ${NODE_ID:0:12}..."
+                openclaw config set tools.exec.node "$NODE_ID"
+            fi
         else
             echo "WARNING: No connected system node found — tools.exec.node not set"
             echo "  Start the node host on your Mac: openclaw node install --host <gateway> --port 443 --tls"
@@ -197,6 +284,7 @@
         executable: /bin/bash
       register: sandbox_container_removal
       changed_when: sandbox_container_removal.stdout is search('Removing')
+      when: config_settings is changed or config_secrets is changed
       notify: restart openclaw-gateway
 
   always:
@@ -204,6 +292,7 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
+      changed_when: false
       loop:
         - /tmp/ansible-gateway-token
         - /tmp/ansible-xai-api-key

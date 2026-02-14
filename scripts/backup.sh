@@ -2,7 +2,8 @@
 #
 # OpenClaw Backup Script
 #
-# Creates a backup of OpenClaw configuration and workspace data.
+# Creates a backup of OpenClaw configuration and session data.
+# Workspaces are excluded (synced to GitHub via git sync timers).
 # Run locally - connects to server via Tailscale.
 #
 # Usage:
@@ -61,52 +62,51 @@ fi
 echo "Creating backup on server..."
 ssh "ubuntu@$FULL_HOSTNAME" << 'REMOTE_SCRIPT'
 set -e
-BACKUP_TMP="/tmp/openclaw-backup-$(date +%s)"
-mkdir -p "$BACKUP_TMP"
 
-# Backup OpenClaw configuration
-echo "Backing up configuration..."
-if [ -d ~/.openclaw ]; then
-    cp -r ~/.openclaw "$BACKUP_TMP/openclaw-config"
-    # Remove sensitive tokens from backup copy
-    if [ -f "$BACKUP_TMP/openclaw-config/openclaw.json" ]; then
-        python3 -c "
+BACKUP_TMP=$(mktemp -d)
+trap 'rm -rf "$BACKUP_TMP"' EXIT
+
+# Copy .openclaw to temp dir, excluding workspaces and large caches
+echo "Copying config and sessions (excluding git-synced workspaces)..."
+rsync -a \
+    --exclude='workspace' \
+    --exclude='workspace-*' \
+    --exclude='agents/*/workspace' \
+    --exclude='extensions/*/node_modules' \
+    --exclude='qmd/*/embeddings' \
+    ~/.openclaw/ "$BACKUP_TMP/openclaw-config/"
+
+# Redact tokens from the backup copy
+echo "Redacting sensitive tokens..."
+if [ -f "$BACKUP_TMP/openclaw-config/openclaw.json" ]; then
+    python3 -c "
 import json, sys
-with open('$BACKUP_TMP/openclaw-config/openclaw.json') as f:
-    c = json.load(f)
-# Redact auth tokens
-if 'gateway' in c and 'auth' in c['gateway']:
-    c['gateway']['auth']['token'] = '<REDACTED>'
-if 'gateway' in c and 'remote' in c['gateway']:
-    c['gateway']['remote']['token'] = '<REDACTED>'
+try:
+    with open('$BACKUP_TMP/openclaw-config/openclaw.json') as f:
+        c = json.load(f)
+except (json.JSONDecodeError, IOError) as e:
+    print(f'WARNING: Could not parse openclaw.json for redaction: {e}', file=sys.stderr)
+    print('Backup will include unredacted config. Review manually.', file=sys.stderr)
+    sys.exit(0)
+# Redact all known sensitive fields
+for path in [('gateway','auth','token'), ('gateway','remote','token'),
+             ('channels','telegram','botToken'), ('tools','web','search','grok','apiKey')]:
+    obj = c
+    for key in path[:-1]:
+        obj = obj.get(key, {})
+    if path[-1] in obj:
+        obj[path[-1]] = '<REDACTED>'
 with open('$BACKUP_TMP/openclaw-config/openclaw.json', 'w') as f:
     json.dump(c, f, indent=2)
 "
-    fi
 fi
 
-# Backup workspace data (memory, projects, notes)
-echo "Backing up workspace..."
-if [ -d ~/.openclaw/workspace ]; then
-    cp -r ~/.openclaw/workspace "$BACKUP_TMP/workspace"
-fi
-
-# Backup cron configuration
-echo "Backing up cron jobs..."
-openclaw cron list > "$BACKUP_TMP/cron-jobs.txt" 2>/dev/null || true
-
-# Backup systemd service file
-echo "Backing up service configuration..."
-cp ~/.config/systemd/user/openclaw-gateway.service "$BACKUP_TMP/" 2>/dev/null || true
-
-# Create archive
+# Create archive from redacted copy
 echo "Creating archive..."
-tar czf /tmp/openclaw-backup.tar.gz -C "$BACKUP_TMP" .
+tar czf /tmp/openclaw-backup.tar.gz -C "$BACKUP_TMP" openclaw-config
 
-# Cleanup
-rm -rf "$BACKUP_TMP"
-
-echo "Backup created at /tmp/openclaw-backup.tar.gz"
+BACKUP_SIZE=$(du -h /tmp/openclaw-backup.tar.gz | cut -f1)
+echo "Backup created: /tmp/openclaw-backup.tar.gz ($BACKUP_SIZE)"
 REMOTE_SCRIPT
 
 # Download backup
@@ -124,10 +124,15 @@ fi
 
 echo ""
 echo -e "${GREEN}Backup complete: $BACKUP_FILE${NC}"
+BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+echo "Size: $BACKUP_SIZE"
 echo ""
-echo "Contents:"
-echo "  openclaw-config/  - OpenClaw configuration (tokens redacted)"
-echo "  workspace/        - Workspace data (memory, projects)"
-echo "  cron-jobs.txt     - Scheduled task listing"
+echo "Contents (workspaces excluded — synced to GitHub separately):"
+echo "  openclaw-config/openclaw.json   - Gateway config (tokens redacted)"
+echo "  openclaw-config/agents/         - Agent sessions, settings"
+echo "  openclaw-config/devices/        - Paired devices"
+echo "  openclaw-config/extensions/     - Plugins (without node_modules)"
+echo "  openclaw-config/media/          - Media files"
+echo "  openclaw-config/settings/       - User settings"
 echo ""
 echo "To inspect: tar tzf $BACKUP_FILE"

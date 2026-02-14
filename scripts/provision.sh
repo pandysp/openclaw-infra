@@ -96,11 +96,11 @@ validate_deploy_key() {
         exit 1
     fi
     if [ -n "$key" ]; then
-        if ! echo "$key" | head -1 | grep -q "BEGIN OPENSSH PRIVATE KEY"; then
+        if ! echo "$key" | grep -q "BEGIN OPENSSH PRIVATE KEY"; then
             echo "ERROR: $name deploy key missing header."
             exit 1
         fi
-        if ! echo "$key" | tail -1 | grep -q "END OPENSSH PRIVATE KEY"; then
+        if ! echo "$key" | grep -q "END OPENSSH PRIVATE KEY"; then
             echo "ERROR: $name deploy key missing footer (possibly truncated)."
             exit 1
         fi

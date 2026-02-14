@@ -31,11 +31,21 @@
   register: existing_cron
   changed_when: false
 
+# Write cron JSON to a temp file to avoid shell quoting issues.
+# Cron messages can contain single quotes and parentheses that break
+# inline echo '{{ ... }}' in bash.
+- name: Write cron list to temp file
+  ansible.builtin.copy:
+    content: "{{ existing_cron.stdout }}"
+    dest: /tmp/ansible-cron-list.json
+    mode: "0600"
+  changed_when: false
+
 - name: Remove legacy cron jobs by name
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    IDS=$(echo '{{ existing_cron.stdout }}' | jq -r --arg n "{{ item }}" '.jobs[] | select(.name == $n) | .id')
+    IDS=$(jq -r --arg n "{{ item }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
     for id in $IDS; do
       output=$(openclaw cron remove "$id" 2>&1) || {
           if echo "$output" | grep -qi "not found\|does not exist"; then
@@ -53,28 +63,6 @@
     label: "{{ item }}"
   changed_when: false
 
-- name: Remove existing per-agent cron jobs by name (idempotent recreation)
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    IDS=$(echo '{{ existing_cron.stdout }}' | jq -r --arg n "{{ item.name }}" '.jobs[] | select(.name == $n) | .id')
-    for id in $IDS; do
-      output=$(openclaw cron remove "$id" 2>&1) || {
-          if echo "$output" | grep -qi "not found\|does not exist"; then
-              true
-          else
-              echo "ERROR: Failed to remove cron job $id: $output" >&2
-              exit 1
-          fi
-      }
-    done
-  args:
-    executable: /bin/bash
-  loop: "{{ openclaw_cron_jobs }}"
-  loop_control:
-    label: "{{ item.name }}"
-  changed_when: false
-
 # Build deliver_to lookup map from openclaw_agents
 - name: Build agent delivery map
   ansible.builtin.set_fact:
@@ -89,24 +77,86 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Add per-agent cron jobs
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw cron add \
-        --name "{{ item.name }}" \
-        --cron "{{ item.schedule }}" \
-        --tz "{{ openclaw_timezone }}" \
-        --session isolated \
-        --agent "{{ item.agent }}" \
-        --message "{{ item.message }}" \
-        --deliver --channel telegram --to "{{ agent_deliver_map[item.agent] }}"
-  args:
-    executable: /bin/bash
+- name: Write cron message temp files
+  ansible.builtin.copy:
+    content: "{{ item.message }}"
+    dest: "/tmp/ansible-cron-msg-{{ item.name | hash('md5') }}"
+    mode: "0600"
   loop: "{{ openclaw_cron_jobs }}"
   loop_control:
     label: "{{ item.name }}"
-  changed_when: true
+  changed_when: false
+
+# All-or-nothing cron comparison: build normalized desired vs existing,
+# only delete+recreate if they differ.
+- name: Sync cron jobs with temp file cleanup
+  block:
+    - name: Compare and sync cron jobs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+
+        # Build desired cron jobs as sorted JSON array (comparable fields only)
+        DESIRED=$(jq -n '[]')
+        {% for job in openclaw_cron_jobs %}
+        MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}" | tr -d '\n')
+        DESIRED=$(echo "$DESIRED" | jq --arg name "{{ job.name }}" \
+            --arg agent "{{ job.agent }}" \
+            --arg schedule "{{ job.schedule }}" \
+            --arg tz "{{ openclaw_timezone }}" \
+            --arg message "$MSG" \
+            --arg delivery_to "{{ agent_deliver_map[job.agent] }}" \
+            '. + [{name: $name, agentId: $agent, schedule: $schedule, tz: $tz, message: $message, delivery_channel: "telegram", delivery_to: $delivery_to}]')
+        {% endfor %}
+        DESIRED=$(echo "$DESIRED" | jq -cS 'sort_by(.name)')
+
+        # Extract comparable fields from existing cron jobs (filter to Ansible-managed names only)
+        EXISTING=$(jq '[.jobs[] | {name, agentId, schedule: .schedule.expr, tz: .schedule.tz, message: (.payload.message | gsub("\\n$"; "")), delivery_channel: .delivery.channel, delivery_to: .delivery.to}]' /tmp/ansible-cron-list.json)
+
+        # Filter existing to only Ansible-managed job names
+        EXISTING_FILTERED=$(echo "$EXISTING" | jq -cS --argjson desired "$DESIRED" \
+            '[.[] | select(.name as $n | $desired | map(.name) | index($n))] | sort_by(.name)')
+
+        if [ "$DESIRED" = "$EXISTING_FILTERED" ]; then
+            echo "OK"
+        else
+            echo "Cron jobs differ — recreating all managed jobs"
+
+            # Delete existing managed jobs
+            {% for job in openclaw_cron_jobs %}
+            IDS=$(jq -r --arg n "{{ job.name }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
+            for id in $IDS; do
+                output=$(openclaw cron remove "$id" 2>&1) || {
+                    echo "$output" | grep -qi "not found\|does not exist" || { echo "ERROR: $output" >&2; exit 1; }
+                }
+            done
+            {% endfor %}
+
+            # Recreate all managed jobs
+            {% for job in openclaw_cron_jobs %}
+            MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}")
+            openclaw cron add \
+                --name "{{ job.name }}" \
+                --cron "{{ job.schedule }}" \
+                --tz "{{ openclaw_timezone }}" \
+                --session isolated \
+                --agent "{{ job.agent }}" \
+                --message "$MSG" \
+                --deliver --channel telegram --to "{{ agent_deliver_map[job.agent] }}"
+            {% endfor %}
+
+            echo "UPDATED"
+        fi
+      args:
+        executable: /bin/bash
+      register: cron_sync_result
+      changed_when: "'UPDATED' in cron_sync_result.stdout"
+  always:
+    - name: Clean up cron temp files
+      ansible.builtin.shell: rm -f /tmp/ansible-cron-list.json /tmp/ansible-cron-msg-*
+      args:
+        executable: /bin/bash
+      changed_when: false
 
 - name: Verify cron job count
   ansible.builtin.shell: |
@@ -116,13 +166,21 @@
     executable: /bin/bash
   register: final_cron
   changed_when: false
+  check_mode: false
 
-- name: Assert expected cron jobs
+- name: Assert cron list output is valid
   ansible.builtin.assert:
     that:
-      - (final_cron.stdout | from_json).jobs | length == openclaw_cron_jobs | length
-      - (final_cron.stdout | from_json).jobs | map(attribute='name') | sort | list == openclaw_cron_jobs | map(attribute='name') | sort | list
+      - final_cron.stdout | default('') | length > 0
+    fail_msg: "openclaw cron list --json returned empty output. Gateway may be in a bad state."
+
+- name: Assert expected cron jobs are present
+  ansible.builtin.assert:
+    that:
+      - (final_cron.stdout | from_json).jobs | length >= openclaw_cron_jobs | length
+      - (openclaw_cron_jobs | map(attribute='name') | sort | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) | length == 0
     fail_msg: >-
-      Cron job mismatch.
-      Expected {{ openclaw_cron_jobs | length }}: {{ openclaw_cron_jobs | map(attribute='name') | list }}.
-      Got {{ (final_cron.stdout | from_json).jobs | length }}: {{ (final_cron.stdout | from_json).jobs | map(attribute='name') | list }}.
+      Missing Ansible-managed cron jobs.
+      Expected: {{ openclaw_cron_jobs | map(attribute='name') | sort | list }}.
+      Missing: {{ (openclaw_cron_jobs | map(attribute='name') | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) }}.
+      Server has {{ (final_cron.stdout | from_json).jobs | length }} total (including manually added).

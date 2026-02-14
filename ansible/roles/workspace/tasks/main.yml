@@ -78,27 +78,50 @@
   ansible.builtin.shell: |
     set -euo pipefail
     cd "{{ item.item.workspace_dir }}"
+    CHANGED=""
+
     if [ ! -d ".git" ]; then
       git init -b main
+      CHANGED="yes"
     fi
 
     # Ensure branch is named 'main'
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ]; then
         git branch -m "$CURRENT_BRANCH" main
+        CHANGED="yes"
     fi
 
-    # Set per-agent git identity (local scope)
-    git config user.name "OpenClaw Agent ({{ item.item.agent_id }})"
-    git config user.email "openclaw-{{ item.item.agent_id }}@localhost"
+    # Set per-agent git identity (local scope) — only if different
+    DESIRED_NAME="OpenClaw Agent ({{ item.item.agent_id }})"
+    DESIRED_EMAIL="openclaw-{{ item.item.agent_id }}@localhost"
+    CURRENT_NAME=$(git config user.name 2>/dev/null || echo "")
+    CURRENT_EMAIL=$(git config user.email 2>/dev/null || echo "")
+    if [ "$CURRENT_NAME" != "$DESIRED_NAME" ]; then
+        git config user.name "$DESIRED_NAME"
+        CHANGED="yes"
+    fi
+    if [ "$CURRENT_EMAIL" != "$DESIRED_EMAIL" ]; then
+        git config user.email "$DESIRED_EMAIL"
+        CHANGED="yes"
+    fi
 
+    # Set remote URL — only if different
     ALIAS_URL=$(echo "{{ item.item.repo_url }}" | sed "s/github\.com/{{ item.item.ssh_alias }}/")
-    if git remote | grep -q '^origin$'; then
-        git remote remove origin
+    CURRENT_URL=$(git remote get-url origin 2>/dev/null || echo "")
+    if [ -z "$CURRENT_URL" ]; then
+        git remote add origin "$ALIAS_URL"
+        CHANGED="yes"
+    elif [ "$CURRENT_URL" != "$ALIAS_URL" ]; then
+        git remote set-url origin "$ALIAS_URL"
+        CHANGED="yes"
     fi
-    git remote add origin "$ALIAS_URL"
+
+    if [ -n "$CHANGED" ]; then echo "CHANGED"; else echo "OK"; fi
   args:
     executable: /bin/bash
+  register: workspace_init_result
+  changed_when: "'CHANGED' in workspace_init_result.stdout"
   when: item.stat.exists and item.stat.isdir
   loop: "{{ workspace_dirs.results }}"
   loop_control:

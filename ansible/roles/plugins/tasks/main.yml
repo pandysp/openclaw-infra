@@ -74,6 +74,7 @@
     executable: /bin/bash
   register: npm_prefix
   changed_when: false
+  check_mode: false
 
 - name: Ensure npm global bin is in PATH profile
   ansible.builtin.lineinfile:
@@ -164,6 +165,11 @@
     - name: Install plugins
       ansible.builtin.shell: |
         set -euo pipefail
+        # Check if already installed
+        if claude plugin list 2>&1 | grep -qi "{{ item }}"; then
+            echo "OK_EXISTS"
+            exit 0
+        fi
         output=$(claude plugin install "{{ item }}" 2>&1) || {
           if echo "$output" | grep -qi "already installed"; then
             echo "OK_EXISTS"
@@ -182,7 +188,7 @@
       loop_control:
         label: "{{ item }}"
       register: plugin_result
-      changed_when: "'Successfully installed' in plugin_result.stdout"
+      changed_when: "'OK_EXISTS' not in plugin_result.stdout"
 
     - name: Verify plugins directory exists
       ansible.builtin.stat:
@@ -440,19 +446,6 @@
     - codex_proxy_gateway_ip is defined
     - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
 
-- name: Ensure .git-proxy-config is in workspace .gitignore
-  ansible.builtin.lineinfile:
-    path: "{{ item.workspace_dir }}/.gitignore"
-    line: ".git-proxy-config"
-    create: true
-    mode: "0644"
-  loop: "{{ openclaw_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-  when:
-    - codex_proxy_gateway_ip is defined
-    - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
-
 - name: Template Codex config.toml for proxy routing
   ansible.builtin.template:
     src: codex-config.toml.j2
@@ -486,6 +479,7 @@
       }
     dest: /tmp/validate-claude-code-sdk.js
     mode: "0644"
+  changed_when: false
   when:
     - claude_setup_token | default('') | length > 0
     - codex_proxy_gateway_ip is defined
@@ -514,6 +508,7 @@
       }
     dest: /tmp/validate-pi-sdk.js
     mode: "0644"
+  changed_when: false
   when:
     - claude_setup_token | default('') | length > 0
     - codex_proxy_gateway_ip is defined
@@ -543,6 +538,7 @@
       });
     dest: /tmp/validate-proxy-network.js
     mode: "0644"
+  changed_when: false
   when:
     - claude_setup_token | default('') | length > 0
     - codex_proxy_gateway_ip is defined
@@ -610,6 +606,7 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
+  changed_when: false
   loop:
     - /tmp/validate-claude-code-sdk.js
     - /tmp/validate-pi-sdk.js
@@ -1110,6 +1107,7 @@
     dest: "/tmp/ansible-mcp-token-{{ item }}"
     mode: "0600"
   no_log: true
+  changed_when: false
   loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
 - name: Write Claude setup token to temp file
@@ -1118,6 +1116,7 @@
     dest: "/tmp/ansible-mcp-claude-setup-token"
     mode: "0600"
   no_log: true
+  changed_when: false
   when: claude_setup_token | default('') | length > 0
 
 - name: Build and write plugin config JSON
@@ -1227,6 +1226,8 @@
     {% endif %}
               "-e","ANTHROPIC_API_KEY=proxy",
               "-e",("ANTHROPIC_BASE_URL=" + $base_url),
+              "-e","ENABLE_LSP_TOOL=1",
+              "-e","CLAUDE_CODE_SUBAGENT_MODEL=opus",
               "-w","/workspace",
               $img,
               "sh","-c",$cmd]')
@@ -1305,6 +1306,7 @@
     chmod 600 /tmp/ansible-plugin-config
   args:
     executable: /bin/bash
+  changed_when: false
   # no_log omitted intentionally — tokens are in temp files, not in this template.
   # Errors here (jq failures, missing files) must be visible for debugging.
 
@@ -1314,12 +1316,31 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        CONFIG=$(cat /tmp/ansible-plugin-config)
-        openclaw config set plugins.entries.openclaw-mcp-adapter.config --json "$CONFIG"
-        openclaw config set plugins.entries.openclaw-mcp-adapter.enabled true
+        DESIRED=$(cat /tmp/ansible-plugin-config)
+        CHANGED=""
+
+        # Compare config JSON (normalized)
+        CURRENT=$(openclaw config get plugins.entries.openclaw-mcp-adapter.config 2>/dev/null) || CURRENT=""
+        C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        D_NORM=$(echo "$DESIRED" | jq -cS '.')
+        if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
+            openclaw config set plugins.entries.openclaw-mcp-adapter.config --json "$DESIRED"
+            CHANGED="yes"
+        fi
+
+        # Check enabled state
+        ENABLED=$(openclaw config get plugins.entries.openclaw-mcp-adapter.enabled 2>/dev/null) || ENABLED=""
+        if [ "$ENABLED" != "true" ]; then
+            openclaw config set plugins.entries.openclaw-mcp-adapter.enabled true
+            CHANGED="yes"
+        fi
+
+        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
       args:
         executable: /bin/bash
       no_log: true
+      register: plugin_config_result
+      changed_when: "'UPDATED' in plugin_config_result.stdout"
       notify: restart openclaw-gateway
 
     - name: Verify plugin config was applied
@@ -1343,17 +1364,20 @@
       ansible.builtin.file:
         path: /tmp/ansible-plugin-config
         state: absent
+      changed_when: false
 
     - name: Clean up token temp files
       ansible.builtin.file:
         path: "/tmp/ansible-mcp-token-{{ item }}"
         state: absent
+      changed_when: false
       loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
     - name: Clean up Claude setup token temp file
       ansible.builtin.file:
         path: /tmp/ansible-mcp-claude-setup-token
         state: absent
+      changed_when: false
 
 - name: Flush handlers to restart gateway before verification
   ansible.builtin.meta: flush_handlers
@@ -1438,7 +1462,9 @@
         fi
     }
     DESIRED='{{ deny_list | to_json }}'
-    if [ "$CURRENT" = "$DESIRED" ]; then
+    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
+    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
         echo "OK"
     else
         openclaw config set "agents.list.${AGENT_INDEX}.tools.deny" --json "$DESIRED"

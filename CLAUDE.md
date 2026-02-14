@@ -37,7 +37,7 @@ git merge upstream/main
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────────────┐
-│  Your Machine   │     │         Hetzner VPS (~€6.59/mo)     │
+│  Your Machine   │     │         Hetzner VPS (~€11.39/mo)    │
 │  (Tailscale)    │────▶│                                     │
 │                 │     │  ┌─────────────────────────────┐    │
 │  No public IP   │     │  │   OpenClaw Gateway          │    │
@@ -292,10 +292,10 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 
 | Resource | Cost |
 |----------|------|
-| Hetzner CX33 (x86, 4 vCPU, 8GB) | ~€5.49/mo |
-| Hetzner Backups | ~€1.10/mo |
+| Hetzner CX43 (x86, 8 vCPU, 16GB) | ~€9.49/mo |
+| Hetzner Backups | ~€1.90/mo |
 | Tailscale | Free (personal) |
-| **Total** | **~€6.59/mo** |
+| **Total** | **~€11.39/mo** |
 
 ## Secrets Reference
 
@@ -738,7 +738,7 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u qmd
 ssh ubuntu@openclaw-vps 'openclaw config get plugins.entries.openclaw-mcp-adapter.config' | jq '.servers[] | select(.name | startswith("qmd"))'
 ```
 
-**RAM consideration:** 3 qmd servers on 8GB (CX33). Models load on-demand per query, not resident. Concurrent heavy queries across 3 agents are unlikely. If RAM is tight, upgrade to CX43 (16GB, +€2.40/mo) via `pulumi config set hcloud:serverType cx43`.
+**RAM consideration:** 3 qmd servers on 16GB (CX43). Models load on-demand per query, not resident. `deep_search` loads ~5.8GB of GGUF models — 16GB provides comfortable headroom. A 2GB swap is configured as defense-in-depth.
 
 ## Troubleshooting
 
