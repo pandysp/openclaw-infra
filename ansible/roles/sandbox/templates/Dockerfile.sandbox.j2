@@ -68,10 +68,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # --- Layer 3: yq (official Docker method — https://github.com/mikefarah/yq) ---
 COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq
 
-# --- Layer 4: pnpm via corepack (recommended — https://pnpm.io/installation) ---
+# --- Layer 4: beads (bd) — AI-native issue tracker ---
+RUN curl -fsSL "https://github.com/steveyegge/beads/releases/download/v{{ beads_version }}/beads_{{ beads_version }}_linux_amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin bd
+
+# --- Layer 5: pnpm via corepack (recommended — https://pnpm.io/installation) ---
 RUN npm install -g corepack@latest && corepack enable pnpm
 
-# --- Layer 5: Package manager guardrails ---
+# --- Layer 6: Package manager guardrails ---
 # Nudge agents toward pnpm/uv instead of npm/pip for global installs
 RUN printf '#!/bin/sh\n\
 case "$1" in\n\
@@ -99,12 +103,12 @@ exec /usr/bin/pip "$@"\n' > /usr/local/bin/pip && chmod +x /usr/local/bin/pip \
  && cp /usr/local/bin/pip /usr/local/bin/pip3 \
  && sed -i 's|/usr/bin/pip|/usr/bin/pip3|' /usr/local/bin/pip3
 
-# --- Layer 6: Strip setuid bits to prevent privilege escalation ---
+# --- Layer 7: Strip setuid bits to prevent privilege escalation ---
 # Runs AFTER all package installs to cover apt, COPY --from, and binary downloads
 # -xdev avoids descending into /proc, /sys, and other virtual filesystems
 RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
 
-# --- Layer 7: Unprivileged user ---
+# --- Layer 8: Unprivileged user ---
 RUN (getent group 1000 || groupadd -g 1000 node) && \
     (id -u 1000 2>/dev/null || useradd -u 1000 -g 1000 -m -s /bin/bash node)
 
