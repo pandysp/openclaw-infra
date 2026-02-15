@@ -250,7 +250,7 @@ echo "=== Running Ansible playbook ==="
 cd "$ANSIBLE_DIR"
 
 # Install required Ansible collections
-ansible-galaxy collection install -r requirements.yml --force-with-deps || {
+ansible-galaxy collection install -r requirements.yml --upgrade || {
     echo "ERROR: Failed to install Ansible Galaxy collections."
     exit 1
 }
