@@ -259,6 +259,26 @@
       Run the qmd role first: ./scripts/provision.sh --tags qmd,plugins
   when: openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'qmd') | list | length > 0
 
+- name: Set npm prefix bin path fact
+  ansible.builtin.set_fact:
+    npm_prefix_bin: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin"
+
+- name: Resolve node-exec-mcp binary path
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH="{{ npm_prefix_bin }}:$PATH"
+    BINARY=$(which node-exec-mcp) || {
+        echo "ERROR: node-exec-mcp not found in PATH after npm install"
+        echo "Expected at: {{ npm_prefix_bin }}/node-exec-mcp"
+        exit 1
+    }
+    echo "$BINARY"
+  args:
+    executable: /bin/bash
+  register: node_exec_mcp_binary
+  changed_when: false
+  when: openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'node-exec') | list | length > 0
+
 - name: Deploy Codex auth credentials
   when: codex_auth_json | default('') | length > 0
   block:
@@ -1296,6 +1316,22 @@
     {% endfor %}
     else
         echo "NOTE: qmd binary not found, skipping qmd MCP servers"
+    fi
+
+    # node-exec: Mac shell access via openclaw nodes run (no Docker, no credentials)
+    NODE_EXEC_BINARY="{{ ((node_exec_mcp_binary.stdout_lines | default([''])) | last) | trim }}"
+    OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
+    NODE_ID=$(XDG_RUNTIME_DIR=/run/user/1000 openclaw config get tools.exec.node 2>/dev/null || echo "")
+    if [ -n "$NODE_ID" ] && [ -n "$OPENCLAW_BIN" ] && [ -x "$NODE_EXEC_BINARY" ]; then
+    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'node-exec') %}
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
+            --arg cmd "$NODE_EXEC_BINARY" \
+            --arg node_id "$NODE_ID" \
+            --arg openclaw_bin "$OPENCLAW_BIN" \
+            '. + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000"}}]')
+    {% endfor %}
+    else
+        echo "NOTE: Skipping node-exec MCP servers (node_id='${NODE_ID}', binary='${NODE_EXEC_BINARY}')" >&2
     fi
 
     # Build final config

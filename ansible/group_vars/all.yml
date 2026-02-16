@@ -30,12 +30,12 @@ openclaw_max_concurrent: 8
 openclaw_subagents_max_concurrent: 16
 
 # Node exec settings (for remote Mac node control)
-# Set openclaw_exec_host to "node" to enable exec on connected nodes.
+# Exec defaults to sandbox. Agents can target the Mac node on-demand with host=node.
 # Node ID is NOT configured here — it's dynamic (changes on re-pairing).
 # Pin it manually after pairing: openclaw config set tools.exec.node <id>
-openclaw_exec_host: "node"
-openclaw_exec_security: "full"      # DEVELOPMENT: wide open while iterating. Target: "allowlist"
-openclaw_exec_ask: "off"            # DEVELOPMENT: no approval prompts. Target: "on-miss"
+openclaw_exec_host: "sandbox"
+openclaw_exec_security: "full"       # Unrestricted in sandbox/node; gateway blocked by elevated=false
+openclaw_exec_ask: "off"             # No approval prompts (auto-approve node, auto-deny gateway)
 
 # Sandbox settings
 openclaw_sandbox_mode: "all"
@@ -194,6 +194,7 @@ openclaw_mcp_adapter:
   npm_packages:
     - "@modelcontextprotocol/server-github"
     - "@openai/codex"
+    - "node-exec-mcp"
   tool_prefix: true
   codex_sandbox: "workspace-write"
   codex_approval: "never"
@@ -278,6 +279,16 @@ openclaw_mcp_adapter:
       type: "qmd"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    # Node exec MCP servers (one per agent — Mac shell access via openclaw nodes run)
+    - name: "mac"
+      type: "node-exec"
+      agent_id: "main"
+    - name: "mac-manon"
+      type: "node-exec"
+      agent_id: "manon"
+    - name: "mac-tl"
+      type: "node-exec"
+      agent_id: "tl"
 
 # Claude Code plugins for MCP containers
 claude_code_plugins:
