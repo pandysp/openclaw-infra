@@ -24,8 +24,22 @@
 
 - name: "Resolve workspace dir for {{ item.1 }}"
   ansible.builtin.set_fact:
-    _obsidian_workspace_dir: >-
-      {{ (openclaw_workspaces | selectattr('agent_id', 'equalto', item.1) | first).workspace_dir }}
+    _obsidian_workspace_entry: >-
+      {{ openclaw_workspaces | selectattr('agent_id', 'equalto', item.1) | first | default(none) }}
+
+- name: "Fail if no workspace entry for {{ item.1 }}"
+  ansible.builtin.assert:
+    that:
+      - _obsidian_workspace_entry is not none
+      - _obsidian_workspace_entry != 'None'
+    fail_msg: >-
+      No workspace entry found for agent '{{ item.1 }}' in openclaw_workspaces.
+      Check that the agent ID in openclaw_obsidian_vaults matches an entry in openclaw_workspaces.
+    quiet: true
+
+- name: "Set workspace dir for {{ item.1 }}"
+  ansible.builtin.set_fact:
+    _obsidian_workspace_dir: "{{ _obsidian_workspace_entry.workspace_dir }}"
 
 - name: "Assert workspace dir exists for {{ item.1 }}"
   ansible.builtin.stat:
