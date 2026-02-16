@@ -108,6 +108,7 @@
 
 - name: Force re-embed all documents
   ansible.builtin.shell: |
+    set -euo pipefail
     export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
     export QMD_CONFIG_DIR="{{ item.workspace_dir }}/.qmd"
     export INDEX_PATH="{{ item.workspace_dir }}/.qmd/index.sqlite"
