@@ -634,7 +634,7 @@ Agents can run shell commands on your Mac via the node host feature. This enable
 ```
 ┌──────────────────────┐     ┌────────────────────────┐     ┌──────────────────────┐
 │  VPS Agent           │     │  OpenClaw Gateway      │     │  Mac (Node Host)     │
-│  (sandbox)           │────▶│  tools.exec.host=node  │────▶│  openclaw node run   │
+│  (sandbox)           │────▶│  tools.exec.host=sandbox│────▶│  openclaw node run   │
 │                      │     │                        │     │  (LaunchAgent)       │
 │  uses workdir=/tmp   │     │  WebSocket via         │     │  tmux, claude        │
 │  for node commands   │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
@@ -658,21 +658,21 @@ ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
 **What `setup-mac-node.sh` does:**
 1. Resolves gateway hostname from Tailscale
 2. Installs a persistent LaunchAgent (`ai.openclaw.node.plist`)
-3. Configures node-side allowlists (broad `*` patterns)
+3. Patches LaunchAgent to use stable Homebrew symlink (survives `brew upgrade`)
+4. Sets node-side exec approvals to auto-approve all commands (`defaults.security: full`)
 
 ### Config
 
 Gateway-side (set by Ansible):
 ```
-tools.exec.host: node           # Route to connected node (not sandbox)
+tools.exec.host: sandbox        # Default sandbox; agents use host=node on-demand
 tools.exec.security: full       # Tighten to "allowlist" after testing
 tools.exec.ask: off             # Tighten to "on-miss" after testing
 tools.exec.node: <auto>         # Auto-discovered during provisioning
 ```
 
 Node-side (set by `setup-mac-node.sh`):
-- `~/.openclaw/exec-approvals.json` — allowlist of permitted commands
-- Managed via `openclaw approvals allowlist add/remove`
+- `~/.openclaw/exec-approvals.json` — `defaults.security: full` (auto-approve all commands)
 
 **Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
 

@@ -167,8 +167,10 @@
         {% endif %}
         check_set_json tools.sandbox.tools.allow '{{ tool_allow | to_json }}'
 
-        # Elevated tools (allow Telegram users to approve sensitive actions)
-        check_set tools.elevated.enabled true
+        # Elevated tools — DISABLED to prevent sandbox escape to VPS host.
+        # elevated=true on exec calls bypasses tools.exec.host and grants root.
+        # See: https://github.com/openclaw/openclaw/issues/XXXX
+        check_set tools.elevated.enabled false
         {% set elevated_users = [] %}
         {% if telegram_user_id is defined and telegram_user_id | length > 0 %}
         {%   set _ = elevated_users.append(telegram_user_id | int) %}

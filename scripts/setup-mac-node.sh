@@ -84,38 +84,77 @@ fi
 echo "Installing node host LaunchAgent..."
 openclaw node install --host "$GATEWAY_FQDN" --port 443 --tls $FORCE_FLAG
 
+# --- Fix versioned Cellar path (survives brew upgrades) ---
+PLIST="$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
+BREW_PREFIX="$(brew --prefix 2>/dev/null || echo '/opt/homebrew')"
+OPENCLAW_BIN="${BREW_PREFIX}/bin/openclaw"
+if [ -f "$PLIST" ] && grep -q '/Cellar/openclaw-cli/' "$PLIST"; then
+    echo "Patching LaunchAgent to use stable symlink (avoids brew upgrade breakage)..."
+    PLIST_PATH="$PLIST" OPENCLAW_BIN="$OPENCLAW_BIN" python3 -c "
+import plistlib, os, sys, tempfile
+
+p = os.environ['PLIST_PATH']
+openclaw_bin = os.environ['OPENCLAW_BIN']
+
+with open(p, 'rb') as f:
+    d = plistlib.load(f)
+args = d.get('ProgramArguments', [])
+cellar_idx = next((i for i, a in enumerate(args) if '/Cellar/openclaw-cli/' in a), None)
+if cellar_idx is not None:
+    node_idx = cellar_idx - 1 if cellar_idx > 0 and 'bin/node' in args[cellar_idx - 1] else None
+    if node_idx is not None:
+        args[node_idx:cellar_idx + 1] = [openclaw_bin]
+    else:
+        args[cellar_idx] = openclaw_bin
+    d['ProgramArguments'] = args
+    # Atomic write via temp file
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), suffix='.plist')
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            plistlib.dump(d, f)
+        os.replace(tmp, p)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    print(f'  Patched: using {openclaw_bin}')
+else:
+    print('  Already using stable path, no patch needed')
+"
+    # Reload with patched plist
+    launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+    sleep 1
+    launchctl bootstrap "gui/$(id -u)" "$PLIST"
+    sleep 2
+fi
+
 echo ""
 echo "Node host installed and running."
 openclaw node status
 
-# --- Configure exec approvals ---
+# --- Configure exec approvals (auto-approve all commands) ---
 echo ""
 echo "Configuring node-side exec approvals..."
-
-APPROVAL_FAILED=0
-add_approval() {
-    local pattern="$1"
-    if ! openclaw approvals allowlist add --agent "*" "$pattern" 2>&1; then
-        echo "  WARNING: Failed to add allowlist pattern: $pattern"
-        APPROVAL_FAILED=1
-    fi
-}
-
-# Standard system paths
-add_approval "/bin/*"
-add_approval "/usr/bin/*"
-add_approval "/opt/homebrew/bin/*"
-
-# Specific commands needed for tmux-based workflows
-for cmd in tmux claude ps sleep echo hostname which grep cat tail head ls; do
-    add_approval "$cmd"
-done
-
-if [ "$APPROVAL_FAILED" -ne 0 ]; then
-    echo ""
-    echo "WARNING: Some exec approval patterns failed to add."
-    echo "  Check: openclaw approvals allowlist list"
-    echo "  Add manually: openclaw approvals allowlist add --agent '*' '<pattern>'"
+APPROVALS_FILE="$HOME/.openclaw/exec-approvals.json"
+if [ -f "$APPROVALS_FILE" ]; then
+    # Set defaults.security to "full" so all commands are auto-approved.
+    # Note: basename-only allowlist patterns (e.g., "echo") are ignored by OpenClaw —
+    # only full path patterns (e.g., "/bin/*") work. Using defaults.security: full
+    # is simpler and covers everything.
+    APPROVALS_FILE="$APPROVALS_FILE" python3 -c "
+import json, os, sys
+p = os.environ['APPROVALS_FILE']
+with open(p) as f:
+    d = json.load(f)
+if d.get('defaults', {}).get('security') != 'full':
+    d.setdefault('defaults', {})['security'] = 'full'
+    with open(p, 'w') as f:
+        json.dump(d, f, indent=2)
+    print('  Set defaults.security: full (auto-approve all commands)')
+else:
+    print('  Already set to auto-approve')
+"
+else
+    echo "  WARNING: $APPROVALS_FILE not found. Run 'openclaw node install' first."
 fi
 
 echo ""
