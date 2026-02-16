@@ -98,15 +98,21 @@ def extract_pdf(file_path: Path) -> str:
         ["pdftotext", str(file_path), "-"],
         capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
     )
-    text = result.stdout.strip()
-    if result.stderr.strip():
+    if result.returncode != 0:
+        print(f"  pdftotext failed (exit {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
+    elif result.stderr.strip():
         print(f"  pdftotext stderr: {result.stderr.strip()}", file=sys.stderr)
+
+    text = result.stdout.strip() if result.returncode == 0 else ""
 
     words = text.split()
     if len(words) < 5 or (text and sum(c.isalpha() for c in text) / len(text) < 0.5):
         ocr_text = extract_pdf_ocr(file_path)
         if ocr_text and len(ocr_text.split()) > len(words):
             return ocr_text
+
+    if not text:
+        raise ValueError(f"pdftotext failed (exit {result.returncode}) and OCR produced no text")
 
     return text
 
@@ -122,10 +128,13 @@ def extract_pdf_ocr(file_path: Path) -> str:
     with tempfile.TemporaryDirectory() as tmpdir:
         # Convert PDF pages to PPM images (max 10 pages to limit time)
         try:
-            subprocess.run(
+            conv = subprocess.run(
                 ["pdftoppm", "-r", "200", "-l", "10", str(file_path), os.path.join(tmpdir, "page")],
                 capture_output=True, timeout=SUBPROCESS_TIMEOUT,
             )
+            if conv.returncode != 0:
+                print(f"  WARNING: pdftoppm failed (exit {conv.returncode}) for {file_path.name}: {conv.stderr.decode().strip()}", file=sys.stderr)
+                return ""
         except subprocess.TimeoutExpired:
             print(f"  WARNING: pdftoppm timed out for {file_path.name}", file=sys.stderr)
             return ""
