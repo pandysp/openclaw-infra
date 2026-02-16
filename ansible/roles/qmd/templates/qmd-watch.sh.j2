@@ -86,5 +86,5 @@ while true; do
     fi
     # Debounce: sleep to batch rapid changes, then sync
     sleep "$DEBOUNCE"
-    do_sync || true  # don't exit watcher on sync failure, keep watching
+    do_sync || echo "WARNING: sync failed, will retry on next file change" >&2
 done
