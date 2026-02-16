@@ -1,5 +1,5 @@
 ---
-# Clone Obsidian vaults into agent workspaces (<workspace>/Obsidian/<vault-name>/).
+# Clone Obsidian vaults into agent workspaces (<workspace>/obsidian/<vault-name>/).
 # Uses HTTPS + GitHub PAT (reuses existing MCP PATs). No deploy keys.
 # Agents pull/push manually from Docker sandbox.
 

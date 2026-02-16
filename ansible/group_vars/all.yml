@@ -310,7 +310,7 @@ claude_code_plugins:
     - "ty-lsp@pandysp"
     - "typescript-lsp@pandysp"
 
-# Obsidian vault definitions (cloned into <workspace>/Obsidian/<name>/)
+# Obsidian vault definitions (cloned into <workspace>/obsidian/<name>/)
 # Agents pull/push manually from Docker sandbox. Uses existing GitHub PATs via HTTPS.
 openclaw_obsidian_vaults:
   - name: "andy-vault"
