@@ -4,7 +4,7 @@
 
 ## What This Project Is
 
-OpenClaw is a self-hosted Anthropic Computer Use gateway deployed on a Hetzner VPS with zero-trust networking via Tailscale. All access is through Tailscale—no public ports exposed.
+OpenClaw is a self-hosted AI Agent gateway deployed on a Hetzner VPS with zero-trust networking via Tailscale. All access is through Tailscale—no public ports exposed.
 
 ## Repository Layout (Public Template + Private Fork)
 

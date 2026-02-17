@@ -8,7 +8,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["openclaw", "anthropic", "computer-use", "hetzner", "tailscale", "pulumi"],
+  "keywords": ["openclaw", "ai", "agent", "hetzner", "tailscale", "pulumi"],
   "author": "Andreas Spannagel",
   "license": "MIT",
   "description": "Secure self-hosted OpenClaw deployment on Hetzner Cloud with Tailscale",

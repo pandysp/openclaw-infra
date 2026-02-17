@@ -25,6 +25,20 @@ openclaw_custom_models:
 openclaw_heartbeat_interval: "30m"
 openclaw_elevated_default: "off"
 
+# Compaction safeguard: flush memories to disk before context compression
+# Prevents silent loss of in-context state when long sessions get compacted.
+# See: https://docs.openclaw.ai/concepts/compaction, openclaw/openclaw#5429
+openclaw_compaction_mode: "safeguard"
+openclaw_compaction_reserve_tokens_floor: 24000
+openclaw_compaction_memory_flush: true
+openclaw_compaction_memory_flush_threshold: 8000
+openclaw_compaction_memory_flush_prompt: >-
+  Distill important context from this session to memory/YYYY-MM-DD.md (today's date).
+  Focus on: decisions made, task progress, blockers, lessons learned.
+  Skip routine exchanges. If nothing worth storing: NO_FLUSH
+openclaw_compaction_memory_flush_system_prompt: >-
+  Extract only durable facts worth remembering across sessions. Be selective.
+
 # Concurrency settings
 openclaw_max_concurrent: 8
 openclaw_subagents_max_concurrent: 16
@@ -150,7 +164,7 @@ openclaw_cron_jobs:
       2. Cross-reference active projects — are any client/venture items stale? Deadlines approaching?
       3. Surface forgotten items — search for notes tagged with TODO, follow-up, or similar that haven't been touched in 2+ weeks.
       4. Pattern spotting — any interesting connections between notes that Andy might not see (e.g., a contact mentioned in two unrelated contexts, an idea that connects to an active project)?
-      5. Health/ADHD check — any patterns in health/energy notes worth flagging?
+      5. Wellbeing check — any patterns in health/energy notes worth flagging?
       Write findings to memory/vault-insights/YYYY-MM-DD.md (create dir if needed).
       Be genuinely useful, not performative. If nothing interesting surfaces, say so in one line. Don't manufacture insights.
   # manon

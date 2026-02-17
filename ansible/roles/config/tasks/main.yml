@@ -15,6 +15,12 @@
       dest: /tmp/ansible-custom-models
     - content: "{{ openclaw_model_fallbacks | to_json }}"
       dest: /tmp/ansible-model-fallbacks
+    - content: >-
+        {{ {'enabled': openclaw_compaction_memory_flush,
+            'softThresholdTokens': openclaw_compaction_memory_flush_threshold,
+            'prompt': openclaw_compaction_memory_flush_prompt,
+            'systemPrompt': openclaw_compaction_memory_flush_system_prompt} | to_json }}
+      dest: /tmp/ansible-compaction-memoryflush
 
 - name: Configure gateway with secret cleanup
   block:
@@ -204,6 +210,12 @@
         check_set agents.defaults.contextPruning.ttl 15m
         check_set agents.defaults.contextPruning.keepLastAssistants "3"
 
+        # Compaction safeguard: flush memories before context compression
+        # Prevents silent loss of in-context state (see openclaw/openclaw#5429)
+        check_set agents.defaults.compaction.mode "{{ openclaw_compaction_mode }}"
+        check_set agents.defaults.compaction.reserveTokensFloor "{{ openclaw_compaction_reserve_tokens_floor }}"
+        check_set_json agents.defaults.compaction.memoryFlush "$(cat /tmp/ansible-compaction-memoryflush)"
+
         # Node exec configuration (for remote Mac node control)
         # NOTE: Gateway sends VPS workspace path as CWD to nodes — does not exist on Mac.
         # Agents must pass workdir=/tmp in exec calls. See openclaw/openclaw#15441.
@@ -300,3 +312,4 @@
         - /tmp/ansible-xai-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
+        - /tmp/ansible-compaction-memoryflush
