@@ -44,6 +44,15 @@ openclaw_max_concurrent: 8
 openclaw_subagents_max_concurrent: 16
 
 # Node exec settings (for remote Mac node control)
+# ⚠️  SECURITY WARNING: Node exec lets agents run arbitrary shell commands on your
+# local machine (Mac) via the OpenClaw node host. This is powerful but dangerous:
+# - An agent (or attacker via prompt injection) can read/modify local files
+# - If your Mac has Pulumi state, cloud credentials, or SSH keys, they're accessible
+# - There is NO sandbox — commands run with your user's full permissions
+# See docs/SECURITY.md §5 for the full threat model.
+# Only enable this if you understand the risks and have set up the Mac node host.
+node_exec_enabled: false
+
 # Exec defaults to sandbox. Agents can target the Mac node on-demand with host=node.
 # Node ID is NOT configured here — it's dynamic (changes on re-pairing).
 # Pin it manually after pairing: openclaw config set tools.exec.node <id>

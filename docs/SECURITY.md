@@ -130,14 +130,18 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Attack**: OpenClaw accesses your infrastructure management machine through a connected node.
 
-**Scenario**: If your Mac is added as an OpenClaw node and has Pulumi state + passphrase, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets.
+**Scenario**: If your Mac is added as an OpenClaw node and has Pulumi state + passphrase, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets. Commands run with your user's full permissions — there is no sandbox.
 
-**Mitigations**:
+**Default state**: Node exec is **disabled by default** (`node_exec_enabled: false` in `ansible/group_vars/all.yml`). When disabled, no `tools.exec.*` gateway config is set, no node ID is pinned, no `node-exec-mcp` binary is installed, and no MCP servers are wired — the feature is completely inert.
+
+**Mitigations** (when enabled):
 - Don't add your infrastructure management machine as an OpenClaw node
 - Store Pulumi passphrase in a password manager, not in shell history/envrc
 - Consider Pulumi Cloud backend (requires browser auth, not just passphrase)
+- Use `tools.exec.host: sandbox` (default) so agents must explicitly switch per-session
+- Consider `tools.exec.security: allowlist` to restrict which commands can run
 
-**Residual Risk**: Medium if Mac is an OpenClaw node. Low if infrastructure management is isolated.
+**Residual Risk**: None when disabled. Medium if Mac is an OpenClaw node. Low if infrastructure management is isolated.
 
 ### 6. Lateral Movement
 

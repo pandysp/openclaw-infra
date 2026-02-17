@@ -216,12 +216,17 @@
         check_set agents.defaults.compaction.reserveTokensFloor "{{ openclaw_compaction_reserve_tokens_floor }}"
         check_set_json agents.defaults.compaction.memoryFlush "$(cat /tmp/ansible-compaction-memoryflush)"
 
-        # Node exec configuration (for remote Mac node control)
+        # Exec configuration (applies to both sandbox and node exec)
         # NOTE: Gateway sends VPS workspace path as CWD to nodes — does not exist on Mac.
         # Agents must pass workdir=/tmp in exec calls. See openclaw/openclaw#15441.
         check_set tools.exec.host "{{ openclaw_exec_host }}"
         check_set tools.exec.security "{{ openclaw_exec_security }}"
         check_set tools.exec.ask "{{ openclaw_exec_ask }}"
+
+        {% if not (node_exec_enabled | default(false)) %}
+        # Node exec disabled — clean up any stale node pin
+        openclaw config unset tools.exec.node 2>/dev/null || true
+        {% endif %}
 
         # Sandbox configuration
         check_set agents.defaults.sandbox.mode "{{ openclaw_sandbox_mode }}"
@@ -238,6 +243,7 @@
       notify: restart openclaw-gateway
 
     - name: Auto-discover connected system node for exec
+      when: node_exec_enabled | default(false)
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000

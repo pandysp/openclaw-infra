@@ -13,8 +13,11 @@
 #   ssh ubuntu@openclaw-vps 'openclaw devices list'
 #   ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
 #
-# Then re-provision to auto-discover and pin the node ID:
-#   ./scripts/provision.sh --tags config
+# IMPORTANT: You must also enable node exec in ansible/group_vars/all.yml:
+#   node_exec_enabled: true
+#
+# Then re-provision to install node-exec-mcp and auto-discover the node ID:
+#   ./scripts/provision.sh --tags config,plugins
 #
 # Known issue: The gateway sends the VPS workspace path as the working
 # directory for node commands. Since this path doesn't exist on macOS,
@@ -165,8 +168,11 @@ echo "  1. Approve the pairing request on the VPS (if first time):"
 echo "     ssh ubuntu@openclaw-vps 'openclaw devices list'"
 echo "     ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'"
 echo ""
-echo "  2. Re-provision to auto-discover the node ID:"
-echo "     ./scripts/provision.sh --tags config"
+echo "  2. Enable node exec in ansible/group_vars/all.yml:"
+echo "     node_exec_enabled: true"
 echo ""
-echo "  3. Verify exec works:"
+echo "  3. Re-provision to install node-exec-mcp and discover the node ID:"
+echo "     ./scripts/provision.sh --tags config,plugins"
+echo ""
+echo "  4. Verify exec works:"
 echo "     ssh ubuntu@openclaw-vps 'openclaw nodes run --cwd /tmp echo hello'"

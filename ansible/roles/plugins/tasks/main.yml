@@ -87,8 +87,10 @@
     mcp_npm_packages: >-
       {{ openclaw_mcp_adapter.npm_packages
          | reject('equalto', '@openai/codex')
+         | reject('equalto', 'node-exec-mcp')
          | list
-         + (['@openai/codex'] if (codex_auth_json | default('') | length > 0) else []) }}
+         + (['@openai/codex'] if (codex_auth_json | default('') | length > 0) else [])
+         + (['node-exec-mcp'] if (node_exec_enabled | default(false)) else []) }}
 
 - name: Install MCP server npm packages globally
   community.general.npm:
@@ -277,7 +279,9 @@
     executable: /bin/bash
   register: node_exec_mcp_binary
   changed_when: false
-  when: openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'node-exec') | list | length > 0
+  when:
+    - node_exec_enabled | default(false)
+    - openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'node-exec') | list | length > 0
 
 - name: Deploy Codex auth credentials
   when: codex_auth_json | default('') | length > 0
@@ -1318,6 +1322,7 @@
         echo "NOTE: qmd binary not found, skipping qmd MCP servers"
     fi
 
+    {% if node_exec_enabled | default(false) %}
     # node-exec: Mac shell access via openclaw nodes run (no Docker, no credentials)
     NODE_EXEC_BINARY="{{ ((node_exec_mcp_binary.stdout_lines | default([''])) | last) | trim }}"
     OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
@@ -1333,6 +1338,9 @@
     else
         echo "NOTE: Skipping node-exec MCP servers (node_id='${NODE_ID}', binary='${NODE_EXEC_BINARY}')" >&2
     fi
+    {% else %}
+    echo "NOTE: Node exec disabled (node_exec_enabled=false in group_vars/all.yml)" >&2
+    {% endif %}
 
     # Build final config
     CONFIG=$(jq -n --argjson prefix "$TOOL_PREFIX" --argjson servers "$SERVERS" \

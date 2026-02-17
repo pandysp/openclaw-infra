@@ -629,6 +629,8 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 ## Remote Node Control (Mac)
 
+> **Disabled by default.** Node exec lets agents run arbitrary shell commands on your local machine with your user's full permissions — no sandbox. Enable with `node_exec_enabled: true` in `ansible/group_vars/all.yml` only after reading the security warnings there and in [docs/SECURITY.md](./docs/SECURITY.md) section 5.
+
 Agents can run shell commands on your Mac via the node host feature. This enables tmux-based workflows where a VPS agent controls a Claude Code session on your local machine.
 
 ```
@@ -643,7 +645,12 @@ Agents can run shell commands on your Mac via the node host feature. This enable
 
 ### Setup
 
-**One-time Mac setup:**
+**1. Enable in config** (edit `ansible/group_vars/all.yml`):
+```yaml
+node_exec_enabled: true
+```
+
+**2. One-time Mac setup:**
 ```bash
 ./scripts/setup-mac-node.sh
 
@@ -651,8 +658,8 @@ Agents can run shell commands on your Mac via the node host feature. This enable
 ssh ubuntu@openclaw-vps 'openclaw devices list'
 ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
 
-# Re-provision to auto-discover and pin the node ID:
-./scripts/provision.sh --tags config
+# Re-provision to install node-exec-mcp and auto-discover the node ID:
+./scripts/provision.sh --tags config,plugins
 ```
 
 **What `setup-mac-node.sh` does:**
