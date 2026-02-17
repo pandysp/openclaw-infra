@@ -258,7 +258,7 @@
         # Step 2: Parse JSON to find connected system node
         NODE_ID=""
         if [ -n "$NODES_RAW" ]; then
-            NODE_ID=$(echo "$NODES_RAW" | jq -r '[.nodes // . // [] | .[] | select(.connected == true) | select(.capabilities | index("system")) | .id] | first // empty' 2>&1) || {
+            NODE_ID=$(echo "$NODES_RAW" | jq -r '[.nodes // . // [] | .[] | select(.connected == true) | select(.caps | index("system")) | .nodeId] | first // empty' 2>&1) || {
                 echo "WARNING: Failed to parse nodes JSON: $NODE_ID"
                 echo "  Raw output: $NODES_RAW"
                 NODE_ID=""

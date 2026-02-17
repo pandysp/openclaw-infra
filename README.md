@@ -16,6 +16,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 
 - Node.js 18+
 - [Pulumi CLI](https://www.pulumi.com/docs/install/)
+- [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/) (`pip install ansible`)
 - [Tailscale](https://tailscale.com/start) installed and connected on your machine
 - Hetzner Cloud API token ([console.hetzner.cloud](https://console.hetzner.cloud/))
 - Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
