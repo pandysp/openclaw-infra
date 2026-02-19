@@ -47,3 +47,4 @@ backups/
 # Ansible
 ansible/*.retry
 ansible/inventory/__pycache__/
+ansible/group_vars/local.yml

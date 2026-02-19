@@ -1,0 +1,11 @@
+---
+# Deployment-specific overrides (copy to local.yml, which is gitignored).
+# Values here take precedence over all.yml.
+#
+# Usage:
+#   cp ansible/group_vars/local.yml.example ansible/group_vars/local.yml
+#   # Edit local.yml with your deployment-specific settings
+#   ./scripts/provision.sh
+
+# Enable remote Mac node exec (see docs/SECURITY.md §5 for risks)
+# node_exec_enabled: true

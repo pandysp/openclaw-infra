@@ -113,6 +113,8 @@ openclaw-infra/
 │   ├── requirements.yml    # Ansible Galaxy collections
 │   ├── playbook.yml        # Main playbook
 │   ├── group_vars/all.yml  # Non-secret defaults (model, cron prompts, etc.)
+│   ├── group_vars/local.yml        # Deployment-specific overrides (gitignored)
+│   ├── group_vars/local.yml.example  # Template for local.yml
 │   ├── inventory/
 │   │   └── pulumi_inventory.py  # Dynamic inventory (Tailscale IP from Pulumi)
 │   └── roles/
