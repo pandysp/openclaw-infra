@@ -19,8 +19,15 @@
         config_path = '/home/ubuntu/.openclaw/openclaw.json'
         with open(config_path) as f:
             cfg = json.load(f)
+        changed = False
         if 'openclaw-mcp-adapter' in cfg.get('plugins', {}).get('entries', {}):
             del cfg['plugins']['entries']['openclaw-mcp-adapter']
+            changed = True
+        allow = cfg.get('plugins', {}).get('allow', [])
+        if 'openclaw-mcp-adapter' in allow:
+            allow.remove('openclaw-mcp-adapter')
+            changed = True
+        if changed:
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config_path), suffix='.tmp')
             try:
                 with os.fdopen(fd, 'w') as f:
@@ -41,26 +48,41 @@
         state: absent
       when: force_plugin_reinstall | bool
 
-    - name: Clone mcp-adapter fork
-      ansible.builtin.git:
-        repo: "{{ openclaw_mcp_adapter.source }}"
-        dest: /tmp/mcp-adapter
-        version: main
-        depth: 1
-
-    - name: Install plugin from local clone
+    - name: Install plugin from npm
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        openclaw plugins install /tmp/mcp-adapter
+        openclaw plugins install "{{ openclaw_mcp_adapter.npm_package }}"
       args:
         executable: /bin/bash
 
-  always:
-    - name: Clean up plugin clone
-      ansible.builtin.file:
-        path: /tmp/mcp-adapter
-        state: absent
+    - name: Ensure plugin is in allowlist
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 -c "
+        import json, os, tempfile
+        config_path = '/home/ubuntu/.openclaw/openclaw.json'
+        with open(config_path) as f:
+            cfg = json.load(f)
+        allow = cfg.setdefault('plugins', {}).setdefault('allow', [])
+        if 'openclaw-mcp-adapter' not in allow:
+            allow.append('openclaw-mcp-adapter')
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config_path), suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                os.rename(tmp, config_path)
+            except:
+                os.unlink(tmp)
+                raise
+            print('ADDED')
+        else:
+            print('OK')
+        "
+      args:
+        executable: /bin/bash
+      register: allowlist_result
+      changed_when: "'ADDED' in allowlist_result.stdout"
 
 - name: Ensure npm global prefix is configured
   ansible.builtin.shell: |
@@ -1391,7 +1413,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        ENABLED=$(openclaw config get plugins.entries.openclaw-mcp-adapter.enabled 2>&1) || {
+        ENABLED=$(openclaw config get plugins.entries.openclaw-mcp-adapter.enabled 2>/dev/null | tail -1) || {
             echo "ERROR: Failed to read plugin enabled state after config set"
             exit 1
         }

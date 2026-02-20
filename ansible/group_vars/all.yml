@@ -213,7 +213,7 @@ openclaw_cron_jobs:
 
 # MCP plugin configuration
 openclaw_mcp_adapter:
-  source: "https://github.com/pandysp/openclaw-mcp-adapter.git"
+  npm_package: "@pandysp/openclaw-mcp-adapter"
   npm_packages:
     - "@modelcontextprotocol/server-github"
     - "@openai/codex"
