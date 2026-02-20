@@ -169,9 +169,19 @@
         # Sandbox tool allowlist (all groups + plugins)
         {% set tool_allow = ["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"] %}
         {% if openclaw_mcp_adapter is defined %}
+        {%   set _ = tool_allow.append("group:plugins") %}
         {%   set _ = tool_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
         check_set_json tools.sandbox.tools.allow '{{ tool_allow | to_json }}'
+
+        # Plugin loading allowlist — only trusted plugins can load into gateway
+        # Includes bundled plugins (device-pair, memory-core, etc.) because
+        # plugins.allow blocks ALL plugins not listed, including bundled ones.
+        {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram"] %}
+        {% if openclaw_mcp_adapter is defined %}
+        {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
+        {% endif %}
+        check_set_json plugins.allow '{{ plugin_allow | to_json }}'
 
         # Elevated tools — DISABLED to prevent sandbox escape to VPS host.
         # elevated=true on exec calls bypasses tools.exec.host and grants root.
