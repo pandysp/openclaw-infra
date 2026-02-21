@@ -112,9 +112,9 @@ openclaw-infra/
 │   ├── ansible.cfg         # Ansible config (pipelining, no host key check)
 │   ├── requirements.yml    # Ansible Galaxy collections
 │   ├── playbook.yml        # Main playbook
-│   ├── group_vars/all.yml  # Non-secret defaults (model, cron prompts, etc.)
-│   ├── group_vars/local.yml        # Deployment-specific overrides (gitignored)
-│   ├── group_vars/local.yml.example  # Template for local.yml
+│   ├── group_vars/all.yml  # Non-secret defaults (model, agent types, server templates)
+│   ├── group_vars/openclaw.yml        # Deployment-specific overrides (gitignored)
+│   ├── group_vars/openclaw.yml.example  # Template for openclaw.yml
 │   ├── inventory/
 │   │   └── pulumi_inventory.py  # Dynamic inventory (Tailscale IP from Pulumi)
 │   └── roles/
@@ -122,10 +122,13 @@ openclaw-infra/
 │       ├── docker/    # Docker install, ubuntu→docker group
 │       ├── ufw/       # Firewall rules
 │       ├── openclaw/  # Binary install, onboard, daemon
-│       ├── sandbox/   # Pull base image, build custom Docker image
 │       ├── config/    # All `openclaw config set` commands
+│       ├── agents/    # Create non-default agents, set bindings (conditional)
 │       ├── telegram/  # Channel config, cron jobs (conditional)
+│       ├── obsidian/  # Clone/update Obsidian vaults in workspaces (conditional)
 │       ├── qmd/       # qmd semantic search: install, per-agent watchers
+│       ├── plugins/   # MCP adapter, Codex/Claude Code/Pi/qmd servers, deny rules
+│       ├── sandbox/   # Pull base image, build custom Docker image
 │       └── workspace/ # Deploy key, git sync timer (conditional)
 │
 ├── scripts/
@@ -137,6 +140,7 @@ openclaw-infra/
 │   └── backup.sh             # Data backup
 │
 └── docs/
+    ├── AUTONOMOUS-SAFETY.md         # Multi-agent safety architecture design
     ├── BROWSER-CONTROL-PLANNING.md  # Future browser automation approaches
     ├── DOCS-REVIEW.md               # Official docs review tracking
     ├── SECURITY.md                  # Threat model
@@ -149,9 +153,9 @@ openclaw-infra/
 |---|---|
 | Hetzner VPS + firewall | System packages, Docker, UFW |
 | SSH keys, gateway token | OpenClaw install + onboard |
-| Workspace deploy key | Sandbox image build |
+| Workspace deploy keys | Agents, MCP servers (auto-derived from `openclaw_agents`) |
 | Cloud-init (Tailscale only) | Gateway config, Telegram, cron |
-| Triggers Ansible on server replacement | Workspace git sync |
+| Triggers Ansible on server replacement | Sandbox image, plugins, workspace git sync |
 
 ### Ansible Tags
 
@@ -163,11 +167,13 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `docker` | docker | Docker upgrade or group changes |
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall/update OpenClaw binary |
-| `sandbox` | sandbox | Rebuild custom Docker image |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings, node exec |
+| `agents` | agents | Add/remove non-default agents, update Telegram bindings |
 | `telegram` | telegram | Update cron prompts or channel config |
 | `obsidian` | obsidian | Clone/update Obsidian vaults in agent workspaces |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
+| `plugins` | plugins | MCP adapter, Codex/Claude Code/Pi containers, GitHub MCP, deny rules |
+| `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
 ## Local CLI
@@ -473,6 +479,8 @@ This project uses **local state storage** (`.pulumi/` directory, gitignored). Fo
 
 The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills, and prompts. Syncing it to a private GitHub repo gives you version history, visibility into agent changes, and continuous backup.
 
+**Multi-agent note:** Workspace definitions are auto-generated from `openclaw_agents` (see [Multi-Agent Setup](#multi-agent-setup-optional)). Each agent gets a workspace at `~/.openclaw/workspace-<id>` (or `~/.openclaw/workspace` for main). Run `setup-workspace.sh <agent-id>` for each agent that needs git sync.
+
 ### Setup Steps
 
 **Automated (recommended):**
@@ -588,16 +596,14 @@ Alternatively, message **@userinfobot** on Telegram to get a user ID manually.
 
 ### Scheduled Tasks
 
-When Telegram is configured, these cron jobs are automatically created:
+When Telegram is configured, these default cron jobs are created for the main agent:
 
 | Job | Schedule | Purpose |
 |-----|----------|---------|
-| **Morning Digest** | 09:30 daily | Summarize what needs your attention today |
-| **Evening Review** | 19:30 daily | Review accomplishments and pending items |
-| **Night Shift** | 23:00 daily | Deep work: review notes, organize, triage tasks |
-| **Weekly Planning** | 18:00 Sunday | Review past week, plan upcoming priorities |
+| **Daily Standup** | 09:30 daily | Summarize what needs attention today |
+| **Night Shift** | 23:00 daily | Review notes, organize, triage tasks, prepare morning summary |
 
-All times are in **Europe/Berlin** timezone. Each job runs in an isolated session for fresh context.
+All times are in **Europe/Berlin** timezone. Each job runs in an isolated session for fresh context. Override in `openclaw.yml` for additional agents or custom schedules (see `openclaw.yml.example`).
 
 ### Verify Telegram
 
@@ -610,10 +616,10 @@ openclaw cron run --force <job-id>
 
 ### Customizing Schedules
 
-Edit `ansible/group_vars/all.yml` to change cron job prompts or schedules, then re-provision:
+Edit `ansible/group_vars/openclaw.yml` to change cron job prompts or schedules, then re-provision:
 
 ```bash
-# After editing group_vars/all.yml:
+# After editing group_vars/openclaw.yml:
 ./scripts/provision.sh --tags telegram
 
 # Or via CLI for ad-hoc changes:
@@ -627,6 +633,43 @@ openclaw cron add \
     --message "Your custom prompt here" \
     --deliver --channel telegram --to "YOUR_USER_ID"
 ```
+
+## Multi-Agent Setup (Optional)
+
+By default, a single `main` agent is configured. To add more agents, define `openclaw_agents` in `openclaw.yml` (see `openclaw.yml.example`).
+
+### How It Works
+
+`openclaw_agents` is the **single source of truth**. The `playbook.yml` pre_tasks automatically derive:
+
+| Derived variable | Generated from | Used by |
+|---|---|---|
+| `_openclaw_mcp_servers` | `openclaw_agents` x `openclaw_mcp_server_types` | plugins role (MCP server config, deny rules) |
+| `_openclaw_workspaces` | `openclaw_agents` + provision.sh secrets | workspace, qmd, obsidian, plugins roles |
+| `_openclaw_obsidian_github_tokens` | `openclaw_agents` + GitHub PATs | obsidian role |
+
+**Naming conventions** (mechanical, from agent ID):
+
+| Resource | main | other (e.g., `bob`) |
+|---|---|---|
+| MCP server | `github`, `codex`, `claude` | `github-bob`, `codex-bob`, `claude-bob` |
+| Workspace dir | `~/.openclaw/workspace` | `~/.openclaw/workspace-bob` |
+| Deploy key var | `workspace_deploy_key` | `workspace_bob_deploy_key` |
+| GitHub token var | `github_token` | `github_token_bob` |
+
+### Adding an Agent
+
+1. Add the agent to `openclaw_agents` in `openclaw.yml`
+2. Wire per-agent secrets through `scripts/provision.sh` (Pulumi config or env vars)
+3. Run `./scripts/provision.sh`
+
+MCP servers, workspaces, deny rules, and token mappings are generated automatically. Cron jobs and Obsidian vaults remain manual (personal config — add to `openclaw.yml`).
+
+### Role Ordering
+
+`config` -> `agents` -> `telegram` -> `obsidian` -> `qmd` -> `plugins` -> `sandbox` -> `workspace`
+
+Telegram must run immediately after agents (prevents message misrouting). Obsidian before qmd (vaults must exist before watchers start). Plugins after qmd (qmd binary needed for MCP registration).
 
 ## Sandboxing
 
@@ -762,7 +805,7 @@ Each agent has a **qmd** instance providing local hybrid search (BM25 + vector +
 - Embedding is serialized across agents via `flock` (memory-intensive: ~1.5GB model)
 - Initial sync runs on service startup
 
-**Tool count:** 114 total (96 existing + 18 qmd: 6 tools × 3 agents)
+**Tool count:** 6 tools per agent per server type. Formula: `N_agents × N_server_types × tools_per_type`. With default server types (github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6, node-exec: variable).
 
 **Operations:**
 ```bash

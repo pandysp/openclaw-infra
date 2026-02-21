@@ -1,0 +1,68 @@
+---
+# Deployment-specific overrides (copy to openclaw.yml, which is gitignored).
+# Values here take precedence over all.yml because the "openclaw" group
+# is more specific than the "all" group in Ansible's variable precedence.
+#
+# Usage:
+#   cp ansible/group_vars/openclaw.yml.example ansible/group_vars/openclaw.yml
+#   # Edit openclaw.yml with your deployment-specific settings
+#   ./scripts/provision.sh
+
+# Enable remote Mac node exec (see docs/SECURITY.md §5 for risks)
+# node_exec_enabled: true
+
+# --- Multi-agent setup (uncomment and customize) ---
+# By default, all.yml defines a single "main" agent. Adding agents here automatically
+# generates per-agent MCP servers, workspaces, and token mappings (via playbook.yml
+# pre_tasks). You only need to define agents — everything else derives from them.
+#
+# Prerequisites for each additional agent:
+#   1. Add Pulumi secrets: telegramUserId, workspaceRepoUrl, githubToken (per-agent)
+#   2. Wire them through scripts/provision.sh
+#   3. Run: ./scripts/provision.sh
+#
+# openclaw_agents:
+#   - id: "main"
+#     is_default: true
+#     deliver_to: "{{ telegram_user_id | default('') }}"
+#     deliver_type: "dm"
+#     heartbeat_every: "15m"
+#   - id: "second-agent"
+#     is_default: false
+#     deliver_to: "{{ telegram_second_user_id | default('') }}"
+#     deliver_type: "dm"
+#     heartbeat_every: "1h"
+
+# --- Cron jobs (override to customize schedules per agent) ---
+# all.yml provides generic main-agent defaults (daily standup + night shift).
+# Override here for custom prompts, additional agents, or personal schedules.
+#
+# openclaw_cron_jobs:
+#   - name: "main: Daily Standup"
+#     agent: "main"
+#     schedule: "30 9 * * *"
+#     message: "Good morning! Summarize what needs attention today."
+#   - name: "main: Night Shift"
+#     agent: "main"
+#     schedule: "0 23 * * *"
+#     message: "Night shift. Review notes, organize, triage tasks."
+#   - name: "second-agent: Daily Standup"
+#     agent: "second-agent"
+#     schedule: "0 10 * * *"
+#     message: "Good morning! Summarize what needs attention today."
+
+# --- Obsidian vaults (default: none) ---
+# Clone Obsidian vaults into agent workspaces. Requires GitHub PATs via provision.sh.
+#
+# openclaw_obsidian_vaults:
+#   - name: "my-vault"
+#     repo_url: "{{ obsidian_my_vault_repo_url | default('') }}"
+#     agents: ["main"]
+
+# --- Advanced: manual overrides for auto-generated config ---
+# The following variables are normally auto-generated from openclaw_agents.
+# Define them here ONLY if you need non-standard naming or custom server configurations.
+#
+# openclaw_mcp_servers:       # Override auto-generated MCP server list
+# openclaw_workspaces:        # Override auto-generated workspace list
+# openclaw_obsidian_github_tokens:  # Override auto-generated token mapping

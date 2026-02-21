@@ -184,7 +184,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 Plugins run in-process — they have the same access as the gateway itself (config, credentials, sessions, network, sudo). npm lifecycle scripts execute during installation before code review.
 
-**Current status**: No plugins installed.
+**Current status**: The `openclaw-mcp-adapter` plugin is installed and allowlisted. It manages per-agent MCP servers (GitHub, Codex, Claude Code, Pi, qmd, node-exec) running as Docker containers on the `codex-proxy-net` network with a credential-injecting proxy.
 
 **When adding plugins**:
 - Review source code before installing

@@ -92,34 +92,14 @@ force_qmd_reindex: false
 # Pin to commit hash for reproducibility (bun uses github:user/repo#hash syntax)
 qmd_version: "785bbcf319cf60d9e81b8307a1ea89bcdf3159c2"
 
-# Agent definitions
-# "main" is the built-in default agent (andy). Additional agents: manon, tl, henning, ph.
+# Agent definitions — single-agent default for new deployments.
+# Override in openclaw.yml for multi-agent setups (see openclaw.yml.example).
 openclaw_agents:
   - id: "main"
     is_default: true
     deliver_to: "{{ telegram_user_id | default('') }}"
     deliver_type: "dm"
     heartbeat_every: "15m"
-  - id: "manon"
-    is_default: false
-    deliver_to: "{{ telegram_manon_user_id | default('') }}"
-    deliver_type: "dm"
-    heartbeat_every: "1h"
-  - id: "tl"
-    is_default: false
-    deliver_to: "{{ telegram_group_id | default('') }}"
-    deliver_type: "group"
-    heartbeat_every: "1h"
-  - id: "henning"
-    is_default: false
-    deliver_to: "{{ telegram_henning_user_id | default('') }}"
-    deliver_type: "dm"
-    heartbeat_every: "1h"
-  - id: "ph"
-    is_default: false
-    deliver_to: "{{ telegram_ph_group_id | default('') }}"
-    deliver_type: "group"
-    heartbeat_every: "1h"
 
 # Legacy cron job names (removed during migration to per-agent jobs)
 openclaw_legacy_cron_names:
@@ -131,129 +111,17 @@ openclaw_legacy_cron_names:
   - "Daily Research Digest"
   - "Weekly Vault Insights"
 
-# Per-agent cron jobs (only created when telegram is configured)
+# Per-agent cron jobs (only created when telegram is configured).
+# Generic defaults for single-agent setup. Override in openclaw.yml for multi-agent.
 openclaw_cron_jobs:
-  # main (andy)
   - name: "main: Daily Standup"
     agent: "main"
     schedule: "30 9 * * *"
-    message: "Good morning! Summarize what needs my attention today."
+    message: "Good morning! Summarize what needs attention today."
   - name: "main: Night Shift"
     agent: "main"
     schedule: "0 23 * * *"
     message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "main: Weekly Review"
-    agent: "main"
-    schedule: "0 15 * * 5"
-    message: "Weekly review. What was accomplished this week? What is pending?"
-  - name: "main: Weekly Planning"
-    agent: "main"
-    schedule: "0 10 * * 1"
-    message: "Weekly planning. Review past week, plan upcoming week priorities."
-  - name: "main: Weekly Memory Maintenance"
-    agent: "main"
-    schedule: "0 3 * * 0"
-    message: >-
-      Weekly memory maintenance. Do the following:
-      1. Read MEMORY.md — check for stale facts, duplicates, contradictions. Fix any found.
-      2. Read the last 7 days of daily memory files (memory/YYYY-MM-DD.md) — extract any durable facts or lessons that should be in MEMORY.md but aren't.
-      3. Check USER.md for stale client/project statuses.
-      4. Review TODO.md — any completed items older than 2 weeks? Move to Completed section. Any blocked items that might be unblocked?
-      5. Archive daily logs older than 30 days to memory/archive/ (create if needed).
-      6. Write a brief summary of changes made to memory/YYYY-MM-DD.md (today's date).
-  - name: "main: Daily Research Digest"
-    agent: "main"
-    schedule: "0 7 * * 1-5"
-    message: >-
-      Daily research digest for Andy. Search the web for the latest developments in these areas (past 24h preferred, past week acceptable):
-      1. AI Engineering & Agent Frameworks — new releases, breakthroughs, notable papers (MCP, agent architectures, RAG, evals, LLM tooling).
-      2. LLM & Foundation Models — new model releases, benchmark results, pricing changes, API updates from Anthropic/OpenAI/Google/xAI/Meta.
-      3. AI Consulting & Freelance Market — EU AI Act updates, enterprise AI adoption trends, consulting opportunities.
-      4. OpenClaw & Agent Ecosystem — OpenClaw releases, community discussions, competing platforms.
-      For each area, run 1-2 targeted web searches. Filter for signal over noise — only include items that would genuinely interest an AI consultant and engineer.
-      Output format: Write findings to memory/research/YYYY-MM-DD.md (create memory/research/ if needed).
-      Keep each section to 2-3 bullet points max. If a day has nothing notable, write a one-liner and move on. Quality over quantity.
-  - name: "main: Weekly Vault Insights"
-    agent: "main"
-    schedule: "0 9 * * 6"
-    message: >-
-      Weekly vault insights for Andy. Search Andy's Obsidian vault (via QMD tools and GitHub MCP on pandysp/andy-vault) to surface patterns and insights he might not have noticed.
-      Do the following:
-      1. Check recent daily notes (past 7 days in the vault) — what themes keep recurring? Any unresolved threads?
-      2. Cross-reference active projects — are any client/venture items stale? Deadlines approaching?
-      3. Surface forgotten items — search for notes tagged with TODO, follow-up, or similar that haven't been touched in 2+ weeks.
-      4. Pattern spotting — any interesting connections between notes that Andy might not see (e.g., a contact mentioned in two unrelated contexts, an idea that connects to an active project)?
-      5. Wellbeing check — any patterns in health/energy notes worth flagging?
-      Write findings to memory/vault-insights/YYYY-MM-DD.md (create dir if needed).
-      Be genuinely useful, not performative. If nothing interesting surfaces, say so in one line. Don't manufacture insights.
-  # manon
-  # - name: "manon: Daily Standup"
-  #   agent: "manon"
-  #   schedule: "0 10 * * *"
-  #   message: "Good morning! Summarize what needs my attention today."
-  - name: "manon: Night Shift"
-    agent: "manon"
-    schedule: "30 23 * * *"
-    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  # - name: "manon: Weekly Review"
-  #   agent: "manon"
-  #   schedule: "30 15 * * 5"
-  #   message: "Weekly review. What was accomplished this week? What is pending?"
-  # - name: "manon: Weekly Planning"
-  #   agent: "manon"
-  #   schedule: "30 10 * * 1"
-  #   message: "Weekly planning. Review past week, plan upcoming week priorities."
-  # tl
-  - name: "tl: Daily Standup"
-    agent: "tl"
-    schedule: "45 9 * * *"
-    message: "Good morning team! Summarize what needs attention today."
-  - name: "tl: Night Shift"
-    agent: "tl"
-    schedule: "15 23 * * *"
-    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "tl: Weekly Review"
-    agent: "tl"
-    schedule: "15 15 * * 5"
-    message: "Weekly review. What was accomplished this week? What is pending?"
-  - name: "tl: Weekly Planning"
-    agent: "tl"
-    schedule: "15 10 * * 1"
-    message: "Weekly planning. Review past week, plan upcoming week priorities."
-  # henning
-  - name: "henning: Daily Standup"
-    agent: "henning"
-    schedule: "0 10 * * *"
-    message: "Good morning! Summarize what needs attention today."
-  - name: "henning: Night Shift"
-    agent: "henning"
-    schedule: "45 23 * * *"
-    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "henning: Weekly Review"
-    agent: "henning"
-    schedule: "30 15 * * 5"
-    message: "Weekly review. What was accomplished this week? What is pending?"
-  - name: "henning: Weekly Planning"
-    agent: "henning"
-    schedule: "30 10 * * 1"
-    message: "Weekly planning. Review past week, plan upcoming week priorities."
-  # ph
-  - name: "ph: Daily Standup"
-    agent: "ph"
-    schedule: "15 10 * * *"
-    message: "Good morning team! Summarize what needs attention today."
-  - name: "ph: Night Shift"
-    agent: "ph"
-    schedule: "30 23 * * *"
-    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
-  - name: "ph: Weekly Review"
-    agent: "ph"
-    schedule: "45 15 * * 5"
-    message: "Weekly review. What was accomplished this week? What is pending?"
-  - name: "ph: Weekly Planning"
-    agent: "ph"
-    schedule: "45 10 * * 1"
-    message: "Weekly planning. Review past week, plan upcoming week priorities."
 
 # MCP plugin configuration
 openclaw_mcp_adapter:
@@ -280,128 +148,25 @@ openclaw_mcp_adapter:
   pi_mcp_memory_limit: "1g"    # Lower than Codex/Claude Code — Pi is lighter (session trees, not full IDE)
   pi_mcp_model: "claude-opus-4-6"
   pi_mcp_thinking: "xhigh"
-  servers:
-    # GitHub MCP servers (one per agent, each with its own PAT)
-    - name: "github"
-      type: "github"
-      token_var: "github_token"
-      agent_id: "main"
-    - name: "github-manon"
-      type: "github"
-      token_var: "github_token_manon"
-      agent_id: "manon"
-    - name: "github-tl"
-      type: "github"
-      token_var: "github_token_tl"
-      agent_id: "tl"
-    - name: "github-henning"
-      type: "github"
-      token_var: "github_token_henning"
-      agent_id: "henning"
-    - name: "github-ph"
-      type: "github"
-      token_var: "github_token_ph"
-      agent_id: "ph"
-    # Codex MCP servers (one per agent, uses cached ~/.codex/auth.json, workspace-scoped cwd)
-    - name: "codex"
-      type: "codex"
-      agent_id: "main"
-      cwd: "/home/ubuntu/.openclaw/workspace"
-    - name: "codex-manon"
-      type: "codex"
-      agent_id: "manon"
-      cwd: "/home/ubuntu/.openclaw/workspace-manon"
-    - name: "codex-tl"
-      type: "codex"
-      agent_id: "tl"
-      cwd: "/home/ubuntu/.openclaw/workspace-tl"
-    - name: "codex-henning"
-      type: "codex"
-      agent_id: "henning"
-      cwd: "/home/ubuntu/.openclaw/workspace-henning"
-    - name: "codex-ph"
-      type: "codex"
-      agent_id: "ph"
-      cwd: "/home/ubuntu/.openclaw/workspace-ph"
-    # Claude Code MCP servers (one per agent, reuses claude_setup_token, workspace-scoped cwd)
-    - name: "claude"
-      type: "claude-code"
-      agent_id: "main"
-      cwd: "/home/ubuntu/.openclaw/workspace"
-    - name: "claude-manon"
-      type: "claude-code"
-      agent_id: "manon"
-      cwd: "/home/ubuntu/.openclaw/workspace-manon"
-    - name: "claude-tl"
-      type: "claude-code"
-      agent_id: "tl"
-      cwd: "/home/ubuntu/.openclaw/workspace-tl"
-    - name: "claude-henning"
-      type: "claude-code"
-      agent_id: "henning"
-      cwd: "/home/ubuntu/.openclaw/workspace-henning"
-    - name: "claude-ph"
-      type: "claude-code"
-      agent_id: "ph"
-      cwd: "/home/ubuntu/.openclaw/workspace-ph"
-    # Pi MCP servers (one per agent, reuses claude_setup_token, workspace-scoped cwd)
-    - name: "pi"
-      type: "pi"
-      agent_id: "main"
-      cwd: "/home/ubuntu/.openclaw/workspace"
-    - name: "pi-manon"
-      type: "pi"
-      agent_id: "manon"
-      cwd: "/home/ubuntu/.openclaw/workspace-manon"
-    - name: "pi-tl"
-      type: "pi"
-      agent_id: "tl"
-      cwd: "/home/ubuntu/.openclaw/workspace-tl"
-    - name: "pi-henning"
-      type: "pi"
-      agent_id: "henning"
-      cwd: "/home/ubuntu/.openclaw/workspace-henning"
-    - name: "pi-ph"
-      type: "pi"
-      agent_id: "ph"
-      cwd: "/home/ubuntu/.openclaw/workspace-ph"
-    # qmd semantic search servers (one per agent, local — no credentials needed)
-    - name: "qmd"
-      type: "qmd"
-      agent_id: "main"
-      cwd: "/home/ubuntu/.openclaw/workspace"
-    - name: "qmd-manon"
-      type: "qmd"
-      agent_id: "manon"
-      cwd: "/home/ubuntu/.openclaw/workspace-manon"
-    - name: "qmd-tl"
-      type: "qmd"
-      agent_id: "tl"
-      cwd: "/home/ubuntu/.openclaw/workspace-tl"
-    - name: "qmd-henning"
-      type: "qmd"
-      agent_id: "henning"
-      cwd: "/home/ubuntu/.openclaw/workspace-henning"
-    - name: "qmd-ph"
-      type: "qmd"
-      agent_id: "ph"
-      cwd: "/home/ubuntu/.openclaw/workspace-ph"
-    # Node exec MCP servers (one per agent — Mac shell access via openclaw nodes run)
-    - name: "mac"
-      type: "node-exec"
-      agent_id: "main"
-    - name: "mac-manon"
-      type: "node-exec"
-      agent_id: "manon"
-    - name: "mac-tl"
-      type: "node-exec"
-      agent_id: "tl"
-    - name: "mac-henning"
-      type: "node-exec"
-      agent_id: "henning"
-    - name: "mac-ph"
-      type: "node-exec"
-      agent_id: "ph"
+  # Note: MCP servers are auto-generated from openclaw_agents × openclaw_mcp_server_types
+  # in playbook.yml pre_tasks. The 'servers' key was removed — see _openclaw_mcp_servers.
+
+# MCP server type templates — cross-producted with openclaw_agents to auto-generate
+# the per-agent MCP server list (_openclaw_mcp_servers). Each type produces one server
+# per agent with mechanical naming: <name_prefix> for main, <name_prefix>-<id> for others.
+openclaw_mcp_server_types:
+  - type: "github"
+    name_prefix: "github"
+  - type: "codex"
+    name_prefix: "codex"
+  - type: "claude-code"
+    name_prefix: "claude"
+  - type: "pi"
+    name_prefix: "pi"
+  - type: "qmd"
+    name_prefix: "qmd"
+  - type: "node-exec"
+    name_prefix: "mac"
 
 # Claude Code plugins for MCP containers
 claude_code_plugins:
@@ -423,56 +188,9 @@ claude_code_plugins:
     - "ty-lsp@pandysp"
     - "typescript-lsp@pandysp"
 
-# Obsidian vault definitions (cloned into <workspace>/obsidian/<name>/)
-# Agents pull/push manually from Docker sandbox. Uses existing GitHub PATs via HTTPS.
-openclaw_obsidian_vaults:
-  - name: "andy-vault"
-    repo_url: "{{ obsidian_andy_vault_repo_url | default('') }}"
-    agents: ["main"]
-  - name: "manon-vault"
-    repo_url: "{{ obsidian_manon_vault_repo_url | default('') }}"
-    agents: ["manon"]
-  - name: "tl-vault"
-    repo_url: "{{ obsidian_tl_vault_repo_url | default('') }}"
-    agents: ["main", "manon", "tl"]
-
-# Explicit agent → GitHub PAT mapping for Obsidian HTTPS clones (reuses existing MCP PATs)
-openclaw_obsidian_github_tokens:
-  main: "{{ github_token | default('') }}"
-  manon: "{{ github_token_manon | default('') }}"
-  tl: "{{ github_token_tl | default('') }}"
-  henning: "{{ github_token_henning | default('') }}"
-  ph: "{{ github_token_ph | default('') }}"
-
-# Workspace git sync definitions (per-agent)
-openclaw_workspaces:
-  - agent_id: "main"
-    repo_url: "{{ workspace_repo_url | default('') }}"
-    deploy_key: "{{ workspace_deploy_key | default('') }}"
-    workspace_dir: "/home/ubuntu/.openclaw/workspace"
-    ssh_alias: "github-workspace-main"
-    key_file: "workspace-deploy-key"
-  - agent_id: "manon"
-    repo_url: "{{ workspace_manon_repo_url | default('') }}"
-    deploy_key: "{{ workspace_manon_deploy_key | default('') }}"
-    workspace_dir: "/home/ubuntu/.openclaw/workspace-manon"
-    ssh_alias: "github-workspace-manon"
-    key_file: "workspace-deploy-key-manon"
-  - agent_id: "tl"
-    repo_url: "{{ workspace_tl_repo_url | default('') }}"
-    deploy_key: "{{ workspace_tl_deploy_key | default('') }}"
-    workspace_dir: "/home/ubuntu/.openclaw/workspace-tl"
-    ssh_alias: "github-workspace-tl"
-    key_file: "workspace-deploy-key-tl"
-  - agent_id: "henning"
-    repo_url: "{{ workspace_henning_repo_url | default('') }}"
-    deploy_key: "{{ workspace_henning_deploy_key | default('') }}"
-    workspace_dir: "/home/ubuntu/.openclaw/workspace-henning"
-    ssh_alias: "github-workspace-henning"
-    key_file: "workspace-deploy-key-henning"
-  - agent_id: "ph"
-    repo_url: "{{ workspace_ph_repo_url | default('') }}"
-    deploy_key: "{{ workspace_ph_deploy_key | default('') }}"
-    workspace_dir: "/home/ubuntu/.openclaw/workspace-ph"
-    ssh_alias: "github-workspace-ph"
-    key_file: "workspace-deploy-key-ph"
+# Obsidian vault definitions (cloned into <workspace>/obsidian/<name>/).
+# Default: none. Override in openclaw.yml for vault access.
+openclaw_obsidian_vaults: []
+# Note: openclaw_obsidian_github_tokens and openclaw_workspaces are now auto-generated
+# in playbook.yml pre_tasks from openclaw_agents. See _openclaw_obsidian_github_tokens
+# and _openclaw_workspaces. Override by defining these variables in openclaw.yml.

@@ -9,6 +9,87 @@
         timeout: 300
         delay: 10
 
+    # --- Derived config: auto-generate from openclaw_agents × openclaw_mcp_server_types ---
+    # These computed variables (_openclaw_*) replace the manual per-agent lists that were
+    # previously in all.yml. Override by defining openclaw_mcp_servers, openclaw_workspaces,
+    # or openclaw_obsidian_github_tokens in openclaw.yml.
+
+    # MCP servers: agents × server_types cross-product
+    - name: Use manually defined MCP servers (override)
+      ansible.builtin.set_fact:
+        _openclaw_mcp_servers: "{{ openclaw_mcp_servers }}"
+      when: openclaw_mcp_servers is defined
+      tags: [always]
+
+    - name: Initialize auto-generated MCP server list
+      ansible.builtin.set_fact:
+        _openclaw_mcp_servers: []
+      when: openclaw_mcp_servers is not defined
+      tags: [always]
+
+    - name: Auto-generate MCP servers from server types × agents
+      ansible.builtin.set_fact:
+        _openclaw_mcp_servers: "{{ _openclaw_mcp_servers + [_entry] }}"
+      vars:
+        _name: "{{ item.0.name_prefix if item.1.id == 'main' else item.0.name_prefix ~ '-' ~ item.1.id }}"
+        _cwd: "{{ '/home/ubuntu/.openclaw/workspace' if item.1.id == 'main' else '/home/ubuntu/.openclaw/workspace-' ~ item.1.id }}"
+        _token_var: "{{ 'github_token' if item.1.id == 'main' else 'github_token_' ~ item.1.id }}"
+        _entry: >-
+          {{ {'name': _name, 'type': item.0.type, 'agent_id': item.1.id}
+             | combine({'cwd': _cwd} if item.0.type in ['codex', 'claude-code', 'pi', 'qmd'] else {})
+             | combine({'token_var': _token_var} if item.0.type == 'github' else {}) }}
+      loop: "{{ openclaw_mcp_server_types | product(openclaw_agents) | list }}"
+      loop_control:
+        label: "{{ _name }}"
+      when: openclaw_mcp_servers is not defined
+      tags: [always]
+
+    # Workspaces: one per agent with mechanical naming
+    - name: Use manually defined workspaces (override)
+      ansible.builtin.set_fact:
+        _openclaw_workspaces: "{{ openclaw_workspaces }}"
+      when: openclaw_workspaces is defined
+      tags: [always]
+
+    - name: Auto-generate workspaces from agents
+      ansible.builtin.set_fact:
+        _openclaw_workspaces: "{{ (_openclaw_workspaces | default([])) + [_entry] }}"
+      vars:
+        _repo_var: "{{ 'workspace_repo_url' if item.id == 'main' else 'workspace_' ~ item.id ~ '_repo_url' }}"
+        _key_var: "{{ 'workspace_deploy_key' if item.id == 'main' else 'workspace_' ~ item.id ~ '_deploy_key' }}"
+        _entry:
+          agent_id: "{{ item.id }}"
+          repo_url: "{{ lookup('vars', _repo_var, default='') }}"
+          deploy_key: "{{ lookup('vars', _key_var, default='') }}"
+          workspace_dir: "{{ '/home/ubuntu/.openclaw/workspace' if item.id == 'main' else '/home/ubuntu/.openclaw/workspace-' ~ item.id }}"
+          ssh_alias: "github-workspace-{{ item.id }}"
+          key_file: "{{ 'workspace-deploy-key' if item.id == 'main' else 'workspace-deploy-key-' ~ item.id }}"
+      loop: "{{ openclaw_agents }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: openclaw_workspaces is not defined
+      tags: [always]
+
+    # Obsidian GitHub tokens: agent → PAT mapping for HTTPS clones
+    - name: Use manually defined Obsidian GitHub tokens (override)
+      ansible.builtin.set_fact:
+        _openclaw_obsidian_github_tokens: "{{ openclaw_obsidian_github_tokens }}"
+      when: openclaw_obsidian_github_tokens is defined
+      tags: [always]
+
+    - name: Auto-generate Obsidian GitHub tokens from agents
+      ansible.builtin.set_fact:
+        _openclaw_obsidian_github_tokens: >-
+          {{ (_openclaw_obsidian_github_tokens | default({}))
+             | combine({item.id: lookup('vars', _token_var, default='')}) }}
+      vars:
+        _token_var: "{{ 'github_token' if item.id == 'main' else 'github_token_' ~ item.id }}"
+      loop: "{{ openclaw_agents }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: openclaw_obsidian_github_tokens is not defined
+      tags: [always]
+
   roles:
     - { role: system,    tags: [system],    become: true }
     - { role: docker,    tags: [docker],    become: true }
@@ -22,7 +103,7 @@
     # obsidian before qmd — vaults must be cloned before watchers start (prevents thundering herd).
     - role: obsidian
       tags: [obsidian]
-      when: openclaw_obsidian_vaults is defined
+      when: openclaw_obsidian_vaults | default([]) | selectattr('repo_url', 'ne', '') | list | length > 0
     # qmd after obsidian — needs workspace dirs from agents role, before plugins registers MCP servers.
     - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
     # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
@@ -30,7 +111,7 @@
     - { role: sandbox,   tags: [sandbox] }
     - role: workspace
       tags: [workspace]
-      when: openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list | length > 0
+      when: _openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list | length > 0
 
   post_tasks:
     - name: Ensure openclaw-gateway is started and enabled

@@ -281,7 +281,7 @@
     fail_msg: >-
       qmd binary not found but qmd servers are configured in group_vars.
       Run the qmd role first: ./scripts/provision.sh --tags qmd,plugins
-  when: openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'qmd') | list | length > 0
+  when: _openclaw_mcp_servers | selectattr('type', 'equalto', 'qmd') | list | length > 0
 
 - name: Set npm prefix bin path fact
   ansible.builtin.set_fact:
@@ -303,7 +303,7 @@
   changed_when: false
   when:
     - node_exec_enabled | default(false)
-    - openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'node-exec') | list | length > 0
+    - _openclaw_mcp_servers | selectattr('type', 'equalto', 'node-exec') | list | length > 0
 
 - name: Deploy Codex auth credentials
   when: codex_auth_json | default('') | length > 0
@@ -347,11 +347,17 @@
 - name: Set proxy_required fact
   ansible.builtin.set_fact:
     proxy_required: >-
-      {{ (codex_auth_json | default('') | length > 0) or
-         (claude_setup_token | default('') | length > 0) or
-         (github_token | default('') | length > 0) or
-         (github_token_manon | default('') | length > 0) or
-         (github_token_tl | default('') | length > 0) }}
+      {%- set ns = namespace(found=false) -%}
+      {%- if (codex_auth_json | default('') | length > 0) or (claude_setup_token | default('') | length > 0) -%}
+        {%- set ns.found = true -%}
+      {%- else -%}
+        {%- for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'github') -%}
+          {%- if lookup('vars', srv.token_var, default='') | length > 0 -%}
+            {%- set ns.found = true -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {{ ns.found }}
 
 - name: Ensure GitHub tokens directory exists
   ansible.builtin.file:
@@ -366,7 +372,7 @@
     dest: "/home/ubuntu/.openclaw/github-tokens/{{ item.agent_id }}"
     mode: "0600"
   no_log: true
-  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | list }}"
+  loop: "{{ _openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | list }}"
   loop_control:
     label: "{{ item.agent_id }}"
   when: lookup('vars', item.token_var, default='') | length > 0
@@ -470,12 +476,12 @@
     path: "{{ item.workspace_dir }}"
     state: directory
     mode: "0755"
-  loop: "{{ openclaw_workspaces }}"
+  loop: "{{ _openclaw_workspaces }}"
   loop_control:
     label: "{{ item.agent_id }}"
   when:
     - codex_proxy_gateway_ip is defined
-    - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
+    - lookup('vars', (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
 
 - name: Write per-agent workspace .git-proxy-config files
   ansible.builtin.copy:
@@ -485,12 +491,12 @@
           insteadOf = git@github.com:
     dest: "{{ item.workspace_dir }}/.git-proxy-config"
     mode: "0644"
-  loop: "{{ openclaw_workspaces }}"
+  loop: "{{ _openclaw_workspaces }}"
   loop_control:
     label: "{{ item.agent_id }}"
   when:
     - codex_proxy_gateway_ip is defined
-    - lookup('vars', (openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
+    - lookup('vars', (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | selectattr('agent_id', 'equalto', item.agent_id) | map(attribute='token_var') | first | default('_undefined')), default='') | length > 0
 
 - name: Template Codex config.toml for proxy routing
   ansible.builtin.template:
@@ -665,7 +671,7 @@
     path: "{{ item.cwd }}"
     state: directory
     mode: "0755"
-  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'codex') | list }}"
+  loop: "{{ _openclaw_mcp_servers | selectattr('type', 'equalto', 'codex') | list }}"
   loop_control:
     label: "{{ item.name }}"
   when: codex_auth_json | default('') | length > 0
@@ -675,7 +681,7 @@
     path: "{{ item.cwd }}"
     state: directory
     mode: "0755"
-  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') | list }}"
+  loop: "{{ _openclaw_mcp_servers | selectattr('type', 'equalto', 'claude-code') | list }}"
   loop_control:
     label: "{{ item.name }}"
   when: claude_setup_token | default('') | length > 0
@@ -685,7 +691,7 @@
     path: "{{ item.cwd }}"
     state: directory
     mode: "0755"
-  loop: "{{ openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'pi') | list }}"
+  loop: "{{ _openclaw_mcp_servers | selectattr('type', 'equalto', 'pi') | list }}"
   loop_control:
     label: "{{ item.name }}"
   when: claude_setup_token | default('') | length > 0
@@ -1143,7 +1149,7 @@
       Server '{{ item.name }}' references token_var '{{ item.token_var }}'
       which is not a defined variable. Check group_vars/all.yml and provision.sh.
     quiet: true
-  loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | list }}"
+  loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -1154,7 +1160,7 @@
     mode: "0600"
   no_log: true
   changed_when: false
-  loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
+  loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
 - name: Write Claude setup token to temp file
   ansible.builtin.copy:
@@ -1176,7 +1182,7 @@
     SERVERS="[]"
 
     # GitHub servers — only include when token is non-empty
-    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'github') %}
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'github') %}
     TOKEN_FILE="/tmp/ansible-mcp-token-{{ srv.token_var }}"
     if [ ! -f "$TOKEN_FILE" ]; then
         echo "ERROR: Token file $TOKEN_FILE is missing — write task may have failed"
@@ -1198,7 +1204,7 @@
     CODEX_MEM="{{ openclaw_mcp_adapter.codex_memory_limit | default('2g') }}"
     PROXY_GW="{{ codex_proxy_gateway_ip | default('') }}"
     if [ -f "/home/ubuntu/.codex/auth.json" ] && [ -n "$PROXY_GW" ]; then
-    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'codex') %}
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'codex') %}
         DOCKER_ARGS=$(jq -n \
             --arg ws "{{ srv.cwd }}" \
             --arg img "$CODEX_IMAGE" \
@@ -1244,7 +1250,7 @@
     {% else %}
     CLAUDE_CMD="exec claude-code-mcp"
     {% endif %}
-    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'claude-code') %}
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'claude-code') %}
         DOCKER_ARGS=$(jq -n \
             --arg ws "{{ srv.cwd }}" \
             --arg img "$CLAUDE_IMAGE" \
@@ -1290,7 +1296,7 @@
     PI_MODEL="{{ openclaw_mcp_adapter.pi_mcp_model | default('claude-sonnet-4-5-20250929') }}"
     PI_THINKING="{{ openclaw_mcp_adapter.pi_mcp_thinking | default('medium') }}"
     if [ -n "$PROXY_GW" ]; then
-    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'pi') %}
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'pi') %}
         DOCKER_ARGS=$(jq -n \
             --arg ws "{{ srv.cwd }}" \
             --arg img "$PI_IMAGE" \
@@ -1330,7 +1336,7 @@
     # qmd servers — local semantic search (no tokens/proxy needed)
     QMD_BINARY="{{ (qmd_mcp_binary.stdout | default('')) | trim }}"
     if [ -n "$QMD_BINARY" ] && [ -x "$QMD_BINARY" ]; then
-    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'qmd') %}
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'qmd') %}
         QMD_CONFIG="{{ srv.cwd }}/.qmd"
         QMD_INDEX="{{ srv.cwd }}/.qmd/index.sqlite"
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
@@ -1346,11 +1352,11 @@
 
     {% if node_exec_enabled | default(false) %}
     # node-exec: Mac shell access via openclaw nodes run (no Docker, no credentials)
-    NODE_EXEC_BINARY="{{ ((node_exec_mcp_binary.stdout_lines | default([''])) | last) | trim }}"
+    NODE_EXEC_BINARY="{{ (node_exec_mcp_binary.stdout | default('')) | trim }}"
     OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
     NODE_ID=$(XDG_RUNTIME_DIR=/run/user/1000 openclaw config get tools.exec.node 2>/dev/null || echo "")
     if [ -n "$NODE_ID" ] && [ -n "$OPENCLAW_BIN" ] && [ -x "$NODE_EXEC_BINARY" ]; then
-    {% for srv in openclaw_mcp_adapter.servers | selectattr('type', 'equalto', 'node-exec') %}
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'node-exec') %}
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
             --arg cmd "$NODE_EXEC_BINARY" \
             --arg node_id "$NODE_ID" \
@@ -1437,7 +1443,7 @@
         path: "/tmp/ansible-mcp-token-{{ item }}"
         state: absent
       changed_when: false
-      loop: "{{ openclaw_mcp_adapter.servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
+      loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
     - name: Clean up Claude setup token temp file
       ansible.builtin.file:
@@ -1496,7 +1502,7 @@
       which does not match any agent in openclaw_agents.
       Valid agent IDs: {{ openclaw_agents | map(attribute='id') | list }}
     quiet: true
-  loop: "{{ openclaw_mcp_adapter.servers }}"
+  loop: "{{ _openclaw_mcp_servers }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -1540,7 +1546,7 @@
     executable: /bin/bash
   vars:
     deny_list: >-
-      {{ openclaw_mcp_adapter.servers
+      {{ _openclaw_mcp_servers
          | rejectattr('agent_id', 'equalto', item.id)
          | map(attribute='name')
          | map('regex_replace', '$', '_*')

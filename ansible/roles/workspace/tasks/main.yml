@@ -3,7 +3,7 @@
 - name: Determine active workspaces
   ansible.builtin.set_fact:
     active_workspaces: >-
-      {{ openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list }}
+      {{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list }}
 
 - name: Ensure .ssh directory exists
   ansible.builtin.file:

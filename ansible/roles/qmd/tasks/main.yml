@@ -34,7 +34,7 @@
 - name: Determine active workspaces for qmd
   ansible.builtin.set_fact:
     qmd_workspaces: >-
-      {{ openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}
+      {{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}
 
 # --- Phase 3: Per-agent setup ---
 

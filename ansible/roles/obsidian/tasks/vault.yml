@@ -7,7 +7,7 @@
 - name: "Assert GitHub PAT is set for {{ item.1 }}"
   ansible.builtin.assert:
     that:
-      - openclaw_obsidian_github_tokens[item.1] | default('') | length > 0
+      - _openclaw_obsidian_github_tokens[item.1] | default('') | length > 0
     fail_msg: >-
       Obsidian vault '{{ item.0.name }}' is assigned to agent '{{ item.1 }}'
       but no GitHub PAT is configured. Set the matching github_token in Pulumi config.
@@ -25,7 +25,7 @@
 - name: "Resolve workspace dir for {{ item.1 }}"
   ansible.builtin.set_fact:
     _obsidian_workspace_entry: >-
-      {{ openclaw_workspaces | selectattr('agent_id', 'equalto', item.1) | first | default(none) }}
+      {{ _openclaw_workspaces | selectattr('agent_id', 'equalto', item.1) | first | default(none) }}
 
 - name: "Fail if no workspace entry for {{ item.1 }}"
   ansible.builtin.assert:
@@ -33,8 +33,8 @@
       - _obsidian_workspace_entry is not none
       - _obsidian_workspace_entry != 'None'
     fail_msg: >-
-      No workspace entry found for agent '{{ item.1 }}' in openclaw_workspaces.
-      Check that the agent ID in openclaw_obsidian_vaults matches an entry in openclaw_workspaces.
+      No workspace entry found for agent '{{ item.1 }}' in _openclaw_workspaces.
+      Check that the agent ID in openclaw_obsidian_vaults matches an entry in _openclaw_workspaces.
     quiet: true
 
 - name: "Set workspace dir for {{ item.1 }}"
@@ -81,7 +81,7 @@
 - name: "Build authenticated URL for {{ item.0.name }}"
   ansible.builtin.set_fact:
     _obsidian_auth_url: >-
-      {{ item.0.repo_url | regex_replace('https://([^@]*@)?', 'https://' + openclaw_obsidian_github_tokens[item.1] + '@') }}
+      {{ item.0.repo_url | regex_replace('https://([^@]*@)?', 'https://' + _openclaw_obsidian_github_tokens[item.1] + '@') }}
 
 - name: "Clone vault {{ item.0.name }} for {{ item.1 }}"
   ansible.builtin.command:
