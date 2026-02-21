@@ -93,7 +93,7 @@ force_qmd_reindex: false
 qmd_version: "785bbcf319cf60d9e81b8307a1ea89bcdf3159c2"
 
 # Agent definitions
-# "main" is the built-in default agent (andy). manon and tl are additional agents.
+# "main" is the built-in default agent (andy). Additional agents: manon, tl, henning, ph.
 openclaw_agents:
   - id: "main"
     is_default: true
@@ -108,6 +108,16 @@ openclaw_agents:
   - id: "tl"
     is_default: false
     deliver_to: "{{ telegram_group_id | default('') }}"
+    deliver_type: "group"
+    heartbeat_every: "1h"
+  - id: "henning"
+    is_default: false
+    deliver_to: "{{ telegram_henning_user_id | default('') }}"
+    deliver_type: "dm"
+    heartbeat_every: "1h"
+  - id: "ph"
+    is_default: false
+    deliver_to: "{{ telegram_ph_group_id | default('') }}"
     deliver_type: "group"
     heartbeat_every: "1h"
 
@@ -210,6 +220,40 @@ openclaw_cron_jobs:
     agent: "tl"
     schedule: "15 10 * * 1"
     message: "Weekly planning. Review past week, plan upcoming week priorities."
+  # henning
+  - name: "henning: Daily Standup"
+    agent: "henning"
+    schedule: "0 10 * * *"
+    message: "Good morning! Summarize what needs attention today."
+  - name: "henning: Night Shift"
+    agent: "henning"
+    schedule: "45 23 * * *"
+    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
+  - name: "henning: Weekly Review"
+    agent: "henning"
+    schedule: "30 15 * * 5"
+    message: "Weekly review. What was accomplished this week? What is pending?"
+  - name: "henning: Weekly Planning"
+    agent: "henning"
+    schedule: "30 10 * * 1"
+    message: "Weekly planning. Review past week, plan upcoming week priorities."
+  # ph
+  - name: "ph: Daily Standup"
+    agent: "ph"
+    schedule: "15 10 * * *"
+    message: "Good morning team! Summarize what needs attention today."
+  - name: "ph: Night Shift"
+    agent: "ph"
+    schedule: "30 23 * * *"
+    message: "Night shift. Review notes, organize, triage, work through tasks. Prepare morning summary."
+  - name: "ph: Weekly Review"
+    agent: "ph"
+    schedule: "45 15 * * 5"
+    message: "Weekly review. What was accomplished this week? What is pending?"
+  - name: "ph: Weekly Planning"
+    agent: "ph"
+    schedule: "45 10 * * 1"
+    message: "Weekly planning. Review past week, plan upcoming week priorities."
 
 # MCP plugin configuration
 openclaw_mcp_adapter:
@@ -250,6 +294,14 @@ openclaw_mcp_adapter:
       type: "github"
       token_var: "github_token_tl"
       agent_id: "tl"
+    - name: "github-henning"
+      type: "github"
+      token_var: "github_token_henning"
+      agent_id: "henning"
+    - name: "github-ph"
+      type: "github"
+      token_var: "github_token_ph"
+      agent_id: "ph"
     # Codex MCP servers (one per agent, uses cached ~/.codex/auth.json, workspace-scoped cwd)
     - name: "codex"
       type: "codex"
@@ -263,6 +315,14 @@ openclaw_mcp_adapter:
       type: "codex"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    - name: "codex-henning"
+      type: "codex"
+      agent_id: "henning"
+      cwd: "/home/ubuntu/.openclaw/workspace-henning"
+    - name: "codex-ph"
+      type: "codex"
+      agent_id: "ph"
+      cwd: "/home/ubuntu/.openclaw/workspace-ph"
     # Claude Code MCP servers (one per agent, reuses claude_setup_token, workspace-scoped cwd)
     - name: "claude"
       type: "claude-code"
@@ -276,6 +336,14 @@ openclaw_mcp_adapter:
       type: "claude-code"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    - name: "claude-henning"
+      type: "claude-code"
+      agent_id: "henning"
+      cwd: "/home/ubuntu/.openclaw/workspace-henning"
+    - name: "claude-ph"
+      type: "claude-code"
+      agent_id: "ph"
+      cwd: "/home/ubuntu/.openclaw/workspace-ph"
     # Pi MCP servers (one per agent, reuses claude_setup_token, workspace-scoped cwd)
     - name: "pi"
       type: "pi"
@@ -289,6 +357,14 @@ openclaw_mcp_adapter:
       type: "pi"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    - name: "pi-henning"
+      type: "pi"
+      agent_id: "henning"
+      cwd: "/home/ubuntu/.openclaw/workspace-henning"
+    - name: "pi-ph"
+      type: "pi"
+      agent_id: "ph"
+      cwd: "/home/ubuntu/.openclaw/workspace-ph"
     # qmd semantic search servers (one per agent, local — no credentials needed)
     - name: "qmd"
       type: "qmd"
@@ -302,6 +378,14 @@ openclaw_mcp_adapter:
       type: "qmd"
       agent_id: "tl"
       cwd: "/home/ubuntu/.openclaw/workspace-tl"
+    - name: "qmd-henning"
+      type: "qmd"
+      agent_id: "henning"
+      cwd: "/home/ubuntu/.openclaw/workspace-henning"
+    - name: "qmd-ph"
+      type: "qmd"
+      agent_id: "ph"
+      cwd: "/home/ubuntu/.openclaw/workspace-ph"
     # Node exec MCP servers (one per agent — Mac shell access via openclaw nodes run)
     - name: "mac"
       type: "node-exec"
@@ -312,6 +396,12 @@ openclaw_mcp_adapter:
     - name: "mac-tl"
       type: "node-exec"
       agent_id: "tl"
+    - name: "mac-henning"
+      type: "node-exec"
+      agent_id: "henning"
+    - name: "mac-ph"
+      type: "node-exec"
+      agent_id: "ph"
 
 # Claude Code plugins for MCP containers
 claude_code_plugins:
@@ -351,6 +441,8 @@ openclaw_obsidian_github_tokens:
   main: "{{ github_token | default('') }}"
   manon: "{{ github_token_manon | default('') }}"
   tl: "{{ github_token_tl | default('') }}"
+  henning: "{{ github_token_henning | default('') }}"
+  ph: "{{ github_token_ph | default('') }}"
 
 # Workspace git sync definitions (per-agent)
 openclaw_workspaces:
@@ -372,3 +464,15 @@ openclaw_workspaces:
     workspace_dir: "/home/ubuntu/.openclaw/workspace-tl"
     ssh_alias: "github-workspace-tl"
     key_file: "workspace-deploy-key-tl"
+  - agent_id: "henning"
+    repo_url: "{{ workspace_henning_repo_url | default('') }}"
+    deploy_key: "{{ workspace_henning_deploy_key | default('') }}"
+    workspace_dir: "/home/ubuntu/.openclaw/workspace-henning"
+    ssh_alias: "github-workspace-henning"
+    key_file: "workspace-deploy-key-henning"
+  - agent_id: "ph"
+    repo_url: "{{ workspace_ph_repo_url | default('') }}"
+    deploy_key: "{{ workspace_ph_deploy_key | default('') }}"
+    workspace_dir: "/home/ubuntu/.openclaw/workspace-ph"
+    ssh_alias: "github-workspace-ph"
+    key_file: "workspace-deploy-key-ph"

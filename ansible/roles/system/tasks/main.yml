@@ -27,6 +27,13 @@
       - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
 
+- name: Set git default branch to main
+  community.general.git_config:
+    name: init.defaultBranch
+    value: main
+    scope: global
+  become: false
+
 - name: Increase inotify watch limit for qmd watchers
   ansible.posix.sysctl:
     name: fs.inotify.max_user_watches

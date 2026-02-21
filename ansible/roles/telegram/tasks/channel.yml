@@ -74,8 +74,14 @@
     fi
     {% endif %}
 
-    # Configure group chat if telegram_group_id is set
-    {% if telegram_group_id is defined and telegram_group_id | length > 0 %}
+    # Configure group chats (iterate all group-type agents with a deliver_to)
+    {% set group_agents = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if agent.deliver_type == 'group' and agent.deliver_to | default('') | length > 0 %}
+    {%     set _ = group_agents.append(agent) %}
+    {%   endif %}
+    {% endfor %}
+    {% if group_agents | length > 0 %}
     {% set group_allow = [] %}
     {% for agent in openclaw_agents %}
     {%   if agent.deliver_to | default('') | length > 0 and agent.deliver_type == 'dm' %}
@@ -87,7 +93,11 @@
         openclaw config set channels.telegram.groupPolicy "allowlist"
         CHANGED="yes"
     fi
-    DESIRED_GROUPS='{"{{ telegram_group_id }}":{"allowFrom":{{ group_allow | to_json }},"requireMention":false}}'
+    {% set groups_dict = {} %}
+    {% for ga in group_agents %}
+    {%   set _ = groups_dict.update({ga.deliver_to: {"allowFrom": group_allow, "requireMention": false}}) %}
+    {% endfor %}
+    DESIRED_GROUPS='{{ groups_dict | to_json }}'
     CURRENT_GROUPS=$(openclaw config get channels.telegram.groups 2>/dev/null) || CURRENT_GROUPS="{}"
     CG_NORM=$(echo "$CURRENT_GROUPS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     DG_NORM=$(echo "$DESIRED_GROUPS" | jq -cS '.')

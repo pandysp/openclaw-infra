@@ -55,7 +55,9 @@ To enable optional Telegram notifications:
    - Choose a username (must end in "bot", e.g., `openclaw_assistant_bot`)
    - Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
 
-2. **Get your user ID**: Search for **@userinfobot** on Telegram, send `/start`, copy your numeric user ID
+2. **Get your user ID** (either method):
+   - Run `./scripts/get-telegram-id.sh` — briefly pauses the gateway, you send a message, it shows your IDs
+   - Or search for **@userinfobot** on Telegram, send `/start`, copy your numeric user ID
 
 3. **Configure**: See [Quick Start](#quick-start) below for the Pulumi commands.
 
@@ -73,7 +75,7 @@ pulumi config set claudeSetupToken --secret    # From `claude setup-token`
 
 # Optional: Telegram notifications (daily digests, weekly planning)
 pulumi config set telegramBotToken --secret    # From @BotFather
-pulumi config set telegramUserId "YOUR_ID"     # From @userinfobot (not secret, numeric only)
+pulumi config set telegramUserId "YOUR_ID"     # ./scripts/get-telegram-id.sh or @userinfobot
 
 # Optional: hourly workspace backup to a private GitHub repo
 pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"

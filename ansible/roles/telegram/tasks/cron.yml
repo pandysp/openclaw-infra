@@ -69,20 +69,26 @@
     agent_deliver_map: >-
       {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_to'))) }}
 
-- name: Validate delivery targets
-  ansible.builtin.assert:
-    that: agent_deliver_map[item.agent] | default('') | length > 0
-    fail_msg: "Agent '{{ item.agent }}' has no deliver_to configured — cannot create cron job '{{ item.name }}'"
-  loop: "{{ openclaw_cron_jobs }}"
+- name: Filter cron jobs to agents with delivery targets
+  ansible.builtin.set_fact:
+    active_cron_jobs: >-
+      {{ openclaw_cron_jobs | selectattr('agent', 'in',
+         agent_deliver_map | dict2items | selectattr('value', 'ne', '') | map(attribute='key') | list) | list }}
+
+- name: Show skipped cron jobs (agents without deliver_to)
+  ansible.builtin.debug:
+    msg: "Skipping {{ item.name }} — agent '{{ item.agent }}' has no deliver_to configured"
+  loop: "{{ openclaw_cron_jobs | difference(active_cron_jobs) }}"
   loop_control:
     label: "{{ item.name }}"
+  when: (openclaw_cron_jobs | difference(active_cron_jobs)) | length > 0
 
 - name: Write cron message temp files
   ansible.builtin.copy:
     content: "{{ item.message }}"
     dest: "/tmp/ansible-cron-msg-{{ item.name | hash('md5') }}"
     mode: "0600"
-  loop: "{{ openclaw_cron_jobs }}"
+  loop: "{{ active_cron_jobs }}"
   loop_control:
     label: "{{ item.name }}"
   changed_when: false
@@ -98,7 +104,7 @@
 
         # Build desired cron jobs as sorted JSON array (comparable fields only)
         DESIRED=$(jq -n '[]')
-        {% for job in openclaw_cron_jobs %}
+        {% for job in active_cron_jobs %}
         MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}" | tr -d '\n')
         DESIRED=$(echo "$DESIRED" | jq --arg name "{{ job.name }}" \
             --arg agent "{{ job.agent }}" \
@@ -123,7 +129,7 @@
             echo "Cron jobs differ — recreating all managed jobs"
 
             # Delete existing managed jobs
-            {% for job in openclaw_cron_jobs %}
+            {% for job in active_cron_jobs %}
             IDS=$(jq -r --arg n "{{ job.name }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
             for id in $IDS; do
                 output=$(openclaw cron remove "$id" 2>&1) || {
@@ -133,7 +139,7 @@
             {% endfor %}
 
             # Recreate all managed jobs
-            {% for job in openclaw_cron_jobs %}
+            {% for job in active_cron_jobs %}
             MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}")
             openclaw cron add \
                 --name "{{ job.name }}" \
@@ -177,10 +183,10 @@
 - name: Assert expected cron jobs are present
   ansible.builtin.assert:
     that:
-      - (final_cron.stdout | from_json).jobs | length >= openclaw_cron_jobs | length
-      - (openclaw_cron_jobs | map(attribute='name') | sort | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) | length == 0
+      - (final_cron.stdout | from_json).jobs | length >= active_cron_jobs | length
+      - (active_cron_jobs | map(attribute='name') | sort | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) | length == 0
     fail_msg: >-
       Missing Ansible-managed cron jobs.
-      Expected: {{ openclaw_cron_jobs | map(attribute='name') | sort | list }}.
-      Missing: {{ (openclaw_cron_jobs | map(attribute='name') | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) }}.
+      Expected: {{ active_cron_jobs | map(attribute='name') | sort | list }}.
+      Missing: {{ (active_cron_jobs | map(attribute='name') | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) }}.
       Server has {{ (final_cron.stdout | from_json).jobs | length }} total (including manually added).

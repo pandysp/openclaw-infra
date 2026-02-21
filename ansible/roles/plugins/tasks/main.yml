@@ -1338,7 +1338,7 @@
             --arg cwd "{{ srv.cwd }}" \
             --arg config_dir "$QMD_CONFIG" \
             --arg index_path "$QMD_INDEX" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, args: ["mcp"], cwd: $cwd, env: {QMD_CONFIG_DIR: $config_dir, INDEX_PATH: $index_path}}]')
+            '. + [{name: $name, transport: "stdio", command: $cmd, args: ["mcp"], cwd: $cwd, timeout: 300000, env: {QMD_CONFIG_DIR: $config_dir, INDEX_PATH: $index_path}}]')
     {% endfor %}
     else
         echo "NOTE: qmd binary not found, skipping qmd MCP servers"
@@ -1455,7 +1455,7 @@
 - name: Verify mcp-adapter plugin is loaded
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw plugins list --json | jq -e '.plugins[] | select(.id == "openclaw-mcp-adapter")'
+    openclaw plugins list --json 2>/dev/null | grep -v '^\[' | jq -e '.plugins[] | select(.id == "openclaw-mcp-adapter")'
   args:
     executable: /bin/bash
   changed_when: false

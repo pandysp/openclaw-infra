@@ -39,11 +39,19 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     workspace_manon_deploy_key="${PROVISION_WORKSPACE_MANON_DEPLOY_KEY:-}"
     workspace_tl_repo_url="${PROVISION_WORKSPACE_TL_REPO_URL:-}"
     workspace_tl_deploy_key="${PROVISION_WORKSPACE_TL_DEPLOY_KEY:-}"
+    telegram_henning_user_id="${PROVISION_TELEGRAM_HENNING_USER_ID:-}"
+    telegram_ph_group_id="${PROVISION_TELEGRAM_PH_GROUP_ID:-}"
+    workspace_henning_repo_url="${PROVISION_WORKSPACE_HENNING_REPO_URL:-}"
+    workspace_henning_deploy_key="${PROVISION_WORKSPACE_HENNING_DEPLOY_KEY:-}"
+    workspace_ph_repo_url="${PROVISION_WORKSPACE_PH_REPO_URL:-}"
+    workspace_ph_deploy_key="${PROVISION_WORKSPACE_PH_DEPLOY_KEY:-}"
     tailscale_hostname="${PROVISION_TAILSCALE_HOSTNAME:-openclaw-vps}"
     xai_api_key="${PROVISION_XAI_API_KEY:-}"
     github_token="${PROVISION_GITHUB_TOKEN:-}"
     github_token_manon="${PROVISION_GITHUB_TOKEN_MANON:-}"
     github_token_tl="${PROVISION_GITHUB_TOKEN_TL:-}"
+    github_token_henning="${PROVISION_GITHUB_TOKEN_HENNING:-}"
+    github_token_ph="${PROVISION_GITHUB_TOKEN_PH:-}"
     obsidian_andy_vault_repo_url="${PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL:-}"
     obsidian_manon_vault_repo_url="${PROVISION_OBSIDIAN_MANON_VAULT_REPO_URL:-}"
     obsidian_tl_vault_repo_url="${PROVISION_OBSIDIAN_TL_VAULT_REPO_URL:-}"
@@ -68,11 +76,19 @@ else
     workspace_manon_deploy_key=$(pulumi stack output workspaceManonDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     workspace_tl_repo_url=$(pulumi config get workspaceTlRepoUrl 2>/dev/null || echo "")
     workspace_tl_deploy_key=$(pulumi stack output workspaceTlDeployPrivateKey --show-secrets 2>/dev/null || echo "")
+    telegram_henning_user_id=$(pulumi config get telegramHenningUserId 2>/dev/null || echo "")
+    telegram_ph_group_id=$(pulumi config get telegramPhGroupId 2>/dev/null || echo "")
+    workspace_henning_repo_url=$(pulumi config get workspaceHenningRepoUrl 2>/dev/null || echo "")
+    workspace_henning_deploy_key=$(pulumi stack output workspaceHenningDeployPrivateKey --show-secrets 2>/dev/null || echo "")
+    workspace_ph_repo_url=$(pulumi config get workspacePhRepoUrl 2>/dev/null || echo "")
+    workspace_ph_deploy_key=$(pulumi stack output workspacePhDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
     xai_api_key=$(pulumi config get xaiApiKey 2>/dev/null || echo "")
     github_token=$(pulumi config get githubToken 2>/dev/null || echo "")
     github_token_manon=$(pulumi config get githubTokenManon 2>/dev/null || echo "")
     github_token_tl=$(pulumi config get githubTokenTl 2>/dev/null || echo "")
+    github_token_henning=$(pulumi config get githubTokenHenning 2>/dev/null || echo "")
+    github_token_ph=$(pulumi config get githubTokenPh 2>/dev/null || echo "")
     obsidian_andy_vault_repo_url=$(pulumi config get obsidianAndyVaultRepoUrl 2>/dev/null || echo "")
     obsidian_manon_vault_repo_url=$(pulumi config get obsidianManonVaultRepoUrl 2>/dev/null || echo "")
     obsidian_tl_vault_repo_url=$(pulumi config get obsidianTlVaultRepoUrl 2>/dev/null || echo "")
@@ -109,19 +125,27 @@ validate_deploy_key() {
 validate_deploy_key "workspace (main)" "$workspace_repo_url" "$workspace_deploy_private_key"
 validate_deploy_key "workspace (manon)" "$workspace_manon_repo_url" "$workspace_manon_deploy_key"
 validate_deploy_key "workspace (tl)" "$workspace_tl_repo_url" "$workspace_tl_deploy_key"
+validate_deploy_key "workspace (henning)" "$workspace_henning_repo_url" "$workspace_henning_deploy_key"
+validate_deploy_key "workspace (ph)" "$workspace_ph_repo_url" "$workspace_ph_deploy_key"
 
 echo "  gateway_token: set"
 echo "  claude_setup_token: set"
 echo "  telegram: $([ -n "$telegram_bot_token" ] && echo "configured" || echo "skipped")"
 echo "  telegram_manon: $([ -n "$telegram_manon_user_id" ] && echo "configured" || echo "skipped")"
 echo "  telegram_group: $([ -n "$telegram_group_id" ] && echo "configured" || echo "skipped")"
+echo "  telegram_henning: $([ -n "$telegram_henning_user_id" ] && echo "configured" || echo "skipped")"
+echo "  telegram_ph_group: $([ -n "$telegram_ph_group_id" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (main): $([ -n "$workspace_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (manon): $([ -n "$workspace_manon_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (tl): $([ -n "$workspace_tl_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  workspace_sync (henning): $([ -n "$workspace_henning_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  workspace_sync (ph): $([ -n "$workspace_ph_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  grok_search: $([ -n "$xai_api_key" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (main): $([ -n "$github_token" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (manon): $([ -n "$github_token_manon" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (tl): $([ -n "$github_token_tl" ] && echo "configured" || echo "skipped")"
+echo "  github_mcp (henning): $([ -n "$github_token_henning" ] && echo "configured" || echo "skipped")"
+echo "  github_mcp (ph): $([ -n "$github_token_ph" ] && echo "configured" || echo "skipped")"
 echo "  obsidian (andy): $([ -n "$obsidian_andy_vault_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  obsidian (manon): $([ -n "$obsidian_manon_vault_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  obsidian (tl): $([ -n "$obsidian_tl_vault_repo_url" ] && echo "configured" || echo "skipped")"
@@ -149,13 +173,19 @@ telegram_bot_token: "$(echo "$telegram_bot_token" | sed 's/"/\\"/g')"
 telegram_user_id: "$telegram_user_id"
 telegram_manon_user_id: "$telegram_manon_user_id"
 telegram_group_id: "$telegram_group_id"
+telegram_henning_user_id: "$telegram_henning_user_id"
+telegram_ph_group_id: "$telegram_ph_group_id"
 workspace_repo_url: "$workspace_repo_url"
 xai_api_key: "$(echo "$xai_api_key" | sed 's/"/\\"/g')"
 workspace_manon_repo_url: "$workspace_manon_repo_url"
 workspace_tl_repo_url: "$workspace_tl_repo_url"
+workspace_henning_repo_url: "$workspace_henning_repo_url"
+workspace_ph_repo_url: "$workspace_ph_repo_url"
 github_token: "$(echo "$github_token" | sed 's/"/\\"/g')"
 github_token_manon: "$(echo "$github_token_manon" | sed 's/"/\\"/g')"
 github_token_tl: "$(echo "$github_token_tl" | sed 's/"/\\"/g')"
+github_token_henning: "$(echo "$github_token_henning" | sed 's/"/\\"/g')"
+github_token_ph: "$(echo "$github_token_ph" | sed 's/"/\\"/g')"
 obsidian_andy_vault_repo_url: "$obsidian_andy_vault_repo_url"
 obsidian_manon_vault_repo_url: "$obsidian_manon_vault_repo_url"
 obsidian_tl_vault_repo_url: "$obsidian_tl_vault_repo_url"
@@ -174,6 +204,8 @@ append_deploy_key() {
 append_deploy_key "workspace_deploy_key" "$workspace_deploy_private_key" "$SECRETS_FILE"
 append_deploy_key "workspace_manon_deploy_key" "$workspace_manon_deploy_key" "$SECRETS_FILE"
 append_deploy_key "workspace_tl_deploy_key" "$workspace_tl_deploy_key" "$SECRETS_FILE"
+append_deploy_key "workspace_henning_deploy_key" "$workspace_henning_deploy_key" "$SECRETS_FILE"
+append_deploy_key "workspace_ph_deploy_key" "$workspace_ph_deploy_key" "$SECRETS_FILE"
 
 # Append Codex auth credentials (block scalar preserves JSON structure)
 append_deploy_key "codex_auth_json" "$codex_auth_json" "$SECRETS_FILE"

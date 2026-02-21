@@ -24,15 +24,21 @@ const xaiApiKey = config.getSecret("xaiApiKey");
 const githubToken = config.getSecret("githubToken");
 const githubTokenManon = config.getSecret("githubTokenManon");
 const githubTokenTl = config.getSecret("githubTokenTl");
+const githubTokenHenning = config.getSecret("githubTokenHenning");
+const githubTokenPh = config.getSecret("githubTokenPh");
 
 // Optional multi-agent Telegram configuration
 const telegramManonUserId = config.get("telegramManonUserId");
 const telegramGroupId = config.get("telegramGroupId");
+const telegramHenningUserId = config.get("telegramHenningUserId");
+const telegramPhGroupId = config.get("telegramPhGroupId");
 
 // Optional workspace git sync (set via `pulumi config set`)
 const workspaceRepoUrl = config.get("workspaceRepoUrl");
 const workspaceManonRepoUrl = config.get("workspaceManonRepoUrl");
 const workspaceTlRepoUrl = config.get("workspaceTlRepoUrl");
+const workspaceHenningRepoUrl = config.get("workspaceHenningRepoUrl");
+const workspacePhRepoUrl = config.get("workspacePhRepoUrl");
 
 // Optional Obsidian vault repos (cloned via HTTPS + GitHub PAT, no deploy keys)
 const obsidianAndyVaultRepoUrl = config.get("obsidianAndyVaultRepoUrl");
@@ -75,6 +81,12 @@ const workspaceDeployKeyManon = new tls.PrivateKey("workspace-deploy-key-manon",
     algorithm: "ED25519",
 });
 const workspaceDeployKeyTl = new tls.PrivateKey("workspace-deploy-key-tl", {
+    algorithm: "ED25519",
+});
+const workspaceDeployKeyHenning = new tls.PrivateKey("workspace-deploy-key-henning", {
+    algorithm: "ED25519",
+});
+const workspaceDeployKeyPh = new tls.PrivateKey("workspace-deploy-key-ph", {
     algorithm: "ED25519",
 });
 
@@ -129,11 +141,22 @@ const ansibleProvision = new command.local.Command(
             PROVISION_WORKSPACE_TL_REPO_URL: workspaceTlRepoUrl || "",
             PROVISION_WORKSPACE_TL_DEPLOY_KEY:
                 workspaceDeployKeyTl.privateKeyOpenssh,
+            PROVISION_TELEGRAM_HENNING_USER_ID: telegramHenningUserId || "",
+            PROVISION_TELEGRAM_PH_GROUP_ID: telegramPhGroupId || "",
+            PROVISION_WORKSPACE_HENNING_REPO_URL:
+                workspaceHenningRepoUrl || "",
+            PROVISION_WORKSPACE_HENNING_DEPLOY_KEY:
+                workspaceDeployKeyHenning.privateKeyOpenssh,
+            PROVISION_WORKSPACE_PH_REPO_URL: workspacePhRepoUrl || "",
+            PROVISION_WORKSPACE_PH_DEPLOY_KEY:
+                workspaceDeployKeyPh.privateKeyOpenssh,
             PROVISION_TAILSCALE_HOSTNAME: serverName,
             PROVISION_XAI_API_KEY: xaiApiKey || "",
             PROVISION_GITHUB_TOKEN: githubToken || "",
             PROVISION_GITHUB_TOKEN_MANON: githubTokenManon || "",
             PROVISION_GITHUB_TOKEN_TL: githubTokenTl || "",
+            PROVISION_GITHUB_TOKEN_HENNING: githubTokenHenning || "",
+            PROVISION_GITHUB_TOKEN_PH: githubTokenPh || "",
             PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL:
                 obsidianAndyVaultRepoUrl || "",
             PROVISION_OBSIDIAN_MANON_VAULT_REPO_URL:
@@ -185,6 +208,20 @@ export const workspaceTlDeployPublicKey =
     workspaceDeployKeyTl.publicKeyOpenssh;
 export const workspaceTlDeployPrivateKey = pulumi.secret(
     workspaceDeployKeyTl.privateKeyOpenssh
+);
+
+// Workspace deploy keys (henning)
+export const workspaceHenningDeployPublicKey =
+    workspaceDeployKeyHenning.publicKeyOpenssh;
+export const workspaceHenningDeployPrivateKey = pulumi.secret(
+    workspaceDeployKeyHenning.privateKeyOpenssh
+);
+
+// Workspace deploy keys (ph)
+export const workspacePhDeployPublicKey =
+    workspaceDeployKeyPh.publicKeyOpenssh;
+export const workspacePhDeployPrivateKey = pulumi.secret(
+    workspaceDeployKeyPh.privateKeyOpenssh
 );
 
 // Access information

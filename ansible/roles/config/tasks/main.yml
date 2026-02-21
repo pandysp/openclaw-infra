@@ -191,9 +191,6 @@
         {% if telegram_user_id is defined and telegram_user_id | length > 0 %}
         {%   set _ = elevated_users.append(telegram_user_id | int) %}
         {% endif %}
-        {% if telegram_manon_user_id is defined and telegram_manon_user_id | length > 0 %}
-        {%   set _ = elevated_users.append(telegram_manon_user_id | int) %}
-        {% endif %}
         {% if elevated_users | length > 0 %}
         check_set_json tools.elevated.allowFrom.telegram '{{ elevated_users | to_json }}'
         {% endif %}

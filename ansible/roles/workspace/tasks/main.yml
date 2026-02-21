@@ -85,9 +85,9 @@
       CHANGED="yes"
     fi
 
-    # Ensure branch is named 'main'
+    # Ensure branch is named 'main' (skip on empty repos where HEAD is detached)
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+    if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "HEAD" ]; then
         git branch -m "$CURRENT_BRANCH" main
         CHANGED="yes"
     fi
@@ -215,6 +215,11 @@
     git add -A
     if ! git diff --cached --quiet; then
         git commit -m "Initial workspace sync"
+        # Rename branch to main if needed (handles git default of master)
+        CURRENT=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$CURRENT" != "main" ]; then
+            git branch -m "$CURRENT" main
+        fi
         git push -u origin main || {
             echo "ERROR: Initial push failed for {{ item.item.agent_id }}. Check deploy key and remote." >&2
             exit 1
