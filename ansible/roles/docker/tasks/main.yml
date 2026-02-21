@@ -44,3 +44,12 @@
     executable: /bin/bash
   become: false
   changed_when: false
+
+# Create codex-proxy-net unconditionally so that sandbox config referencing
+# this network never breaks, even if the plugins role hasn't run yet
+# (e.g., provisioning failed midway on first install).
+- name: Create codex-proxy-net Docker network
+  community.docker.docker_network:
+    name: codex-proxy-net
+    driver: bridge
+  become: false

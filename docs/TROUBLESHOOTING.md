@@ -5,12 +5,15 @@ Common issues and solutions for the OpenClaw deployment.
 **Quick reference** — jump to your symptom:
 - Can't reach server → [Connectivity](#connectivity-issues)
 - "Pairing required" in browser → [Device Pairing](#device-pairing-not-working)
+- Pairing deadlock on first install → [Device Pairing](#pairing-deadlock-on-first-install)
 - Service not running → [Service Issues](#service-issues)
 - Token problems → [Setup Token](#setup-token-issues)
 - Web UI not loading → [Tailscale Serve](#tailscale-serve-issues)
 - Workspace sync not working → [Workspace Git Sync](#workspace-git-sync-issues)
 - Docker permission denied → [Sandbox / Docker Issues](#sandbox--docker-issues)
 - Provision fails with empty secrets → [Provisioning Errors](#provision-fails-with-empty-secret-validation-error)
+- Health check failed during provisioning → [Provisioning Issues](#health-check-failed-during-provisioning)
+- Ansible not found → [Provisioning Issues](#ansible-not-found-during-pulumi-up)
 
 > **Note**: All `systemctl --user` and `journalctl --user` commands on the server require `XDG_RUNTIME_DIR=/run/user/1000`. Either prefix each command or run `export XDG_RUNTIME_DIR=/run/user/1000` once per session.
 
@@ -122,6 +125,40 @@ Then refresh the browser.
 **Fallback**: Use the tokenized URL to bypass pairing:
 ```bash
 cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
+```
+
+### Pairing deadlock on first install
+
+**Symptom**: Ansible provisioning partially fails because the server's own CLI can't talk to the gateway (device pairing pending), but you can't approve the device without the CLI working.
+
+This is a chicken-and-egg problem on fresh installs. The gateway requires device pairing for CLI commands like `openclaw health` and `openclaw cron list`, but those commands are needed during provisioning.
+
+**Solution**:
+1. Provisioning will complete with a warning (cron setup skipped, not a hard failure)
+2. Use the tokenized URL to access the web UI:
+   ```bash
+   cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
+   ```
+3. Approve pending devices via SSH:
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
+   ```
+4. Re-run the skipped step:
+   ```bash
+   ./scripts/provision.sh --tags telegram
+   ```
+
+### Re-pairing required after gateway restart
+
+**Symptom**: After a gateway restart (e.g., `systemctl --user restart openclaw-gateway`), CLI commands or browser sessions fail with pairing errors.
+
+OpenClaw may require re-pairing when the gateway restarts with scope changes. This is an OpenClaw behavior, not a deployment bug.
+
+**Solution**: Re-approve devices:
+```bash
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 ```
 
 ## Service Issues
@@ -264,6 +301,38 @@ cd ~/.openclaw/workspace && git log --oneline -5
 ```
 
 **Common causes**: deploy key not added to GitHub repo, repo doesn't exist, SSH host key not accepted.
+
+## Provisioning Issues
+
+### Health check failed during provisioning
+
+**Symptom**: Ansible shows "Skipping cron job setup — gateway health check failed" during provisioning.
+
+This is non-fatal by design. The health check can fail on first install because:
+- Device pairing is pending (server CLI hasn't been approved yet)
+- Gateway is still starting up
+
+**Solution**: Approve devices (see [Pairing deadlock on first install](#pairing-deadlock-on-first-install)), then re-run:
+```bash
+./scripts/provision.sh --tags telegram
+```
+
+### Ansible not found during `pulumi up`
+
+**Symptom**: `pulumi up` fails with "ansible-galaxy not found on PATH".
+
+Pulumi child processes may not inherit your shell's PATH. The script searches common locations automatically, but if Ansible is installed elsewhere:
+
+```bash
+# Find where Ansible is installed
+which ansible-galaxy
+
+# Option 1: Add to your shell profile and re-export
+export PATH="$HOME/.local/bin:$PATH"
+
+# Option 2: Run provision manually after pulumi up
+./scripts/provision.sh
+```
 
 ## Telegram / Cron Issues
 

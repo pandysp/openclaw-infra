@@ -281,6 +281,30 @@ echo "=== Running Ansible playbook ==="
 
 cd "$ANSIBLE_DIR"
 
+# Ensure Ansible is on PATH (Pulumi child processes may not inherit shell PATH)
+if ! command -v ansible-galaxy &>/dev/null || ! command -v ansible-playbook &>/dev/null; then
+    # Search common install locations
+    for candidate in "$HOME/.local/bin" "$HOME/Library/Python"/*/bin /opt/homebrew/bin /usr/local/bin; do
+        if [ -x "$candidate/ansible-galaxy" ] && [ -x "$candidate/ansible-playbook" ]; then
+            export PATH="$candidate:$PATH"
+            echo "Found Ansible in $candidate (added to PATH)"
+            break
+        fi
+    done
+    if ! command -v ansible-galaxy &>/dev/null; then
+        echo "ERROR: ansible-galaxy not found on PATH."
+        echo ""
+        echo "Install Ansible:  pip install ansible"
+        echo "Or with pipx:     pipx install ansible"
+        echo ""
+        echo "If already installed, ensure it's on your PATH. Common locations:"
+        echo "  ~/.local/bin  (pip install --user)"
+        echo "  ~/Library/Python/3.x/bin  (macOS)"
+        echo "  /opt/homebrew/bin  (Homebrew)"
+        exit 1
+    fi
+fi
+
 # Install required Ansible collections
 ansible-galaxy collection install -r requirements.yml --upgrade || {
     echo "ERROR: Failed to install Ansible Galaxy collections."

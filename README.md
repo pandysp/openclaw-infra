@@ -6,7 +6,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 
 ## Features
 
-- **Cheap**: Hetzner CX33 x86 (4 vCPU, 8 GB) ~€5.49/mo + backups
+- **Cheap**: Hetzner CX33 x86 (4 vCPU, 8 GB) ~€5.49/mo + backups (or CX43 ~€11.39/mo for qmd semantic search)
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
 - **Telegram**: Optional scheduled tasks (morning digest, evening review, weekly planning)
@@ -20,6 +20,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - [Tailscale](https://tailscale.com/start) installed and connected on your machine
 - Hetzner Cloud API token ([console.hetzner.cloud](https://console.hetzner.cloud/))
 - Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
+- Tailscale MagicDNS and HTTPS enabled ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)) — required for Tailscale Serve
 - Claude setup token (run `claude setup-token`)
 
 See [CLAUDE.md](./CLAUDE.md#prerequisites) for detailed setup instructions.
@@ -95,20 +96,35 @@ See [CLAUDE.md](./CLAUDE.md#pulumi-passphrase) for passphrase management options
 
 ## Access
 
-Wait ~5 minutes after deployment for cloud-init to finish, then open:
+Wait ~5 minutes after deployment for cloud-init + Ansible to finish, then open:
 ```
 https://openclaw-vps.<tailnet>.ts.net/chat
 ```
 
-First visit requires **device pairing** (one-time). Approve via SSH (over Tailscale):
-```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
-```
+### First-Time Device Pairing
+
+OpenClaw requires **device pairing** for all connections — including the server's own CLI. On a fresh install:
+
+1. **Use the tokenized URL** to access the web UI without pairing:
+   ```bash
+   cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
+   ```
+   Open that URL in your browser. This bypasses pairing for initial setup.
+
+2. **Approve devices** that need pairing. The server's CLI (used by Ansible) may show as pending:
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
+   ```
+
+3. **If Ansible failed during first deploy** (cron setup skipped due to pairing), re-run after approving:
+   ```bash
+   ./scripts/provision.sh --tags telegram
+   ```
 
 > No public SSH port is exposed. SSH works over Tailscale only.
 
-See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details.
+See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
 
 ## Architecture
 
