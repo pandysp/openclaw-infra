@@ -8,24 +8,129 @@
   ansible.builtin.command: openclaw --version
   register: openclaw_installed_version
   changed_when: false
+  failed_when: false
   when: openclaw_binary.stat.exists
 
-- name: Get latest available OpenClaw version
-  ansible.builtin.shell: npm view openclaw version 2>/dev/null
-  register: openclaw_latest_version
-  changed_when: false
-  when: openclaw_binary.stat.exists and not (force_openclaw_reinstall | default(false))
+- name: Warn if existing openclaw binary is broken
+  ansible.builtin.debug:
+    msg: >-
+      openclaw binary exists but 'openclaw --version' failed
+      (rc={{ openclaw_installed_version.rc }},
+       stderr={{ openclaw_installed_version.stderr | default('') | truncate(200) }}).
+      Will attempt reinstall.
+  when:
+    - openclaw_binary.stat.exists
+    - openclaw_installed_version.rc | default(0) != 0
 
-- name: Install or upgrade OpenClaw via official script
-  ansible.builtin.shell: |
-    export OPENCLAW_NO_ONBOARD=1
-    export OPENCLAW_NO_PROMPT=1
-    curl -fsSL https://openclaw.ai/install.sh | bash
-  when: >
-    not openclaw_binary.stat.exists
-    or (force_openclaw_reinstall | default(false))
-    or (openclaw_latest_version.stdout | default('') != ''
-        and openclaw_installed_version.stdout | default('') != openclaw_latest_version.stdout | default(''))
+- name: Set version comparison facts
+  ansible.builtin.set_fact:
+    openclaw_needs_install: >-
+      {{ not openclaw_binary.stat.exists
+         or openclaw_installed_version.stdout | default('') | trim != openclaw_version }}
+
+- name: Install or upgrade OpenClaw
+  when: openclaw_needs_install | bool
+  block:
+    - name: Remove stale backup from previous runs
+      ansible.builtin.file:
+        path: /tmp/openclaw-backup
+        state: absent
+
+    - name: Backup existing installation
+      ansible.builtin.command: cp -a /home/ubuntu/.npm-global/lib/node_modules/openclaw /tmp/openclaw-backup
+      when: openclaw_binary.stat.exists
+
+    - name: Read bin symlink target
+      ansible.builtin.command: readlink -f /home/ubuntu/.npm-global/bin/openclaw
+      register: openclaw_bin_link_target
+      changed_when: false
+      failed_when: false
+      when: openclaw_binary.stat.exists
+
+    - name: "Install openclaw@{{ openclaw_version }}"
+      ansible.builtin.command: npm install -g "openclaw@{{ openclaw_version }}"
+      environment:
+        OPENCLAW_NO_ONBOARD: "1"
+        OPENCLAW_NO_PROMPT: "1"
+
+    - name: Verify openclaw binary works
+      ansible.builtin.command: openclaw --version
+      register: openclaw_post_install_version
+      changed_when: false
+
+    - name: Confirm installed version matches target
+      ansible.builtin.assert:
+        that:
+          - openclaw_post_install_version.stdout | trim == openclaw_version
+        fail_msg: >-
+          Version mismatch: installed '{{ openclaw_post_install_version.stdout | trim }}',
+          expected '{{ openclaw_version }}'
+
+    - name: Remove backup after successful install
+      ansible.builtin.file:
+        path: /tmp/openclaw-backup
+        state: absent
+
+  rescue:
+    - name: Log install failure
+      ansible.builtin.debug:
+        msg: >-
+          OpenClaw install failed for version {{ openclaw_version }}.
+          Attempting to restore previous installation.
+
+    - name: Check if backup exists
+      ansible.builtin.stat:
+        path: /tmp/openclaw-backup
+      register: openclaw_backup
+
+    - name: Restore package from backup
+      when: openclaw_backup.stat.exists | default(false)
+      ansible.builtin.shell: |
+        rm -rf /home/ubuntu/.npm-global/lib/node_modules/openclaw
+        cp -a /tmp/openclaw-backup /home/ubuntu/.npm-global/lib/node_modules/openclaw
+      args:
+        executable: /bin/bash
+
+    - name: Restore bin symlink
+      ansible.builtin.file:
+        src: "{{ openclaw_bin_link_target.stdout }}"
+        dest: /home/ubuntu/.npm-global/bin/openclaw
+        state: link
+        force: true
+      when:
+        - openclaw_backup.stat.exists | default(false)
+        - openclaw_bin_link_target.stdout | default('') | length > 0
+
+    - name: Verify restored binary works
+      ansible.builtin.command: openclaw --version
+      register: openclaw_restored_version
+      changed_when: false
+      ignore_errors: true
+      when: openclaw_backup.stat.exists | default(false)
+
+    - name: Report restore result
+      ansible.builtin.debug:
+        msg: >-
+          {% if (openclaw_backup.stat.exists | default(false)) and (openclaw_restored_version.rc | default(-1) == 0) %}
+          Restored openclaw {{ openclaw_restored_version.stdout | trim }}. Previous version preserved.
+          {% else %}
+          No backup available or restore failed. openclaw binary may be missing.
+          {% endif %}
+
+    - name: Fail with clear message
+      ansible.builtin.fail:
+        msg: >-
+          OpenClaw {{ openclaw_version }} installation failed.
+          {% if (openclaw_backup.stat.exists | default(false)) and (openclaw_restored_version.rc | default(-1) == 0) %}
+          Previous version ({{ openclaw_restored_version.stdout | trim }}) has been restored.
+          {% else %}
+          No previous version to restore. Manual intervention required:
+          npm install -g openclaw@{{ openclaw_version }}
+          {% endif %}
+
+- name: Show current version
+  ansible.builtin.debug:
+    msg: "OpenClaw {{ openclaw_version }} {{ 'already installed' if not (openclaw_needs_install | bool) else 'installed successfully' }}"
 
 - name: Create PATH profile script
   become: true

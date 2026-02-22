@@ -24,6 +24,7 @@
       - poppler-utils       # pdftotext for qmd text extraction
       - tesseract-ocr       # OCR for images (replaces macOS Vision API)
       - tesseract-ocr-deu   # German language data for tesseract
+      - build-essential      # make/gcc for npm native modules (e.g., @discordjs/opus)
       - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
 
