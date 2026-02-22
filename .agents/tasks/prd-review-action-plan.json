@@ -53,7 +53,7 @@
     {
       "id": "US-001",
       "title": "Quote hostname interpolation in cloud-init",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [],
       "description": "As a deployer, I want the cloud-init hostname to be safely quoted so that a user-configured serverName with shell metacharacters cannot cause command injection running as root.",
       "acceptanceCriteria": [
@@ -63,13 +63,13 @@
         "pulumi preview succeeds with the change"
       ],
       "startedAt": "2026-02-22T21:22:49.557133+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-22T21:22:49.557272+00:00"
+      "completedAt": "2026-02-22T21:33:01.947759+00:00",
+      "updatedAt": "2026-02-22T21:33:01.947634+00:00"
     },
     {
       "id": "US-002",
       "title": "Fix shell injection via unescaped JSON and jq in Ansible tasks",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-001"
       ],
@@ -82,7 +82,10 @@
         "Example: an agent ID containing a double quote character does not break the jq expression",
         "Negative case: JSON output containing single quotes does not break the shell script",
         "./scripts/provision.sh --check --diff runs without errors"
-      ]
+      ],
+      "startedAt": "2026-02-22T21:33:04.073716+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-22T21:33:04.073890+00:00"
     },
     {
       "id": "US-003",
