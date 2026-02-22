@@ -203,3 +203,27 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - CLAUDE.md and SECURITY.md already documented `bridge` as the sandbox network, but the actual config was `codex-proxy-net`. Always verify docs match actual config.
   - provision.sh --check --diff with full tags still fails at openclaw install role version check — this is a persistent pre-existing issue in check mode.
 ---
+
+## 2026-02-23T01:10 - US-007: Fix Obsidian PAT exposure in git remote URLs
+Thread:
+Run: 20260222-233409-74305 (iteration 5)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-5.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-5.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: cf53745 Fix Obsidian PAT exposure in git remote URLs
+- Post-commit status: clean (only pre-existing PRD JSON and ralph temp files remain)
+- Verification:
+  - Command: ./scripts/provision.sh --check --diff --tags obsidian -> PASS (ok=65 changed=0 failed=0)
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing: OpenClaw 2026.2.21 version mismatch at openclaw role, unrelated to US-007)
+- Files changed:
+  - ansible/roles/obsidian/tasks/vault.yml
+- **What was implemented:**
+  - Added `no_log: true` to the "Build authenticated URL" set_fact task (line 84-88) that constructs the PAT-embedded `_obsidian_auth_url` variable. Without this, running `--tags obsidian -vvv` would expose the GitHub PAT in the set_fact output.
+  - Verified that the "Clone vault" task (line 90, no_log at line 96) and "Update remote URL" task (line 98, no_log at line 115) already had `no_log: true`. The Update remote URL task was already fixed — contrary to the AC which suggested it was missing.
+  - Added a security comment (lines 69-71) documenting that PATs persist in `.git/config` on disk after clone/set-url and are accessible within the workspace directory (including sandboxed sessions).
+- **Learnings for future iterations:**
+  - The "Update remote URL" task already had `no_log: true` at line 111 (now 115) — the PRD acceptance criteria was based on an older version of the file. Always read the actual code before implementing.
+  - `no_log: true` on `set_fact` prevents the variable value from appearing in verbose output but does not affect the variable's availability to subsequent tasks.
+  - The `git pull --ff-only` task (line 117) does not use `_obsidian_auth_url` directly, but git error messages could theoretically include the remote URL. This is a minor edge case not addressed in this story.
+---
