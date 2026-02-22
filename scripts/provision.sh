@@ -311,8 +311,26 @@ ansible-galaxy collection install -r requirements.yml --upgrade || {
     exit 1
 }
 
+# Clean up any stale cron-skipped marker from previous runs
+rm -f /tmp/ansible-cron-skipped
+
 ansible-playbook playbook.yml \
     -e "@$SECRETS_FILE" \
     "$@"
 
-echo "=== Provisioning complete ==="
+# Check if cron setup was skipped (gateway not healthy, e.g. first install)
+if [ -f /tmp/ansible-cron-skipped ]; then
+    rm -f /tmp/ansible-cron-skipped
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  WARNING: Cron job setup was SKIPPED (gateway not healthy).    ║"
+    echo "║  This is expected on first install (device pairing pending).   ║"
+    echo "║  After approving devices, re-run:                             ║"
+    echo "║    ./scripts/provision.sh --tags telegram                     ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "=== Provisioning complete (with warnings) ==="
+    exit 2
+else
+    echo "=== Provisioning complete ==="
+fi

@@ -32,7 +32,9 @@ shift
 GH_OWNER=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --org) GH_OWNER="$2"; shift 2 ;;
+        --org)
+            if [ -z "${2:-}" ]; then echo "ERROR: --org requires an argument"; exit 1; fi
+            GH_OWNER="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done

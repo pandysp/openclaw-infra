@@ -33,6 +33,14 @@
           After approving devices, re-run: ./scripts/provision.sh --tags telegram
           See CLAUDE.md "First-Time Access" for pairing instructions.
 
+    - name: Flag cron setup as skipped for provision.sh
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "cron_setup_skipped"
+        dest: /tmp/ansible-cron-skipped
+        mode: "0600"
+      changed_when: false
+
 - name: Get existing cron jobs
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
@@ -88,6 +96,18 @@
       ansible.builtin.set_fact:
         agent_deliver_map: >-
           {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_to'))) }}
+
+    - name: Validate cron job agent IDs exist in openclaw_agents
+      ansible.builtin.assert:
+        that:
+          - item.agent in (openclaw_agents | map(attribute='id') | list)
+        fail_msg: >-
+          Cron job '{{ item.name }}' references unknown agent '{{ item.agent }}'.
+          Known agents: {{ openclaw_agents | map(attribute='id') | list }}.
+          Check for typos in openclaw_cron_jobs.
+      loop: "{{ openclaw_cron_jobs }}"
+      loop_control:
+        label: "{{ item.name }} (agent={{ item.agent }})"
 
     - name: Filter cron jobs to agents with delivery targets
       ansible.builtin.set_fact:

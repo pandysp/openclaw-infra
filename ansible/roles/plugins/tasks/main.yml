@@ -1,5 +1,6 @@
 ---
-# Install and configure the mcp-adapter plugin with GitHub and Codex MCP servers.
+# Install and configure the mcp-adapter plugin with per-agent MCP servers
+# (GitHub, Codex, Claude Code, Pi, qmd, node-exec).
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
 
@@ -33,7 +34,7 @@
                 with os.fdopen(fd, 'w') as f:
                     json.dump(cfg, f, indent=2)
                 os.rename(tmp, config_path)
-            except:
+            except Exception:
                 os.unlink(tmp)
                 raise
         "
@@ -72,7 +73,7 @@
                 with os.fdopen(fd, 'w') as f:
                     json.dump(cfg, f, indent=2)
                 os.rename(tmp, config_path)
-            except:
+            except Exception:
                 os.unlink(tmp)
                 raise
             print('ADDED')

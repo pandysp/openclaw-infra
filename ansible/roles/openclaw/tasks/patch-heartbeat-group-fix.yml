@@ -16,7 +16,7 @@
 
 - name: Check if patch is needed
   ansible.builtin.shell: |
-    for f in {{ heartbeat_patch_files.stdout_lines | join(' ') }}; do
+    for f in {% for p in heartbeat_patch_files.stdout_lines %}"{{ p }}" {% endfor %}; do
       if grep -q 'if (allowList.length > 0) return allowList\[0\];' "$f" 2>/dev/null; then
         echo "NEEDS_PATCH: $f"
       fi
@@ -28,7 +28,7 @@
 - name: Apply heartbeat group delivery patch
   ansible.builtin.shell: |
     set -euo pipefail
-    for f in {{ heartbeat_patch_files.stdout_lines | join(' ') }}; do
+    for f in {% for p in heartbeat_patch_files.stdout_lines %}"{{ p }}" {% endfor %}; do
       if grep -q 'if (allowList.length > 0) return allowList\[0\];' "$f" 2>/dev/null; then
         cp "$f" "${f}.bak"
         sed -i 's|if (allowList.length > 0) return allowList\[0\];|if (allowList.length > 0) return candidates[0] ?? allowList[0];|' "$f"
@@ -47,7 +47,7 @@
 
 - name: Verify heartbeat patch applied
   ansible.builtin.shell: |
-    for f in {{ heartbeat_patch_files.stdout_lines | join(' ') }}; do
+    for f in {% for p in heartbeat_patch_files.stdout_lines %}"{{ p }}" {% endfor %}; do
       if grep -q 'return candidates\[0\] ?? allowList\[0\]' "$f" 2>/dev/null; then
         echo "OK: $f"
       else

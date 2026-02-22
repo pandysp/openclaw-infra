@@ -85,9 +85,9 @@ try:
     with open('$BACKUP_TMP/openclaw-config/openclaw.json') as f:
         c = json.load(f)
 except (json.JSONDecodeError, IOError) as e:
-    print(f'WARNING: Could not parse openclaw.json for redaction: {e}', file=sys.stderr)
-    print('Backup will include unredacted config. Review manually.', file=sys.stderr)
-    sys.exit(0)
+    print(f'ERROR: Could not parse openclaw.json for redaction: {e}', file=sys.stderr)
+    print('Aborting — refusing to create backup with unredacted secrets.', file=sys.stderr)
+    sys.exit(1)
 # Redact all known sensitive fields
 for path in [('gateway','auth','token'), ('gateway','remote','token'),
              ('channels','telegram','botToken'), ('tools','web','search','grok','apiKey')]:

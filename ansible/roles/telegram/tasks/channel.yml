@@ -31,6 +31,7 @@
   no_log: true
   register: telegram_token_result
   changed_when: "'UPDATED' in telegram_token_result.stdout"
+  notify: restart openclaw-gateway
 
 - name: Configure Telegram channel policies
   ansible.builtin.shell: |
@@ -112,6 +113,7 @@
     executable: /bin/bash
   register: telegram_policies_result
   changed_when: "'UPDATED' in telegram_policies_result.stdout"
+  notify: restart openclaw-gateway
 
 - name: Clean up Telegram bot token
   ansible.builtin.file:

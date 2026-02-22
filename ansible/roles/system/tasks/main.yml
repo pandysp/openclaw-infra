@@ -83,7 +83,7 @@
     executable: /bin/bash
   register: swap_active
   changed_when: false
-  failed_when: false
+  failed_when: swap_active.rc == 2
 
 - name: Enable swapfile
   ansible.builtin.command: swapon /swapfile

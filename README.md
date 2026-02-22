@@ -1,6 +1,6 @@
 # OpenClaw Infrastructure
 
-Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€6.59/month.
+Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€11.39/month.
 
 **This is a reference template.** Clone it and adapt for your own deployment — the config values (timezone, model, cron prompts) are working examples you'll customize.
 
@@ -9,7 +9,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - **Cheap**: Hetzner CX33 x86 (4 vCPU, 8 GB) ~€5.49/mo + backups (or CX43 ~€11.39/mo for qmd semantic search)
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
-- **Telegram**: Optional scheduled tasks (morning digest, evening review, weekly planning)
+- **Telegram**: Optional scheduled tasks (configurable cron jobs)
 - **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
 
 ## Prerequisites
