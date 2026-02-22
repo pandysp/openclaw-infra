@@ -2,51 +2,70 @@
 # Configure agent bindings — route Telegram DMs and groups to the correct agent.
 # Uses the root-level `bindings` config path.
 
-- name: Build and set agent bindings
+- name: Initialize bindings list
+  ansible.builtin.set_fact:
+    _telegram_bindings: []
+
+- name: Build binding entries
+  ansible.builtin.set_fact:
+    _telegram_bindings: "{{ _telegram_bindings + [{'agentId': item.id, 'match': {'channel': 'telegram', 'peer': {'kind': item.deliver_type, 'id': item.deliver_to | string}}}] }}"
+  loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | list }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: item.deliver_to | default('') | length > 0
+
+- block:
+    - name: Write bindings JSON to temp file
+      ansible.builtin.copy:
+        content: "{{ _telegram_bindings | to_json }}"
+        dest: /tmp/ansible_bindings.json
+        mode: '0600'
+
+    - name: Set agent bindings
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        DESIRED=$(cat /tmp/ansible_bindings.json)
+        CURRENT=$(openclaw config get bindings 2>&1) || {
+            if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+                CURRENT="[]"
+            else
+                echo "ERROR reading bindings: $CURRENT" >&2
+                exit 1
+            fi
+        }
+        C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        D_NORM=$(echo "$DESIRED" | jq -cS '.')
+        if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
+            echo "OK"
+        else
+            openclaw config set bindings --json "$DESIRED"
+            echo "UPDATED"
+        fi
+      args:
+        executable: /bin/bash
+      register: bindings_result
+      changed_when: "'UPDATED' in bindings_result.stdout"
+      notify: restart openclaw-gateway
+  always:
+    - name: Clean up bindings temp file
+      ansible.builtin.file:
+        path: /tmp/ansible_bindings.json
+        state: absent
+  when: _telegram_bindings | length > 0
+
+- name: Clear agent bindings
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-
-    # Route by peer (sender/group), NOT by accountId (bot instance).
-    # accountId identifies which bot received the message; peer identifies who sent it.
-    # Since we use one bot for everything, all messages arrive via the default account.
-    {% set bindings = [] %}
-    {% for agent in openclaw_agents %}
-    {%   if agent.deliver_to | default('') | length > 0 and not agent.is_default %}
-    {%     set _ = bindings.append({"agentId": agent.id, "match": {"channel": "telegram", "peer": {"kind": agent.deliver_type, "id": agent.deliver_to | string}}}) %}
-    {%   endif %}
-    {% endfor %}
-
-    {% if bindings | length > 0 %}
-    DESIRED='{{ bindings | to_json }}'
-    CURRENT=$(openclaw config get bindings 2>&1) || {
-        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
-            CURRENT="[]"
-        else
-            echo "ERROR reading bindings: $CURRENT" >&2
-            exit 1
-        fi
-    }
-    C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS '.')
-    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
-        echo "OK"
-    else
-        openclaw config set bindings --json "$DESIRED"
-        echo "UPDATED"
-    fi
-    {% else %}
-    # No non-default bindings to set — default agent handles everything
     output=$(openclaw config unset bindings 2>&1) || {
         echo "$output" | grep -qi "not set\|not found\|does not exist" || { echo "ERROR: $output" >&2; exit 1; }
     }
     echo "OK"
-    {% endif %}
   args:
     executable: /bin/bash
-  register: bindings_result
-  changed_when: "'UPDATED' in bindings_result.stdout"
-  notify: restart openclaw-gateway
+  changed_when: false
+  when: _telegram_bindings | length == 0
 
 - name: Verify bindings
   ansible.builtin.shell: |

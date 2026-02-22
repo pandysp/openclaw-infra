@@ -8,24 +8,35 @@
   register: existing_agents
   changed_when: false
 
-- name: Create non-default agents
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    AGENTS_JSON='{{ existing_agents.stdout }}'
-    if echo "$AGENTS_JSON" | jq -e '.[] | select(.id == "{{ item.id }}")' > /dev/null 2>&1; then
-        echo "Agent {{ item.id }} already exists"
-    else
-        openclaw agents add "{{ item.id }}" --non-interactive --workspace "/home/ubuntu/.openclaw/workspace-{{ item.id }}"
-    fi
-  args:
-    executable: /bin/bash
-  loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | list }}"
-  loop_control:
-    label: "{{ item.id }}"
-  register: agent_create
-  changed_when: "'already exists' not in agent_create.stdout"
-  notify: restart openclaw-gateway
+- block:
+    - name: Write existing agents JSON to temp file
+      ansible.builtin.copy:
+        content: "{{ existing_agents.stdout }}"
+        dest: /tmp/ansible_existing_agents.json
+        mode: '0600'
+
+    - name: Create non-default agents
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        if jq -e --arg id {{ item.id | quote }} '.[] | select(.id == $id)' /tmp/ansible_existing_agents.json > /dev/null 2>&1; then
+            echo "Agent {{ item.id }} already exists"
+        else
+            openclaw agents add {{ item.id | quote }} --non-interactive --workspace "/home/ubuntu/.openclaw/workspace-{{ item.id }}"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | list }}"
+      loop_control:
+        label: "{{ item.id }}"
+      register: agent_create
+      changed_when: "'already exists' not in agent_create.stdout"
+      notify: restart openclaw-gateway
+  always:
+    - name: Clean up existing agents temp file
+      ansible.builtin.file:
+        path: /tmp/ansible_existing_agents.json
+        state: absent
 
 - name: Refresh agent list for heartbeat targeting
   ansible.builtin.shell: |
@@ -36,39 +47,50 @@
   register: agents_current
   changed_when: false
 
-- name: Set per-agent heartbeat targeting to Telegram
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    AGENTS_JSON='{{ agents_current.stdout }}'
-    AGENT_INDEX=$(echo "$AGENTS_JSON" | jq -r 'to_entries[] | select(.value.id == "{{ item.id }}") | .key')
-    if [ -z "$AGENT_INDEX" ]; then
-        echo "ERROR: Agent '{{ item.id }}' not found in agents list after creation step" >&2
-        echo "Agents list: $AGENTS_JSON" >&2
-        exit 1
-    fi
-    DESIRED='{"target":"telegram","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"}'
-    CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
-        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
-            CURRENT="{}"
-        else
-            echo "ERROR reading heartbeat config for {{ item.id }}: $CURRENT" >&2
+- block:
+    - name: Write current agents JSON to temp file
+      ansible.builtin.copy:
+        content: "{{ agents_current.stdout }}"
+        dest: /tmp/ansible_agents_current.json
+        mode: '0600'
+
+    - name: Set per-agent heartbeat targeting to Telegram
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
+        if [ -z "$AGENT_INDEX" ]; then
+            echo "ERROR: Agent {{ item.id | quote }} not found in agents list after creation step" >&2
+            cat /tmp/ansible_agents_current.json >&2
             exit 1
         fi
-    }
-    C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS '.')
-    if [ "$C_NORM" = "$D_NORM" ]; then
-        echo "OK"
-    else
-        openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
-        echo "UPDATED: {{ item.id }} heartbeat → telegram:{{ item.deliver_to }}"
-    fi
-  args:
-    executable: /bin/bash
-  loop: "{{ openclaw_agents | selectattr('deliver_to', 'ne', '') | list }}"
-  loop_control:
-    label: "{{ item.id }} → {{ item.deliver_to }}"
-  register: heartbeat_result
-  changed_when: "'UPDATED' in heartbeat_result.stdout"
-  notify: restart openclaw-gateway
+        DESIRED='{"target":"telegram","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"}'
+        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
+            if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+                CURRENT="{}"
+            else
+                echo "ERROR reading heartbeat config for {{ item.id }}: $CURRENT" >&2
+                exit 1
+            fi
+        }
+        C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        D_NORM=$(echo "$DESIRED" | jq -cS '.')
+        if [ "$C_NORM" = "$D_NORM" ]; then
+            echo "OK"
+        else
+            openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
+            echo "UPDATED: {{ item.id }} heartbeat → telegram:{{ item.deliver_to }}"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ openclaw_agents | selectattr('deliver_to', 'ne', '') | list }}"
+      loop_control:
+        label: "{{ item.id }} → {{ item.deliver_to }}"
+      register: heartbeat_result
+      changed_when: "'UPDATED' in heartbeat_result.stdout"
+      notify: restart openclaw-gateway
+  always:
+    - name: Clean up current agents temp file
+      ansible.builtin.file:
+        path: /tmp/ansible_agents_current.json
+        state: absent
