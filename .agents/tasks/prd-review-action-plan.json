@@ -1,0 +1,341 @@
+{
+  "version": 1,
+  "project": "OpenClaw Infra Review Action Plan",
+  "overview": "Address findings from a comprehensive 4-agent codebase review covering code quality, silent failures, comment accuracy, and simplification opportunities. Fixes span 5 phases: critical security/injection bugs, security architecture gaps, silent failure patterns, stale documentation, and codebase simplification investigation.",
+  "goals": [
+    "Eliminate all critical injection and silent-failure bugs",
+    "Close the sandbox-to-credential-proxy network isolation gap",
+    "Ensure provisioning failures are visible, not swallowed",
+    "Bring documentation in sync with actual codebase state",
+    "Investigate highest-impact simplification opportunities for future PRDs"
+  ],
+  "nonGoals": [
+    "Implementing simplification refactors (phase 5 is investigation only)",
+    "Adding new features or capabilities",
+    "Changing the overall Pulumi + Ansible architecture",
+    "Replacing curl-pipe-sh installs with package-manager installs (tracked but not in scope)",
+    "Adding automated test suites (no test framework exists for this IaC project)"
+  ],
+  "successMetrics": [
+    "Zero critical or high-severity findings on re-review",
+    "Sandbox containers cannot reach the MCP auth proxy",
+    "All provisioning failures produce visible errors (no silent swallowing)",
+    "CLAUDE.md accurately reflects the deployed architecture",
+    "Investigation stories produce clear go/no-go recommendations with effort estimates"
+  ],
+  "openQuestions": [],
+  "stack": {
+    "framework": "Pulumi (TypeScript) + Ansible + Bash + Jinja2",
+    "hosting": "Hetzner Cloud VPS",
+    "database": "N/A",
+    "auth": "Tailscale identity + device pairing"
+  },
+  "routes": [],
+  "uiNotes": [],
+  "dataModel": [],
+  "importFormat": {
+    "description": "Not applicable",
+    "example": {}
+  },
+  "rules": [
+    "All changes must be backward-compatible with existing deployments",
+    "Secrets must never appear in Ansible verbose output or git history",
+    "Ansible roles must remain idempotent after changes",
+    "No public ports may be exposed as a result of any change",
+    "Phase ordering is strict: complete all stories in phase N before starting phase N+1"
+  ],
+  "qualityGates": [
+    "./scripts/provision.sh --check --diff",
+    "./scripts/verify.sh",
+    "Successful deployment via ./scripts/provision.sh"
+  ],
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Quote hostname interpolation in cloud-init",
+      "status": "in_progress",
+      "dependsOn": [],
+      "description": "As a deployer, I want the cloud-init hostname to be safely quoted so that a user-configured serverName with shell metacharacters cannot cause command injection running as root.",
+      "acceptanceCriteria": [
+        "In pulumi/user-data.ts line 50, the --hostname argument is wrapped in double quotes: --hostname=\"${config.hostname}\"",
+        "Example: a hostname value of 'openclaw-vps' produces: tailscale up --authkey \"file:/tmp/ts-authkey\" --hostname=\"openclaw-vps\" --ssh",
+        "Negative case: a hostname value containing spaces or semicolons (e.g., 'test; rm -rf /') is safely quoted and does not execute as a separate command",
+        "pulumi preview succeeds with the change"
+      ],
+      "startedAt": "2026-02-22T21:22:49.557133+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-22T21:22:49.557272+00:00"
+    },
+    {
+      "id": "US-002",
+      "title": "Fix shell injection via unescaped JSON and jq in Ansible tasks",
+      "status": "open",
+      "dependsOn": [
+        "US-001"
+      ],
+      "description": "As an operator, I want Ansible shell tasks to safely handle JSON output and agent IDs so that unexpected characters in command output or config values cannot break shell scripts or jq filters.",
+      "acceptanceCriteria": [
+        "In ansible/roles/agents/tasks/main.yml: existing_agents.stdout is written to a temp file instead of inline single-quoted shell string. The temp file is cleaned up in an always block",
+        "In ansible/roles/agents/tasks/main.yml: item.id is passed to jq using --arg instead of inline Jinja2 interpolation in the jq filter string",
+        "Same fixes applied to ansible/roles/telegram/tasks/bindings.yml line 22 where JSON is interpolated into shell",
+        "Same fixes applied to ansible/roles/agents/tasks/main.yml line 43 where JSON comparison uses inline interpolation",
+        "Example: an agent ID containing a double quote character does not break the jq expression",
+        "Negative case: JSON output containing single quotes does not break the shell script",
+        "./scripts/provision.sh --check --diff runs without errors"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Fix stale token return in MCP auth proxy getAccessToken()",
+      "status": "open",
+      "dependsOn": [
+        "US-002"
+      ],
+      "description": "As a system administrator, I want the MCP auth proxy to fail visibly when it cannot read credentials so that permanently unreadable auth files cause clear errors rather than silently using expired tokens.",
+      "acceptanceCriteria": [
+        "In mcp-auth-proxy.js.j2 getAccessToken() (line ~79): if the file read fails AND cachedToken is null/undefined, throw an error instead of returning null",
+        "If the file read fails AND cachedToken exists, log a warning with the error details and return cachedToken (grace period for transient errors)",
+        "Add a staleness check: if cachedToken was last successfully refreshed more than 1 hour ago and file reads keep failing, log an error-level message on each failed attempt",
+        "Example: auth.json is deleted -> first call returns cached token with warning, subsequent calls log errors, proxy does not silently use a days-old token without any indication",
+        "Negative case: transient file read failure (e.g., brief disk IO) does not crash the proxy \u2014 cached token is used with a warning",
+        "The proxy continues to function during normal operation (auth.json readable) with no behavioral change"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Fix dynamic inventory silent empty return on failure",
+      "status": "open",
+      "dependsOn": [
+        "US-003"
+      ],
+      "description": "As an operator, I want the Ansible dynamic inventory to fail loudly when Pulumi or Tailscale commands fail so that provisioning does not silently skip all tasks due to an empty inventory.",
+      "acceptanceCriteria": [
+        "In ansible/inventory/pulumi_inventory.py: the run() function logs errors to stderr before returning None (include the command that failed and the error message)",
+        "When the final inventory is empty (no hosts resolved), exit with a non-zero exit code and print a diagnostic message to stderr explaining why (Pulumi failed, Tailscale failed, no matching peers, etc.)",
+        "The OPENCLAW_SSH_HOST override path still works: if the env var is set, Pulumi/Tailscale failures are acceptable (the override provides the host)",
+        "Example: pulumi stack output fails due to missing passphrase -> inventory script exits non-zero with message 'Failed to resolve host: pulumi stack output failed: ...'",
+        "Negative case: OPENCLAW_SSH_HOST=1.2.3.4 is set and Pulumi fails -> inventory returns the override host successfully (exit 0)",
+        "Existing successful behavior is unchanged when Pulumi and Tailscale work correctly"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Fix Pi MCP auth smoke test swallowing failures",
+      "status": "open",
+      "dependsOn": [
+        "US-004"
+      ],
+      "description": "As an operator, I want the Pi MCP Docker image smoke test to fail the provisioning run when authentication validation fails so that broken auth is not silently deployed.",
+      "acceptanceCriteria": [
+        "In ansible/roles/plugins/tasks/main.yml line ~1072: remove or replace the unconditional failed_when: false on the Pi auth smoke test task",
+        "The task should fail when the shell script exits non-zero (auth validation failure), causing the Ansible play to fail",
+        "Add a rescue block (consistent with Codex and Claude Code smoke test patterns) that captures diagnostic info before failing",
+        "Example: Pi auth is misconfigured -> provisioning fails with a clear error message identifying the Pi auth smoke test as the failure point",
+        "Negative case: Pi auth is correctly configured -> smoke test passes and provisioning continues",
+        "Review other smoke test tasks in the same file for the same failed_when: false pattern and fix any found"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Move sandbox containers to separate Docker network",
+      "status": "open",
+      "dependsOn": [
+        "US-005"
+      ],
+      "description": "As a security-conscious deployer, I want sandbox containers to run on a separate Docker network from the MCP auth proxy so that prompt-injected sandbox sessions cannot directly access credentials.",
+      "acceptanceCriteria": [
+        "In ansible/group_vars/all.yml: change openclaw_sandbox_docker_network from 'codex-proxy-net' to 'bridge' (the default Docker bridge network)",
+        "MCP containers (Codex, Claude Code, Pi) remain on codex-proxy-net and retain proxy access",
+        "The docker role in ansible/roles/docker/tasks/main.yml still creates codex-proxy-net unconditionally (for MCP containers)",
+        "Sandbox containers can still reach the internet for web research and git operations (bridge provides outbound NAT)",
+        "Sandbox containers CANNOT reach the MCP auth proxy IP/port",
+        "Example: a sandbox session running curl http://<proxy-gateway-ip>:8787/ gets connection refused or timeout",
+        "Negative case: a Codex MCP container running on codex-proxy-net can still reach the proxy successfully",
+        "Gateway health check passes after the change",
+        "Update docs/SECURITY.md if it references the sandbox network configuration"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Fix Obsidian PAT exposure in git remote URLs",
+      "status": "open",
+      "dependsOn": [
+        "US-006"
+      ],
+      "description": "As a security-conscious deployer, I want GitHub PATs in Obsidian vault git remotes to not leak into Ansible logs so that credentials are not exposed in verbose provisioning output.",
+      "acceptanceCriteria": [
+        "In ansible/roles/obsidian/tasks/vault.yml line ~95: add no_log: true to the 'Update remote URL' task (the clone task already has it)",
+        "Verify all other tasks in vault.yml that handle the _obsidian_auth_url variable also have no_log: true",
+        "Example: running ./scripts/provision.sh --tags obsidian -vvv does not show any GitHub PAT in the output",
+        "Negative case: the clone and pull operations still work correctly with the PAT-embedded URL",
+        "Add a comment noting that PATs persist in .git/config on disk and are accessible within the workspace directory"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add gateway restart trap to backup.sh",
+      "status": "open",
+      "dependsOn": [
+        "US-007"
+      ],
+      "description": "As an operator, I want the backup script to always restart the gateway even if the script fails so that a backup failure does not leave the gateway stopped indefinitely.",
+      "acceptanceCriteria": [
+        "In scripts/backup.sh: add a trap that restarts the openclaw-gateway service on EXIT (similar to the cleanup trap in get-telegram-id.sh)",
+        "The trap runs the gateway restart via SSH on the remote host (since backup.sh runs locally and stops the gateway remotely)",
+        "Example: backup.sh fails mid-backup due to disk space -> gateway is restarted automatically before the script exits",
+        "Negative case: backup.sh completes successfully -> gateway is restarted as part of normal flow (trap is harmless if gateway is already running)",
+        "The trap handles the case where SSH itself is broken (trap should not fail hard if the restart SSH command fails)"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Add error logging to dynamic inventory failures",
+      "status": "open",
+      "dependsOn": [
+        "US-008"
+      ],
+      "description": "As an operator, I want the dynamic inventory to log diagnostic information when Pulumi or Tailscale commands fail so that I can troubleshoot provisioning issues without guessing.",
+      "acceptanceCriteria": [
+        "In ansible/inventory/pulumi_inventory.py run() function: log the failed command, exit code, and stderr to sys.stderr before returning None",
+        "Log messages include the specific command that failed (e.g., 'pulumi stack output sshHost' or 'tailscale status --json')",
+        "CalledProcessError, TimeoutExpired, and FileNotFoundError each produce a distinct, helpful message",
+        "Example: Pulumi not installed -> stderr shows 'Inventory error: pulumi not found (FileNotFoundError). Is Pulumi CLI installed?'",
+        "Example: Tailscale timeout -> stderr shows 'Inventory error: tailscale status --json timed out after Ns'",
+        "Negative case: all commands succeed -> no error messages are printed, inventory returns correctly",
+        "This is complementary to US-004 (which adds non-zero exit on empty inventory). US-004 handles the exit code, this story handles the diagnostic messages"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Add early SSH exit to verify.sh",
+      "status": "open",
+      "dependsOn": [
+        "US-009"
+      ],
+      "description": "As an operator, I want verify.sh to detect SSH failure early and skip subsequent SSH-dependent checks so that I see one clear 'SSH failed' error instead of 11 misleading service warnings.",
+      "acceptanceCriteria": [
+        "In scripts/verify.sh: after the first SSH-dependent check (check 2), if SSH fails, print a clear error message and skip all remaining SSH checks",
+        "The skip message explains the root cause: 'SSH connection failed \u2014 skipping remaining remote checks'",
+        "Non-SSH checks (check 1: Tailscale ping) still run regardless",
+        "Example: SSH is unreachable -> output shows check 1 (Tailscale ping) result, then 'SSH connection failed \u2014 skipping 11 remote checks'",
+        "Negative case: SSH works -> all 13 checks run as before with no behavioral change",
+        "The script exit code reflects the SSH failure (non-zero)"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Fix CLAUDE.md sandbox network documentation",
+      "status": "open",
+      "dependsOn": [
+        "US-010"
+      ],
+      "description": "As a developer reading CLAUDE.md, I want the sandbox configuration documentation to match the actual deployed state so that I don't debug connectivity issues based on wrong information.",
+      "acceptanceCriteria": [
+        "After US-006 changes sandbox back to bridge: CLAUDE.md Sandboxing section Config block shows agents.defaults.sandbox.docker.network: bridge",
+        "The 'Why bridge networking' paragraph accurately explains that bridge provides outbound internet via Docker NAT",
+        "Add a note that MCP containers (Codex, Claude Code, Pi) run on a separate codex-proxy-net network for proxy access",
+        "The security model explanation mentions that sandbox containers are network-isolated from the credential proxy",
+        "Example: a new contributor reads CLAUDE.md and correctly understands which containers are on which network",
+        "Negative case: the documentation does not mention codex-proxy-net as the sandbox network (since US-006 changes it to bridge)"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Fix CLAUDE.md server type default and tool counts",
+      "status": "open",
+      "dependsOn": [
+        "US-011"
+      ],
+      "description": "As a deployer using the public template, I want CLAUDE.md to accurately reflect the default server type and use formulas for tool counts so that I know what to expect on a fresh deployment.",
+      "acceptanceCriteria": [
+        "CLAUDE.md Cost Breakdown: add a note that the default is CX33 (4 vCPU, 8GB, ~5.49/mo) and CX43 is recommended when qmd is enabled",
+        "CLAUDE.md Semantic Search section: replace '18 total' with a formula like '6 x N_agents total' that doesn't go stale when agents are added",
+        "CLAUDE.md Semantic Search tool count formula: replace hardcoded per-type counts with a note that exact counts depend on agent count and configured server types",
+        "Example: a user deploying the public template with default settings sees accurate cost and resource expectations",
+        "Negative case: the documentation does not claim CX43 is the default when the code defaults to CX33"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Fix server.ts misleading provisioning comment",
+      "status": "open",
+      "dependsOn": [
+        "US-012"
+      ],
+      "description": "As a developer reading the Pulumi code, I want the server.ts comment to accurately describe the cloud-init/Ansible boundary so that I don't skip investigating Ansible after a failed deployment.",
+      "acceptanceCriteria": [
+        "In pulumi/server.ts lines 67-68: replace 'No need for additional provisioning' with a comment explaining that cloud-init bootstraps Tailscale only and Ansible handles all other configuration",
+        "Example comment: 'Cloud-init bootstraps Tailscale only (~1 min). All other configuration is handled by Ansible (triggered by index.ts).'",
+        "The replacement comment is concise (1-2 lines) and matches the style of existing comments in the file",
+        "Negative case: the comment does not say 'no provisioning needed' or anything that implies cloud-init handles everything"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Fix MEMORY.md stale facts",
+      "status": "open",
+      "dependsOn": [
+        "US-013"
+      ],
+      "description": "As the AI assistant maintaining this project, I want MEMORY.md to contain accurate facts so that future sessions don't act on incorrect information.",
+      "acceptanceCriteria": [
+        "MEMORY.md qmd section: update tesseract timeout from '30s' to '60s' (matching extract.j2 line 43 SUBPROCESS_TIMEOUT = 60)",
+        "MEMORY.md: verify tool count claims against current agent count and update or remove hardcoded totals",
+        "Review other MEMORY.md facts that reference specific numbers or versions and verify they match current code",
+        "Example: MEMORY.md says '30s subprocess timeout' -> updated to '60s subprocess timeout'",
+        "Negative case: no facts in MEMORY.md contradict the current codebase after this story is complete"
+      ]
+    },
+    {
+      "id": "US-015",
+      "title": "Investigate reusable Docker image build task",
+      "status": "open",
+      "dependsOn": [
+        "US-014"
+      ],
+      "description": "As a maintainer, I want to understand the feasibility and effort of extracting the 3 near-identical Docker image build blocks in plugins/tasks/main.yml into a single parameterized include so that future MCP server additions don't require copying 150 lines.",
+      "acceptanceCriteria": [
+        "Document the current duplication: list the 3 blocks (Codex, Claude Code, Pi) with their line ranges and identify which parts are identical vs. which differ",
+        "Identify the parameters needed for a reusable build-mcp-image.yml: image name, build dir, Dockerfile template, container label, force rebuild var, smoke test commands",
+        "Identify risks: are there any subtle differences between the 3 blocks that would make parameterization unsafe?",
+        "Provide an effort estimate (small/medium/large) and a go/no-go recommendation",
+        "Output is a brief document (can be inline in the story completion notes or a file in docs/)",
+        "Negative case: if parameterization is not feasible (e.g., too many differences), explain why and close the story"
+      ]
+    },
+    {
+      "id": "US-016",
+      "title": "Investigate data-driven agent variables",
+      "status": "open",
+      "dependsOn": [
+        "US-015"
+      ],
+      "description": "As a maintainer, I want to understand the feasibility of replacing the per-agent hardcoded variables in index.ts and provision.sh with data-driven loops so that adding a new agent doesn't require editing 10+ locations.",
+      "acceptanceCriteria": [
+        "Document the current duplication: count the number of per-agent variable declarations, config reads, and exports in index.ts and provision.sh",
+        "Propose a data structure (e.g., array of agent IDs) and show how the loops would work for deploy keys, secret reads, and Pulumi exports",
+        "Identify risks: Pulumi resource naming changes could trigger resource replacement (destroy + recreate). Assess whether the refactor can preserve existing resource URNs",
+        "Provide an effort estimate and go/no-go recommendation",
+        "Output is a brief investigation document",
+        "Negative case: if Pulumi resource URN changes would destroy existing deploy keys, recommend against or propose a migration path"
+      ]
+    },
+    {
+      "id": "US-017",
+      "title": "Investigate handler consolidation",
+      "status": "open",
+      "dependsOn": [
+        "US-016"
+      ],
+      "description": "As a maintainer, I want to understand whether the 5 duplicate 'restart openclaw-gateway' handler definitions can be consolidated into a single play-level handler so that handler changes don't require editing 5 files.",
+      "acceptanceCriteria": [
+        "Document which roles define the restart handler and confirm they are all identical",
+        "Test whether a play-level handler in playbook.yml is accessible from all roles (Ansible handler scoping rules)",
+        "Identify risks: handler flushing order, interaction with role-specific handlers, any role that uses include_role (which changes handler scope)",
+        "Provide an effort estimate and go/no-go recommendation",
+        "Output is a brief investigation document",
+        "Negative case: if Ansible handler scoping prevents play-level handlers from working with all roles, explain the limitation"
+      ]
+    }
+  ]
+}

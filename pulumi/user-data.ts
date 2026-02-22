@@ -47,7 +47,7 @@ curl -fsSL https://tailscale.com/install.sh | sh
 echo "${tsKey}" > /tmp/ts-authkey
 chmod 600 /tmp/ts-authkey
 
-tailscale up --authkey "file:/tmp/ts-authkey" --hostname=${config.hostname} --ssh
+tailscale up --authkey "file:/tmp/ts-authkey" --hostname="${config.hostname}" --ssh
 
 rm -f /tmp/ts-authkey
 
