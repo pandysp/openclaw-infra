@@ -87,3 +87,33 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - Full provision.sh --check --diff fails at openclaw install role (version 2026.2.21 mismatch) — pre-existing, not related to any US-002 changes
   - When a story is already complete from a prior iteration, verify and emit completion signal promptly
 ---
+
+## 2026-02-22T23:45 - US-003: Fix stale token return in MCP auth proxy getAccessToken()
+Thread:
+Run: 20260222-233409-74305 (iteration 1)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-1.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-1.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: fab0def Fix stale token return in MCP auth proxy getAccessToken()
+- Post-commit status: clean
+- Verification:
+  - Command: ./scripts/provision.sh --check --diff --tags plugins -> PASS (ok=60 changed=7 failed=0)
+  - Command: ./scripts/verify.sh -> PASS (13/13 checks passed, exit code 0)
+- Files changed:
+  - ansible/roles/plugins/templates/mcp-auth-proxy.js.j2
+- **What was implemented:**
+  - Added `lastSuccessfulTokenRead` tracking variable (epoch ms) and `STALE_TOKEN_THRESHOLD_MS` constant (1 hour)
+  - getAccessToken() catch block: throws Error when no cached token exists (AC1)
+  - getAccessToken() catch block: logs warning and returns cached token for transient failures (AC2)
+  - getAccessToken() catch block: logs error-level when cached token is stale >1 hour (AC3)
+  - `invalidateToken()` resets `lastSuccessfulTokenRead` along with other state
+  - `refreshToken()` success path updates `lastSuccessfulTokenRead`
+  - Health endpoint: wrapped getAccessToken() in try/catch to prevent crash
+  - Codex route: wrapped getAccessToken() in try/catch, returns 503 with error detail
+  - Startup: wrapped getAccessToken() in try/catch, logs warning instead of crashing
+- **Learnings for future iterations:**
+  - Previous iteration (run 20260222-222249-5561 iter 3) left this implementation uncommitted — check for uncommitted changes at start of new runs
+  - verify.sh takes ~5 minutes total due to port scanning and security audit steps
+  - The `readAuthFile()` JSON parse error path (returns null, logs error) is separate from filesystem errors (throws in statSync) — both are handled correctly
+---
