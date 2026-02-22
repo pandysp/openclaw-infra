@@ -66,6 +66,9 @@
     mode: "0644"
 
 # --- Clone / update vault ---
+# NOTE: The PAT-embedded URL persists in .git/config on disk after clone/set-url.
+# It is accessible to anything running inside the workspace directory (including
+# sandboxed sessions). This is inherent to HTTPS-with-token git auth.
 
 - name: "Ensure obsidian directory exists for {{ item.1 }}"
   ansible.builtin.file:
@@ -82,6 +85,7 @@
   ansible.builtin.set_fact:
     _obsidian_auth_url: >-
       {{ item.0.repo_url | regex_replace('https://([^@]*@)?', 'https://' + _openclaw_obsidian_github_tokens[item.1] + '@') }}
+  no_log: true
 
 - name: "Clone vault {{ item.0.name }} for {{ item.1 }}"
   ansible.builtin.command:
