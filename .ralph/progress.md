@@ -59,3 +59,31 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - Ansible `when` on a `block` applies to both the block tasks and the always section — if condition is false, cleanup is skipped (which is correct since temp file was never created)
   - provision.sh --check --diff now passes cleanly for agents,telegram tags (the US-001 version mismatch issue has been resolved)
 ---
+
+## 2026-02-22T23:30 - US-002: Fix shell injection via unescaped JSON and jq in Ansible tasks
+Thread:
+Run: 20260222-222249-5561 (iteration 3)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-222249-5561-iter-3.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-222249-5561-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: c6b73f5 Fix shell injection via unescaped JSON and jq in Ansible tasks (from iteration 2, no new changes needed)
+- Post-commit status: clean
+- Verification:
+  - Command: ./scripts/provision.sh --check --diff --tags agents,telegram -> PASS (ok=33 changed=3 failed=0)
+  - Command: ./scripts/verify.sh -> PASS (13/13 checks passed, exit code 0)
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing: OpenClaw 2026.2.21 install failure, unrelated to US-002)
+- Files changed:
+  - None (implementation complete in iteration 2)
+- Re-verification pass confirming all 7 acceptance criteria met:
+  1. existing_agents.stdout written to /tmp/ansible_existing_agents.json via copy module, cleaned up in always block
+  2. item.id passed to jq via --arg in both agent creation (line 22) and heartbeat (line 61) tasks
+  3. bindings.yml JSON written to /tmp/ansible_bindings.json via copy module, shell reads from file
+  4. JSON comparison in heartbeat task uses --arg $id instead of inline Jinja2 interpolation
+  5. Agent IDs with double quotes safe via jq --arg
+  6. JSON with single quotes safe via temp file (not inline shell string)
+  7. provision.sh --check --diff passes for agents,telegram tags
+- **Learnings for future iterations:**
+  - Full provision.sh --check --diff fails at openclaw install role (version 2026.2.21 mismatch) — pre-existing, not related to any US-002 changes
+  - When a story is already complete from a prior iteration, verify and emit completion signal promptly
+---
