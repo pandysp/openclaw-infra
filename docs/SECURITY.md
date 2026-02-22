@@ -115,7 +115,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - `tools.elevated.allowFrom.<channel>` — restricts elevated tools to additional channels beyond Telegram
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
-**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
+**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers run on the default Docker bridge network, which is isolated from the `codex-proxy-net` network where MCP containers (Codex, Claude Code, Pi) and the credential-injecting proxy run — a sandbox session cannot reach the proxy to obtain API tokens. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
 
 **Prompt injection guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
 - Lock down inbound DMs (we use allowlist — done)

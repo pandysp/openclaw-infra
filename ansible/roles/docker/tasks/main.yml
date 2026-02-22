@@ -45,9 +45,9 @@
   become: false
   changed_when: false
 
-# Create codex-proxy-net unconditionally so that sandbox config referencing
-# this network never breaks, even if the plugins role hasn't run yet
-# (e.g., provisioning failed midway on first install).
+# Create codex-proxy-net unconditionally for MCP containers (Codex, Claude Code, Pi)
+# that need access to the credential-injecting proxy. Sandbox containers run on the
+# default bridge network and cannot reach this network.
 - name: Create codex-proxy-net Docker network
   community.docker.docker_network:
     name: codex-proxy-net

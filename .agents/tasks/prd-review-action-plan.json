@@ -130,7 +130,7 @@
     {
       "id": "US-005",
       "title": "Fix Pi MCP auth smoke test swallowing failures",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-004"
       ],
@@ -144,13 +144,13 @@
         "Review other smoke test tasks in the same file for the same failed_when: false pattern and fix any found"
       ],
       "startedAt": "2026-02-22T23:11:15.820651+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-22T23:11:15.820806+00:00"
+      "completedAt": "2026-02-22T23:16:44.402970+00:00",
+      "updatedAt": "2026-02-22T23:16:44.402852+00:00"
     },
     {
       "id": "US-006",
       "title": "Move sandbox containers to separate Docker network",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-005"
       ],
@@ -165,7 +165,10 @@
         "Negative case: a Codex MCP container running on codex-proxy-net can still reach the proxy successfully",
         "Gateway health check passes after the change",
         "Update docs/SECURITY.md if it references the sandbox network configuration"
-      ]
+      ],
+      "startedAt": "2026-02-22T23:16:46.518421+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-22T23:16:46.518611+00:00"
     },
     {
       "id": "US-007",
