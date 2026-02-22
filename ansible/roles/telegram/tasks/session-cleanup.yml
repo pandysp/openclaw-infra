@@ -4,13 +4,22 @@
 # heartbeat creates a fresh one with the correct target.
 # Related to upstream bug #18573. See docs/HEARTBEAT-GROUP-DELIVERY-FIX.md.
 
+- name: Write agent config for session check
+  ansible.builtin.copy:
+    content: "{{ openclaw_agents | to_json }}"
+    dest: /tmp/ansible-agents-session-check.json
+    mode: "0600"
+  changed_when: false
+
 - name: Check and fix group agent session delivery targets
   ansible.builtin.shell: |
     set -euo pipefail
     python3 << 'PYEOF'
     import json, os, sys
 
-    agents = {{ openclaw_agents | to_json }}
+    with open("/tmp/ansible-agents-session-check.json") as f:
+        agents = json.load(f)
+
     changes = []
 
     for agent in agents:
@@ -18,12 +27,11 @@
         deliver_to = agent.get("deliver_to", "")
         deliver_type = agent.get("deliver_type", "dm")
 
-        # Only check group agents — DM agents don't have this bug
         if deliver_type != "group" or not deliver_to:
             continue
 
-        sessions_path = f"/home/ubuntu/.openclaw/agents/{agent_id}/sessions/sessions.json"
-        session_key = f"agent:{agent_id}:main"
+        sessions_path = "/home/ubuntu/.openclaw/agents/%s/sessions/sessions.json" % agent_id
+        session_key = "agent:%s:main" % agent_id
 
         if not os.path.exists(sessions_path):
             continue
@@ -36,27 +44,24 @@
             continue
 
         current_to = entry.get("deliveryContext", {}).get("to", "")
-        # Normalize: strip "telegram:" prefix if present
         normalized_current = current_to.replace("telegram:", "")
         normalized_expected = str(deliver_to)
 
         if normalized_current == normalized_expected:
-            print(f"OK: {agent_id} → {current_to}")
+            print("OK: %s -> %s" % (agent_id, current_to))
             continue
 
-        # Stale session — remove it
         session_id = entry.get("sessionId", "")
         del store[session_key]
         with open(sessions_path, "w") as f:
             json.dump(store, f, indent=2)
 
-        # Remove JSONL file
-        jsonl_path = f"/home/ubuntu/.openclaw/agents/{agent_id}/sessions/{session_id}.jsonl"
+        jsonl_path = "/home/ubuntu/.openclaw/agents/%s/sessions/%s.jsonl" % (agent_id, session_id)
         if os.path.exists(jsonl_path):
             os.remove(jsonl_path)
 
-        changes.append(f"FIXED: {agent_id} was {current_to}, expected {deliver_to}")
-        print(f"FIXED: {agent_id} session had deliveryContext.to={current_to}, expected {deliver_to} — removed stale session")
+        changes.append("FIXED: %s was %s, expected %s" % (agent_id, current_to, deliver_to))
+        print("FIXED: %s session had deliveryContext.to=%s, expected %s -- removed stale session" % (agent_id, current_to, deliver_to))
 
     if not changes:
         print("OK: all group agent sessions have correct delivery targets")
@@ -66,3 +71,9 @@
   register: session_cleanup_result
   changed_when: "'FIXED' in session_cleanup_result.stdout"
   notify: restart openclaw-gateway
+
+- name: Clean up session check temp file
+  ansible.builtin.file:
+    path: /tmp/ansible-agents-session-check.json
+    state: absent
+  changed_when: false
