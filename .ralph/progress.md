@@ -117,3 +117,29 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - verify.sh takes ~5 minutes total due to port scanning and security audit steps
   - The `readAuthFile()` JSON parse error path (returns null, logs error) is separate from filesystem errors (throws in statSync) — both are handled correctly
 ---
+
+## 2026-02-23T00:05 - US-004: Fix dynamic inventory silent empty return on failure
+Thread:
+Run: 20260222-233409-74305 (iteration 2)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-2.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-2.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 3441baa Fix dynamic inventory silent empty return on failure
+- Post-commit status: clean
+- Verification:
+  - Command: python3 ansible/inventory/pulumi_inventory.py --list -> PASS (returned correct inventory with Tailscale IP)
+  - Command: env PATH=/nonexistent python3 pulumi_inventory.py --list -> PASS (exit 1, stderr: "pulumi not found" + "Failed to resolve host")
+  - Command: env PATH=/nonexistent OPENCLAW_SSH_HOST=1.2.3.4 python3 pulumi_inventory.py --list -> PASS (exit 0, override host in inventory)
+  - Command: ./scripts/provision.sh --check --diff --tags config -> PASS (ok=9 changed=0 failed=0)
+  - Command: ./scripts/verify.sh -> PASS (13/13 checks, exit 0)
+- Files changed:
+  - ansible/inventory/pulumi_inventory.py
+- **What was implemented:**
+  - run() function: split catch-all except into three specific handlers (CalledProcessError, TimeoutExpired, FileNotFoundError), each logging command, error details to stderr
+  - main(): changed empty inventory case (Pulumi fails, no override) from exit 0 with empty JSON to exit 1 with diagnostic message to stderr
+  - OPENCLAW_SSH_HOST override preserved: condition `not hostname and not override` means override bypasses the exit
+- **Learnings for future iterations:**
+  - The inventory script is invoked by Ansible, which captures stdout as the inventory JSON and shows stderr to the operator — correct use of print(..., file=sys.stderr) for diagnostics
+  - Testing error paths with env PATH=/nonexistent is a clean way to simulate missing binaries without side effects
+---
