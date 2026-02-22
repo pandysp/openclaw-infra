@@ -45,9 +45,11 @@ function log(level, msg, extra) {
 
 let cachedToken = null;
 let tokenMtime = 0;
+let lastSuccessfulTokenRead = 0; // epoch ms of last successful auth.json read
 let refreshMutex = null; // Promise when refresh is in-flight
 let circuitOpen = false;
 let circuitOpenUntil = 0;
+const STALE_TOKEN_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
 function readAuthFile() {
   try {
@@ -70,18 +72,32 @@ function getAccessToken() {
     if (tokens && tokens.access_token) {
       cachedToken = tokens.access_token;
       tokenMtime = mtime;
+      lastSuccessfulTokenRead = Date.now();
       log('info', 'Loaded access token from auth.json');
       return cachedToken;
     }
   } catch (err) {
-    log('error', 'Failed to stat auth.json', { error: err.message });
+    // File read failed — decide severity based on cache state and staleness
+    if (!cachedToken) {
+      throw new Error('Cannot read auth.json and no cached token available: ' + err.message);
+    }
+    const staleDuration = Date.now() - lastSuccessfulTokenRead;
+    if (lastSuccessfulTokenRead > 0 && staleDuration > STALE_TOKEN_THRESHOLD_MS) {
+      log('error', 'auth.json unreadable and cached token is stale', {
+        error: err.message,
+        lastSuccessfulReadAgo: Math.round(staleDuration / 1000) + 's',
+      });
+    } else {
+      log('warn', 'auth.json unreadable, using cached token', { error: err.message });
+    }
   }
-  return cachedToken; // return stale if file unreadable
+  return cachedToken;
 }
 
 function invalidateToken() {
   cachedToken = null;
   tokenMtime = 0;
+  lastSuccessfulTokenRead = 0;
 }
 
 // Watch auth.json for external changes (e.g. reprovision)
@@ -244,6 +260,7 @@ function refreshToken() {
           fs.writeFileSync(AUTH_PATH, JSON.stringify(updated, null, 2), 'utf8');
           cachedToken = parsed.access_token;
           tokenMtime = fs.statSync(AUTH_PATH).mtimeMs;
+          lastSuccessfulTokenRead = Date.now();
           circuitOpen = false;
           log('info', 'Token refreshed successfully');
           resolve(parsed.access_token);
@@ -520,7 +537,8 @@ function proxyGitHubRequest(clientReq, clientRes) {
 const server = http.createServer((req, res) => {
   // Health check — per-service status
   if (req.url === '/health' && req.method === 'GET') {
-    const codexToken = getAccessToken();
+    let codexToken = null;
+    try { codexToken = getAccessToken(); } catch (err) { /* no cached token — codex unhealthy */ }
     const anthropicToken = getAnthropicToken();
     const githubAgents = getGitHubAgents();
     const codexHealthy = !!codexToken && !circuitOpen;
@@ -556,8 +574,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Default: Codex route (existing behavior, unchanged)
-  const token = getAccessToken();
+  // Default: Codex route
+  let token;
+  try {
+    token = getAccessToken();
+  } catch (err) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'no_token', detail: err.message }));
+    return;
+  }
   if (!token) {
     res.writeHead(503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'no_token', detail: 'Cannot read access token from auth.json' }));
@@ -577,7 +602,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
   log('info', 'MCP auth proxy started', { host: LISTEN_HOST, port: LISTEN_PORT });
-  getAccessToken();
+  try { getAccessToken(); } catch (err) { log('warn', 'auth.json not available at startup', { error: err.message }); }
   getAnthropicToken();
 });
 

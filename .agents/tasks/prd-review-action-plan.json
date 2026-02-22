@@ -69,7 +69,7 @@
     {
       "id": "US-002",
       "title": "Fix shell injection via unescaped JSON and jq in Ansible tasks",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-001"
       ],
@@ -83,14 +83,14 @@
         "Negative case: JSON output containing single quotes does not break the shell script",
         "./scripts/provision.sh --check --diff runs without errors"
       ],
-      "startedAt": "2026-02-22T21:33:04.073716+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-22T21:33:04.073890+00:00"
+      "startedAt": "2026-02-22T21:52:17.049564+00:00",
+      "completedAt": "2026-02-22T22:04:23.588672+00:00",
+      "updatedAt": "2026-02-22T22:04:23.588525+00:00"
     },
     {
       "id": "US-003",
       "title": "Fix stale token return in MCP auth proxy getAccessToken()",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-002"
       ],
@@ -102,7 +102,10 @@
         "Example: auth.json is deleted -> first call returns cached token with warning, subsequent calls log errors, proxy does not silently use a days-old token without any indication",
         "Negative case: transient file read failure (e.g., brief disk IO) does not crash the proxy \u2014 cached token is used with a warning",
         "The proxy continues to function during normal operation (auth.json readable) with no behavioral change"
-      ]
+      ],
+      "startedAt": "2026-02-22T22:04:25.712675+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-22T22:34:09.407363+00:00"
     },
     {
       "id": "US-004",
