@@ -90,7 +90,7 @@
     {
       "id": "US-003",
       "title": "Fix stale token return in MCP auth proxy getAccessToken()",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-002"
       ],
@@ -104,13 +104,13 @@
         "The proxy continues to function during normal operation (auth.json readable) with no behavioral change"
       ],
       "startedAt": "2026-02-22T22:04:25.712675+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-22T22:34:09.407363+00:00"
+      "completedAt": "2026-02-22T22:53:06.839715+00:00",
+      "updatedAt": "2026-02-22T22:53:06.839570+00:00"
     },
     {
       "id": "US-004",
       "title": "Fix dynamic inventory silent empty return on failure",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-003"
       ],
@@ -122,7 +122,10 @@
         "Example: pulumi stack output fails due to missing passphrase -> inventory script exits non-zero with message 'Failed to resolve host: pulumi stack output failed: ...'",
         "Negative case: OPENCLAW_SSH_HOST=1.2.3.4 is set and Pulumi fails -> inventory returns the override host successfully (exit 0)",
         "Existing successful behavior is unchanged when Pulumi and Tailscale work correctly"
-      ]
+      ],
+      "startedAt": "2026-02-22T22:53:08.982400+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-22T22:53:08.982573+00:00"
     },
     {
       "id": "US-005",

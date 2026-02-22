@@ -12,11 +12,23 @@ import sys
 
 
 def run(cmd):
-    """Run a command and return stdout, or None on failure."""
+    """Run a command and return stdout, or None on failure.
+
+    Logs errors to stderr with the failed command and error details.
+    """
+    cmd_str = " ".join(cmd)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
         return result.stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+    except subprocess.CalledProcessError as e:
+        stderr_msg = e.stderr.strip() if e.stderr else "(no stderr)"
+        print(f"Inventory error: '{cmd_str}' failed (exit {e.returncode}): {stderr_msg}", file=sys.stderr)
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"Inventory error: '{cmd_str}' timed out after 15s", file=sys.stderr)
+        return None
+    except FileNotFoundError:
+        print(f"Inventory error: '{cmd[0]}' not found. Is it installed and on PATH?", file=sys.stderr)
         return None
 
 
@@ -71,8 +83,8 @@ def main():
 
         hostname = get_tailscale_hostname()
         if not hostname and not override:
-            print(json.dumps({"_meta": {"hostvars": {}}}))
-            sys.exit(0)
+            print("Failed to resolve host: pulumi stack output failed and OPENCLAW_SSH_HOST is not set", file=sys.stderr)
+            sys.exit(1)
 
         if override:
             ansible_host = override
