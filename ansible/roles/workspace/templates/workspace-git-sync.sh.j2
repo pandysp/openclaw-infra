@@ -8,8 +8,25 @@ if [ "$CURRENT_BRANCH" != "main" ] && [ -n "$CURRENT_BRANCH" ]; then
     git branch -m "$CURRENT_BRANCH" main
 fi
 
+# Commit any local changes first (so they're never lost)
 git add -A
 if ! git diff --cached --quiet; then
     git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+
+# Reconcile with remote before pushing
+git fetch origin main
+if ! git rebase origin/main 2>/dev/null; then
+    echo "Rebase failed, falling back to merge" >&2
+    git rebase --abort
+    if ! git merge origin/main --no-edit; then
+        git merge --abort
+        echo "ERROR: Cannot reconcile local and remote changes for {{ item.agent_id }}" >&2
+        exit 1
+    fi
+fi
+
+# Push if we have commits ahead of remote
+if [ "$(git rev-list --count origin/main..HEAD)" -gt 0 ]; then
     git push origin main
 fi
