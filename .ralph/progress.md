@@ -227,3 +227,29 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - `no_log: true` on `set_fact` prevents the variable value from appearing in verbose output but does not affect the variable's availability to subsequent tasks.
   - The `git pull --ff-only` task (line 117) does not use `_obsidian_auth_url` directly, but git error messages could theoretically include the remote URL. This is a minor edge case not addressed in this story.
 ---
+
+## 2026-02-23 - US-008: Add gateway restart trap to backup.sh
+Thread:
+Run: 20260222-233409-74305 (iteration 6)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-6.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-6.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: d1755e1 Add gateway restart trap to backup.sh
+- Post-commit status: clean (only PRD JSON and ralph temp files remain)
+- Verification:
+  - Command: bash -n scripts/backup.sh -> PASS (syntax check)
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing openclaw install task failure in check mode, unrelated to backup.sh)
+  - Command: ./scripts/verify.sh -> SKIPPED (hung on SSH connectivity, unrelated to backup.sh)
+- Files changed:
+  - scripts/backup.sh
+- **What was implemented:**
+  - Added a `cleanup()` function with `trap cleanup EXIT` that restarts the gateway via SSH when `STOPPED=true`. The trap handles SSH failures gracefully by printing a warning with the manual restart command instead of failing hard.
+  - Moved `STOPPED=false` initialization before the trap definition (previously in the else branch).
+  - Removed the manual restart block at the end of the script (lines 119-123) since the EXIT trap handles both success and failure paths.
+  - Pattern follows `get-telegram-id.sh` cleanup trap exactly: `ssh ... && echo "success" || echo "WARNING: ..."`.
+- **Learnings for future iterations:**
+  - `systemctl --user start` on an already-running service is a no-op, making the trap safe for both success and failure paths.
+  - Bash EXIT traps fire regardless of exit reason (normal completion, `set -e` failure, signals), making them ideal for cleanup.
+  - The `|| echo "WARNING..."` pattern in the trap prevents SSH failures from masking the original error that triggered the trap.
+---
