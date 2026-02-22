@@ -207,7 +207,7 @@ function refreshToken() {
     const body = JSON.stringify({
       grant_type: 'refresh_token',
       refresh_token: tokens.refresh_token,
-      client_id: 'DRivsnm2Mu42T3KOpqdL9p3q9ByGaHfy',
+      client_id: '{{ openclaw_mcp_adapter.codex_oauth_client_id }}',
     });
 
     const req = https.request(REFRESH_URL, {

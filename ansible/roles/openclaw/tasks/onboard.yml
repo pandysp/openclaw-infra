@@ -4,54 +4,55 @@
     path: /home/ubuntu/.openclaw/openclaw.json
   register: openclaw_config
 
-- name: Write setup token to temp file
-  ansible.builtin.copy:
-    content: "{{ claude_setup_token }}"
-    dest: /tmp/ansible-setup-token
-    mode: "0600"
-  no_log: true
+- name: Onboard OpenClaw with setup token
   when: not openclaw_config.stat.exists
+  block:
+    - name: Write setup token to temp file
+      ansible.builtin.copy:
+        content: "{{ claude_setup_token }}"
+        dest: /tmp/ansible-setup-token
+        mode: "0600"
+      no_log: true
 
-- name: Run OpenClaw onboarding
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    CLAUDE_SETUP_TOKEN=$(cat /tmp/ansible-setup-token)
-    ONBOARD_OUTPUT=$(openclaw onboard --non-interactive --accept-risk \
-        --mode local \
-        --auth-choice token \
-        --token "$CLAUDE_SETUP_TOKEN" \
-        --token-provider anthropic \
-        --gateway-port 18789 \
-        --gateway-bind loopback \
-        --skip-daemon \
-        --skip-skills 2>&1) || ONBOARD_EXIT=$?
-    if [ -n "${ONBOARD_EXIT:-}" ] && [ "$ONBOARD_EXIT" -ne 0 ]; then
-        if echo "$ONBOARD_OUTPUT" | grep -q "gateway closed"; then
-            echo "Note: Ignoring expected 'gateway closed' error"
-        else
-            echo "ERROR: OpenClaw onboarding failed with exit code $ONBOARD_EXIT"
+    - name: Run OpenClaw onboarding
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        CLAUDE_SETUP_TOKEN=$(cat /tmp/ansible-setup-token)
+        ONBOARD_OUTPUT=$(openclaw onboard --non-interactive --accept-risk \
+            --mode local \
+            --auth-choice token \
+            --token "$CLAUDE_SETUP_TOKEN" \
+            --token-provider anthropic \
+            --gateway-port 18789 \
+            --gateway-bind loopback \
+            --skip-daemon \
+            --skip-skills 2>&1) || ONBOARD_EXIT=$?
+        if [ -n "${ONBOARD_EXIT:-}" ] && [ "$ONBOARD_EXIT" -ne 0 ]; then
+            if echo "$ONBOARD_OUTPUT" | grep -q "gateway closed"; then
+                echo "Note: Ignoring expected 'gateway closed' error"
+            else
+                echo "ERROR: OpenClaw onboarding failed with exit code $ONBOARD_EXIT"
+                echo "$ONBOARD_OUTPUT"
+                exit 1
+            fi
+        fi
+        if [ ! -f ~/.openclaw/openclaw.json ]; then
+            echo "ERROR: Onboarding failed - config file not created"
             echo "$ONBOARD_OUTPUT"
             exit 1
         fi
-    fi
-    if [ ! -f ~/.openclaw/openclaw.json ]; then
-        echo "ERROR: Onboarding failed - config file not created"
-        echo "$ONBOARD_OUTPUT"
-        exit 1
-    fi
-  args:
-    executable: /bin/bash
-  no_log: true
-  when: not openclaw_config.stat.exists
+      args:
+        executable: /bin/bash
+      no_log: true
+
+  always:
+    - name: Clean up setup token
+      ansible.builtin.file:
+        path: /tmp/ansible-setup-token
+        state: absent
 
 - name: Restrict .openclaw directory permissions
   ansible.builtin.file:
     path: /home/ubuntu/.openclaw
     mode: "0700"
-
-- name: Clean up setup token
-  ansible.builtin.file:
-    path: /tmp/ansible-setup-token
-    state: absent
-  when: not openclaw_config.stat.exists

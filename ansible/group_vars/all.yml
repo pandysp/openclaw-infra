@@ -138,6 +138,7 @@ openclaw_mcp_adapter:
   codex_version: "0.98.0"        # Pin for reproducibility; update intentionally
   codex_memory_limit: "2g"       # Prevent runaway Codex from exhausting VPS RAM
   codex_proxy_port: 8787         # Port for the credential-injecting reverse proxy
+  codex_oauth_client_id: "DRivsnm2Mu42T3KOpqdL9p3q9ByGaHfy"  # Codex OAuth client_id for token refresh
   # Claude Code settings
   claude_code_docker_image: "claude-code-mcp:latest"
   claude_code_version: "2.1.38"     # Pin @anthropic-ai/claude-code CLI for reproducibility

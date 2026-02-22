@@ -103,3 +103,19 @@
     value: "1"
     state: present
     sysctl_set: true
+
+# --- Cloud-init secret cleanup ---
+# Cloud-init logs and user-data cache may contain the Tailscale auth key.
+# Shred them on every provision run to limit exposure window.
+
+- name: Shred cloud-init log containing secrets
+  ansible.builtin.shell: shred -u /var/log/cloud-init-openclaw.log 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Shred cached user-data files containing secrets
+  ansible.builtin.shell: shred -u /var/lib/cloud/instances/*/user-data.txt 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false

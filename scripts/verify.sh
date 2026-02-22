@@ -257,7 +257,4 @@ echo "════════════════════════�
 echo ""
 echo "Access your OpenClaw instance at:"
 echo "  https://$FULL_HOSTNAME/"
-echo ""
-echo "SECURITY: Clean up the cloud-init log (contains secrets):"
-echo "  ssh ubuntu@$FULL_HOSTNAME 'sudo shred -u /var/log/cloud-init-openclaw.log'"
 echo "═══════════════════════════════════════════════════════════════════"

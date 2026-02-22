@@ -163,33 +163,52 @@ if [ -f "$CODEX_AUTH_FILE" ]; then
 fi
 echo "  codex_auth: $([ -n "$codex_auth_json" ] && echo "found (~/.codex/auth.json)" || echo "skipped (run 'codex login' to enable)")"
 
-# Write secrets to temp YAML file
+# Write secrets to temp YAML file using Python for safe escaping
 SECRETS_FILE="$SECRETS_DIR/secrets.yml"
-cat > "$SECRETS_FILE" <<EOF
----
-gateway_token: "$(echo "$gateway_token" | sed 's/"/\\"/g')"
-claude_setup_token: "$(echo "$claude_setup_token" | sed 's/"/\\"/g')"
-telegram_bot_token: "$(echo "$telegram_bot_token" | sed 's/"/\\"/g')"
-telegram_user_id: "$telegram_user_id"
-telegram_manon_user_id: "$telegram_manon_user_id"
-telegram_group_id: "$telegram_group_id"
-telegram_henning_user_id: "$telegram_henning_user_id"
-telegram_ph_group_id: "$telegram_ph_group_id"
-workspace_repo_url: "$workspace_repo_url"
-xai_api_key: "$(echo "$xai_api_key" | sed 's/"/\\"/g')"
-workspace_manon_repo_url: "$workspace_manon_repo_url"
-workspace_tl_repo_url: "$workspace_tl_repo_url"
-workspace_henning_repo_url: "$workspace_henning_repo_url"
-workspace_ph_repo_url: "$workspace_ph_repo_url"
-github_token: "$(echo "$github_token" | sed 's/"/\\"/g')"
-github_token_manon: "$(echo "$github_token_manon" | sed 's/"/\\"/g')"
-github_token_tl: "$(echo "$github_token_tl" | sed 's/"/\\"/g')"
-github_token_henning: "$(echo "$github_token_henning" | sed 's/"/\\"/g')"
-github_token_ph: "$(echo "$github_token_ph" | sed 's/"/\\"/g')"
-obsidian_andy_vault_repo_url: "$obsidian_andy_vault_repo_url"
-obsidian_manon_vault_repo_url: "$obsidian_manon_vault_repo_url"
-obsidian_tl_vault_repo_url: "$obsidian_tl_vault_repo_url"
-EOF
+env \
+  _S_GATEWAY_TOKEN="$gateway_token" \
+  _S_CLAUDE_SETUP_TOKEN="$claude_setup_token" \
+  _S_TELEGRAM_BOT_TOKEN="$telegram_bot_token" \
+  _S_TELEGRAM_USER_ID="$telegram_user_id" \
+  _S_TELEGRAM_MANON_USER_ID="$telegram_manon_user_id" \
+  _S_TELEGRAM_GROUP_ID="$telegram_group_id" \
+  _S_TELEGRAM_HENNING_USER_ID="$telegram_henning_user_id" \
+  _S_TELEGRAM_PH_GROUP_ID="$telegram_ph_group_id" \
+  _S_WORKSPACE_REPO_URL="$workspace_repo_url" \
+  _S_XAI_API_KEY="$xai_api_key" \
+  _S_WORKSPACE_MANON_REPO_URL="$workspace_manon_repo_url" \
+  _S_WORKSPACE_TL_REPO_URL="$workspace_tl_repo_url" \
+  _S_WORKSPACE_HENNING_REPO_URL="$workspace_henning_repo_url" \
+  _S_WORKSPACE_PH_REPO_URL="$workspace_ph_repo_url" \
+  _S_GITHUB_TOKEN="$github_token" \
+  _S_GITHUB_TOKEN_MANON="$github_token_manon" \
+  _S_GITHUB_TOKEN_TL="$github_token_tl" \
+  _S_GITHUB_TOKEN_HENNING="$github_token_henning" \
+  _S_GITHUB_TOKEN_PH="$github_token_ph" \
+  _S_OBSIDIAN_ANDY_VAULT_REPO_URL="$obsidian_andy_vault_repo_url" \
+  _S_OBSIDIAN_MANON_VAULT_REPO_URL="$obsidian_manon_vault_repo_url" \
+  _S_OBSIDIAN_TL_VAULT_REPO_URL="$obsidian_tl_vault_repo_url" \
+  python3 -c "
+import json, sys, os
+# json.dumps() safely quotes strings for YAML (handles quotes, backslashes, special chars)
+keys = [
+    'gateway_token', 'claude_setup_token', 'telegram_bot_token',
+    'telegram_user_id', 'telegram_manon_user_id', 'telegram_group_id',
+    'telegram_henning_user_id', 'telegram_ph_group_id',
+    'workspace_repo_url', 'xai_api_key',
+    'workspace_manon_repo_url', 'workspace_tl_repo_url',
+    'workspace_henning_repo_url', 'workspace_ph_repo_url',
+    'github_token', 'github_token_manon', 'github_token_tl',
+    'github_token_henning', 'github_token_ph',
+    'obsidian_andy_vault_repo_url', 'obsidian_manon_vault_repo_url',
+    'obsidian_tl_vault_repo_url',
+]
+with open(sys.argv[1], 'w') as f:
+    f.write('---\n')
+    for k in keys:
+        v = os.environ['_S_' + k.upper()]
+        f.write(f'{k}: {json.dumps(v)}\n')
+" "$SECRETS_FILE"
 
 # Append deploy keys (block scalar when non-empty, explicit empty string otherwise)
 append_deploy_key() {
