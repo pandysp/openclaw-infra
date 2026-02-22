@@ -1,0 +1,60 @@
+---
+# Patch for upstream bug #18573: heartbeat delivery to Telegram groups
+# falls back to the default user's DM because resolveHeartbeatSenderId()
+# returns allowList[0] when the group ID doesn't match allowFrom.
+# Fix: prefer candidates[0] (deliveryTo) over allowList fallback.
+# See docs/HEARTBEAT-GROUP-DELIVERY-FIX.md for full details.
+# Remove when upstream #18573 is fixed.
+
+- name: Find resolveHeartbeatSenderId files to patch
+  ansible.builtin.shell: |
+    grep -rl 'function resolveHeartbeatSenderId' \
+      /home/ubuntu/.npm-global/lib/node_modules/openclaw/dist/ \
+      --include='*.js' 2>/dev/null || true
+  register: heartbeat_patch_files
+  changed_when: false
+
+- name: Check if patch is needed
+  ansible.builtin.shell: |
+    for f in {{ heartbeat_patch_files.stdout_lines | join(' ') }}; do
+      if grep -q 'if (allowList.length > 0) return allowList\[0\];' "$f" 2>/dev/null; then
+        echo "NEEDS_PATCH: $f"
+      fi
+    done
+  register: heartbeat_patch_check
+  changed_when: false
+  when: heartbeat_patch_files.stdout | length > 0
+
+- name: Apply heartbeat group delivery patch
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for f in {{ heartbeat_patch_files.stdout_lines | join(' ') }}; do
+      if grep -q 'if (allowList.length > 0) return allowList\[0\];' "$f" 2>/dev/null; then
+        cp "$f" "${f}.bak"
+        sed -i 's|if (allowList.length > 0) return allowList\[0\];|if (allowList.length > 0) return candidates[0] ?? allowList[0];|' "$f"
+        echo "Patched: $f"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: heartbeat_patch_result
+  changed_when: "'Patched' in heartbeat_patch_result.stdout"
+  when:
+    - heartbeat_patch_files.stdout | length > 0
+    - heartbeat_patch_check.stdout is defined
+    - "'NEEDS_PATCH' in heartbeat_patch_check.stdout"
+  notify: restart openclaw-gateway
+
+- name: Verify heartbeat patch applied
+  ansible.builtin.shell: |
+    for f in {{ heartbeat_patch_files.stdout_lines | join(' ') }}; do
+      if grep -q 'return candidates\[0\] ?? allowList\[0\]' "$f" 2>/dev/null; then
+        echo "OK: $f"
+      else
+        echo "MISSING: $f"
+      fi
+    done
+  register: heartbeat_patch_verify
+  changed_when: false
+  failed_when: "'MISSING' in heartbeat_patch_verify.stdout"
+  when: heartbeat_patch_files.stdout | length > 0

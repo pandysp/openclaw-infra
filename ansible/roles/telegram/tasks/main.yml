@@ -5,6 +5,9 @@
 - name: Configure Telegram bindings
   ansible.builtin.include_tasks: bindings.yml
 
+- name: Fix stale heartbeat session delivery targets
+  ansible.builtin.include_tasks: session-cleanup.yml
+
 - name: Configure cron jobs
   ansible.builtin.include_tasks: cron.yml
   when: >-
