@@ -1069,7 +1069,6 @@
       args:
         executable: /bin/bash
       changed_when: false
-      failed_when: false
       register: pi_auth_smoke
       when: pi_mcp_image_build is changed
 
@@ -1134,10 +1133,12 @@
       register: gateway_crash_logs_pi
       failed_when: false
 
-    - name: Report gateway failure with Pi MCP diagnostic context
+    - name: Report Pi MCP build or smoke test failure with diagnostic context
       ansible.builtin.fail:
         msg: |
-          Gateway failed health check after Pi MCP image rebuild.
+          Pi MCP Docker image build or smoke test failed.
+          Pi auth smoke test stdout: {{ pi_auth_smoke.stdout | default('(did not run or not reached)') }}
+          Pi auth smoke test stderr: {{ pi_auth_smoke.stderr | default('(did not run or not reached)') }}
           Recent gateway logs:
           {{ gateway_crash_logs_pi.stdout | default('(no logs captured)') }}
           Manual recovery: ssh ubuntu@<host> 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 100'
