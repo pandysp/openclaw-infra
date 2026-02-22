@@ -47,6 +47,21 @@ echo ""
 # Create backup directory
 mkdir -p "$BACKUP_DIR"
 
+# Track whether we stopped the gateway (checked by cleanup trap)
+STOPPED=false
+
+# Ensure gateway is restarted even if script fails mid-backup
+cleanup() {
+    if [ "$STOPPED" = true ]; then
+        echo ""
+        echo "Restarting OpenClaw service..."
+        ssh "ubuntu@$FULL_HOSTNAME" "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway" && \
+            echo "Gateway restarted." || \
+            echo "WARNING: Failed to restart gateway. Run manually: ssh ubuntu@$FULL_HOSTNAME 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway'"
+    fi
+}
+trap cleanup EXIT
+
 # Stop service temporarily (optional - for consistent backup)
 read -p "Stop OpenClaw service during backup for consistency? [y/N] " -n 1 -r
 echo
@@ -54,8 +69,6 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Stopping OpenClaw service..."
     ssh "ubuntu@$FULL_HOSTNAME" "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user stop openclaw-gateway"
     STOPPED=true
-else
-    STOPPED=false
 fi
 
 # Create backup on server
@@ -115,12 +128,6 @@ scp "ubuntu@$FULL_HOSTNAME:/tmp/openclaw-backup.tar.gz" "$BACKUP_FILE"
 
 # Cleanup remote backup
 ssh "ubuntu@$FULL_HOSTNAME" "rm /tmp/openclaw-backup.tar.gz"
-
-# Restart service if stopped
-if [ "$STOPPED" = true ]; then
-    echo "Restarting OpenClaw service..."
-    ssh "ubuntu@$FULL_HOSTNAME" "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start openclaw-gateway"
-fi
 
 echo ""
 echo -e "${GREEN}Backup complete: $BACKUP_FILE${NC}"
