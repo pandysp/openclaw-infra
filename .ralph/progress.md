@@ -170,3 +170,36 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - The Codex/Claude Code build blocks follow the same rescue pattern: capture gateway logs, then fail with a diagnostic message. The Pi block was already structurally consistent but its auth smoke test was silently swallowed.
   - provision.sh --check --diff fails at openclaw install role (pre-existing) — the plugins role is never reached in --check mode
 ---
+
+## 2026-02-23T00:45 - US-006: Move sandbox containers to separate Docker network
+Thread:
+Run: 20260222-233409-74305 (iteration 4)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-4.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-4.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 810487e Move sandbox containers to separate Docker network from MCP proxy
+- Post-commit status: clean
+- Verification:
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing: OpenClaw 2026.2.21 version mismatch at openclaw role, unrelated to US-006)
+  - Command: ./scripts/provision.sh --check --diff --tags config -> PASS (ok=9 changed=0 failed=0)
+  - Command: ./scripts/verify.sh -> PASS (13/13 checks, exit 0)
+  - Command: ./scripts/provision.sh --tags config -> PASS (ok=15 changed=3 failed=0, deployed successfully)
+  - Command: ssh verify gateway active + config -> PASS (gateway active, agents.defaults.sandbox.docker.network = bridge)
+  - Command: docker ps --filter label=openclaw-role -> PASS (all 15 MCP containers on codex-proxy-net)
+- Files changed:
+  - ansible/group_vars/all.yml
+  - ansible/roles/docker/tasks/main.yml
+  - docs/SECURITY.md
+- **What was implemented:**
+  - Changed `openclaw_sandbox_docker_network` from `codex-proxy-net` to `bridge` in all.yml (line 67). This makes sandbox containers use the default Docker bridge network, isolating them from the MCP auth proxy.
+  - Updated docker role comment (docker/tasks/main.yml) to clarify codex-proxy-net is for MCP containers, not sandbox.
+  - Updated docs/SECURITY.md section 4 "Accepted risk" to document that sandbox containers are network-isolated from the `codex-proxy-net` network and cannot reach the credential-injecting proxy.
+  - CLAUDE.md and docs/SECURITY.md config blocks already showed `bridge` — the config was out of sync with the docs. This change fixes the config to match.
+  - MCP containers (Codex, Claude Code, Pi) remain on codex-proxy-net with proxy access — no changes needed.
+  - Gateway automatically removed stale sandbox containers and restarted to pick up the new network config.
+- **Learnings for future iterations:**
+  - The config role's "Remove stale sandbox containers after config change" task automatically handles container cleanup when sandbox Docker config changes — no manual intervention needed.
+  - CLAUDE.md and SECURITY.md already documented `bridge` as the sandbox network, but the actual config was `codex-proxy-net`. Always verify docs match actual config.
+  - provision.sh --check --diff with full tags still fails at openclaw install role version check — this is a persistent pre-existing issue in check mode.
+---
