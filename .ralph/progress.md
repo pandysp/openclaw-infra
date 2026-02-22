@@ -143,3 +143,30 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - The inventory script is invoked by Ansible, which captures stdout as the inventory JSON and shows stderr to the operator — correct use of print(..., file=sys.stderr) for diagnostics
   - Testing error paths with env PATH=/nonexistent is a clean way to simulate missing binaries without side effects
 ---
+
+## 2026-02-23T00:20 - US-005: Fix Pi MCP auth smoke test swallowing failures
+Thread:
+Run: 20260222-233409-74305 (iteration 3)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-3.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-3.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 6cec354 Fix Pi MCP auth smoke test swallowing failures
+- Post-commit status: clean
+- Verification:
+  - Command: yamllint -d relaxed ansible/roles/plugins/tasks/main.yml -> PASS (only pre-existing line-length warnings)
+  - Command: ansible-playbook --syntax-check ansible/playbook.yml -> PASS
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing: OpenClaw 2026.2.21 version mismatch at openclaw role, unrelated to US-005)
+- Files changed:
+  - ansible/roles/plugins/tasks/main.yml
+- **What was implemented:**
+  - Removed `failed_when: false` from the Pi auth smoke test task (line 1072) so auth validation failures now properly fail the Ansible play
+  - Updated rescue block failure message from "Gateway failed health check after Pi MCP image rebuild" to "Pi MCP Docker image build or smoke test failed" for accuracy
+  - Added Pi auth smoke test stdout/stderr output to rescue block diagnostics (with safe defaults for when the smoke test wasn't reached)
+  - Reviewed all other `failed_when: false` instances in the file: all are on image existence checks, migration cleanup, or inside rescue blocks — none are problematic smoke test swallowing
+- **Learnings for future iterations:**
+  - The Pi auth smoke test shell script uses `|| true` on `timeout 5 docker run` (line 1058) which is correct — timeout exits non-zero on expected expiry. The script's own exit logic handles success/failure based on output content.
+  - The shell script has three branches: success (exit 0), auth failure (exit 1), unexpected output (exit 0 with WARNING). The third branch is a soft landing that doesn't fail provisioning.
+  - The Codex/Claude Code build blocks follow the same rescue pattern: capture gateway logs, then fail with a diagnostic message. The Pi block was already structurally consistent but its auth smoke test was silently swallowed.
+  - provision.sh --check --diff fails at openclaw install role (pre-existing) — the plugins role is never reached in --check mode
+---
