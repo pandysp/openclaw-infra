@@ -687,7 +687,9 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 
 **Why bridge networking:** Sessions need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
 
-**What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach host-only services on localhost. It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
+**Network isolation:** MCP containers (Codex, Claude Code, Pi) run on a separate `codex-proxy-net` Docker network to access the credential-injecting proxy. Sandbox containers run on the default `bridge` network and cannot reach the proxy or obtain API tokens.
+
+**What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach the MCP credential proxy (different Docker network). It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
 
 **Custom image:** Built in two layers by the Ansible `sandbox` role: a base image (`openclaw-sandbox:trixie`) from `Dockerfile.base.j2`, then a custom image (`openclaw-sandbox-custom:latest`) from `Dockerfile.sandbox.j2` adding the dev toolchain. Neither image is pulled from a registry — both are built locally on the server. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 

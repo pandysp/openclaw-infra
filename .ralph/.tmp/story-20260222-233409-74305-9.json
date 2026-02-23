@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "total": 17,
+  "remaining": 8,
+  "quality_gates": [
+    "./scripts/provision.sh --check --diff",
+    "./scripts/verify.sh",
+    "Successful deployment via ./scripts/provision.sh"
+  ],
+  "id": "US-010",
+  "title": "Add early SSH exit to verify.sh"
+}
