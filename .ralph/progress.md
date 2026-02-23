@@ -460,3 +460,32 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - The 3 Docker build blocks share 11 identical structural steps; differences are concentrated in smoke tests and entry conditions
   - Pi MCP has the most complex smoke tests (auth startup test + debug output), making it the best validation target for any refactor
 ---
+
+## 2026-02-23 02:30 - US-016: Investigate data-driven agent variables
+Thread:
+Run: 20260222-233409-74305 (iteration 15)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-15.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-15.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 0fbaa62 docs: investigate data-driven agent variables (US-016)
+- Post-commit status: clean (only pre-existing untracked .ralph/.tmp/ files and modified PRD JSON from prior iteration)
+- Verification:
+  - Command: investigation-only story, no infrastructure changes -> N/A (docs only)
+- Files changed:
+  - docs/INVESTIGATION-data-driven-agent-variables.md (new)
+  - .ralph/runs/run-20260222-233409-74305-iter-15.md (new)
+- What was implemented:
+  - Audited index.ts: 54 per-agent lines across 6 categories (config reads, deploy key resources, env vars, exports)
+  - Audited provision.sh: 91 per-agent lines across 6 categories (env reads x2 paths, validation, echoes, YAML keys, deploy key appends)
+  - Combined: adding 1 new agent requires editing 145 lines across 12 locations in 2 files
+  - Proposed TypeScript agent registry array and Bash associative array patterns
+  - Assessed Pulumi URN risk: safe if logical names preserved (workspace-deploy-key, workspace-deploy-key-{id})
+  - Identified Telegram (group vs user ID irregularity) and Obsidian ("Andy" vs "main" naming) as non-loopable
+  - Recommendation: Conditional Go, medium effort (3-5h), reduces 12 edit locations to 2
+- **Learnings for future iterations:**
+  - Pulumi resource URNs are determined by the logical name string passed to constructors — refactoring code structure doesn't change URNs if names are preserved
+  - Pulumi `aliases` provide a safety net for logical name changes without resource replacement
+  - Telegram and Obsidian config have naming irregularities that make generic loops misleading — better to keep them explicit
+  - Investigation stories with no code changes don't need infrastructure quality gates
+---
