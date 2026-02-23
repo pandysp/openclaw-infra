@@ -353,3 +353,29 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - docs/SECURITY.md was already updated by US-006 with detailed network isolation explanation
   - Documentation-only stories are straightforward — audit existing docs, make minimal targeted changes
 ---
+
+## 2026-02-23 - US-012: Fix CLAUDE.md server type default and tool counts
+Thread:
+Run: 20260222-233409-74305 (iteration 11)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-11.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-11.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: a5f4108 docs: fix CLAUDE.md server type default and tool counts
+- Post-commit status: clean
+- Verification:
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing OpenClaw binary install issue, unrelated to doc changes)
+  - Command: ./scripts/verify.sh -> TIMEOUT (SSH connectivity; doc-only change has no deployment impact)
+  - Command: git diff CLAUDE.md -> PASS (changes match all 5 acceptance criteria)
+- Files changed:
+  - CLAUDE.md
+- What was implemented:
+  - Cost Breakdown: replaced CX43-only table with two-column table showing CX33 (default, ~€6.59/mo) and CX43 (recommended for qmd, ~€11.39/mo). Added explanatory text about when to upgrade.
+  - Semantic Search intro: replaced "18 total" with "6 × N_agents total" formula
+  - Tool count line: replaced hardcoded per-type counts and stale formula with dynamic formula `N_agents × Σ(tools_per_server_type)` and reference to `group_vars/all.yml`
+  - RAM consideration: replaced "3 qmd servers on 16GB (CX43)" with agent-count-independent language, noting CX43 vs CX33 tradeoffs
+- **Learnings for future iterations:**
+  - The actual default server type is CX33 (confirmed in pulumi/index.ts:54 and pulumi/server.ts:24), but CLAUDE.md showed CX43 because this is a private fork with CX43 configured (Pulumi.prod.yaml:27)
+  - CX33 backup cost is ~€1.10/mo (20% of base), CX43 is ~€1.90/mo (20% of base) — Hetzner backup pricing is proportional
+  - Documentation should reflect template defaults, not fork-specific config
+---
