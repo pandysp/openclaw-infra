@@ -150,7 +150,7 @@
     {
       "id": "US-006",
       "title": "Move sandbox containers to separate Docker network",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-005"
       ],
@@ -167,13 +167,13 @@
         "Update docs/SECURITY.md if it references the sandbox network configuration"
       ],
       "startedAt": "2026-02-22T23:16:46.518421+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-22T23:16:46.518611+00:00"
+      "completedAt": "2026-02-22T23:34:59.914805+00:00",
+      "updatedAt": "2026-02-22T23:34:59.914652+00:00"
     },
     {
       "id": "US-007",
       "title": "Fix Obsidian PAT exposure in git remote URLs",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-006"
       ],
@@ -184,12 +184,15 @@
         "Example: running ./scripts/provision.sh --tags obsidian -vvv does not show any GitHub PAT in the output",
         "Negative case: the clone and pull operations still work correctly with the PAT-embedded URL",
         "Add a comment noting that PATs persist in .git/config on disk and are accessible within the workspace directory"
-      ]
+      ],
+      "startedAt": "2026-02-22T23:35:02.022389+00:00",
+      "completedAt": "2026-02-22T23:46:20.789538+00:00",
+      "updatedAt": "2026-02-22T23:46:20.786464+00:00"
     },
     {
       "id": "US-008",
       "title": "Add gateway restart trap to backup.sh",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-007"
       ],
@@ -200,12 +203,15 @@
         "Example: backup.sh fails mid-backup due to disk space -> gateway is restarted automatically before the script exits",
         "Negative case: backup.sh completes successfully -> gateway is restarted as part of normal flow (trap is harmless if gateway is already running)",
         "The trap handles the case where SSH itself is broken (trap should not fail hard if the restart SSH command fails)"
-      ]
+      ],
+      "startedAt": "2026-02-22T23:46:23.851573+00:00",
+      "completedAt": "2026-02-22T23:55:06.045031+00:00",
+      "updatedAt": "2026-02-22T23:55:06.044821+00:00"
     },
     {
       "id": "US-009",
       "title": "Add error logging to dynamic inventory failures",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-008"
       ],
@@ -218,7 +224,10 @@
         "Example: Tailscale timeout -> stderr shows 'Inventory error: tailscale status --json timed out after Ns'",
         "Negative case: all commands succeed -> no error messages are printed, inventory returns correctly",
         "This is complementary to US-004 (which adds non-zero exit on empty inventory). US-004 handles the exit code, this story handles the diagnostic messages"
-      ]
+      ],
+      "startedAt": "2026-02-22T23:55:08.141274+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-22T23:55:08.141410+00:00"
     },
     {
       "id": "US-010",

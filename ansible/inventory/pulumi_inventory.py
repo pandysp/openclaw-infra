@@ -28,7 +28,7 @@ def run(cmd):
         print(f"Inventory error: '{cmd_str}' timed out after 15s", file=sys.stderr)
         return None
     except FileNotFoundError:
-        print(f"Inventory error: '{cmd[0]}' not found. Is it installed and on PATH?", file=sys.stderr)
+        print(f"Inventory error: {cmd[0]} not found (FileNotFoundError). Is {cmd[0]} installed and on PATH?", file=sys.stderr)
         return None
 
 
