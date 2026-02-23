@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "total": 17,
+  "remaining": 1,
+  "quality_gates": [
+    "./scripts/provision.sh --check --diff",
+    "./scripts/verify.sh",
+    "Successful deployment via ./scripts/provision.sh"
+  ],
+  "id": "US-017",
+  "title": "Investigate handler consolidation"
+}

@@ -309,7 +309,7 @@
     {
       "id": "US-014",
       "title": "Fix MEMORY.md stale facts",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-013"
       ],
@@ -322,13 +322,13 @@
         "Negative case: no facts in MEMORY.md contradict the current codebase after this story is complete"
       ],
       "startedAt": "2026-02-23T00:43:13.025709+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-23T00:43:13.025852+00:00"
+      "completedAt": "2026-02-23T00:48:55.886757+00:00",
+      "updatedAt": "2026-02-23T00:48:55.886614+00:00"
     },
     {
       "id": "US-015",
       "title": "Investigate reusable Docker image build task",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-014"
       ],
@@ -340,12 +340,15 @@
         "Provide an effort estimate (small/medium/large) and a go/no-go recommendation",
         "Output is a brief document (can be inline in the story completion notes or a file in docs/)",
         "Negative case: if parameterization is not feasible (e.g., too many differences), explain why and close the story"
-      ]
+      ],
+      "startedAt": "2026-02-23T00:48:58.012685+00:00",
+      "completedAt": "2026-02-23T01:12:34.171928+00:00",
+      "updatedAt": "2026-02-23T01:12:34.171576+00:00"
     },
     {
       "id": "US-016",
       "title": "Investigate data-driven agent variables",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-015"
       ],
@@ -357,12 +360,15 @@
         "Provide an effort estimate and go/no-go recommendation",
         "Output is a brief investigation document",
         "Negative case: if Pulumi resource URN changes would destroy existing deploy keys, recommend against or propose a migration path"
-      ]
+      ],
+      "startedAt": "2026-02-23T01:12:36.345913+00:00",
+      "completedAt": "2026-02-23T01:17:45.373011+00:00",
+      "updatedAt": "2026-02-23T01:17:45.372868+00:00"
     },
     {
       "id": "US-017",
       "title": "Investigate handler consolidation",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-016"
       ],
@@ -374,7 +380,10 @@
         "Provide an effort estimate and go/no-go recommendation",
         "Output is a brief investigation document",
         "Negative case: if Ansible handler scoping prevents play-level handlers from working with all roles, explain the limitation"
-      ]
+      ],
+      "startedAt": "2026-02-23T02:21:02.246458+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-23T02:21:02.246640+00:00"
     }
   ]
 }
