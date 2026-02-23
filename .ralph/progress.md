@@ -253,3 +253,28 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - Bash EXIT traps fire regardless of exit reason (normal completion, `set -e` failure, signals), making them ideal for cleanup.
   - The `|| echo "WARNING..."` pattern in the trap prevents SSH failures from masking the original error that triggered the trap.
 ---
+
+## 2026-02-23T01:15 - US-009: Add error logging to dynamic inventory failures
+Thread:
+Run: 20260222-233409-74305 (iteration 7)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-7.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-7.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 036c326 Add error logging to dynamic inventory failures
+- Post-commit status: clean
+- Verification:
+  - Command: python3 -c "import py_compile; py_compile.compile(...)" -> PASS (syntax check)
+  - Command: python3 ansible/inventory/pulumi_inventory.py --list -> PASS (correct JSON, no stderr)
+  - Command: ./scripts/provision.sh --check --diff --tags config -> PASS (ok=9 changed=0 failed=0)
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing: OpenClaw 2026.2.21 install failure, unrelated)
+  - Command: ./scripts/verify.sh -> PASS (exit 0)
+- Files changed:
+  - ansible/inventory/pulumi_inventory.py
+- **What was implemented:**
+  - US-004 (iteration 2) already added the three distinct error handlers (CalledProcessError, TimeoutExpired, FileNotFoundError) with diagnostic messages to stderr. This iteration refined the FileNotFoundError message to include `(FileNotFoundError)` exception type and use the specific command name (e.g., `pulumi`, `tailscale`) instead of generic "it", matching the acceptance criteria examples.
+  - All 7 acceptance criteria verified: distinct messages per exception type, specific command names, exit code + stderr in CalledProcessError, timeout duration in TimeoutExpired, no error output on success, complementary to US-004's exit code handling.
+- **Learnings for future iterations:**
+  - US-004 and US-009 overlap significantly — US-004's implementation went beyond its scope and also implemented most of US-009's diagnostic messages. The only remaining gap was the FileNotFoundError message format.
+  - When a story says "complementary to" another, check the other story's implementation first — the work may already be done.
+---
