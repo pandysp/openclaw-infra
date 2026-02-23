@@ -326,3 +326,30 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - The provision.sh --check --diff quality gate has a pre-existing failure (OpenClaw binary install) that is unrelated to script changes
   - verify.sh is a local script not deployed by Ansible, so provision.sh changes don't affect it
 ---
+
+## 2026-02-23 - US-011: Fix CLAUDE.md sandbox network documentation
+Thread:
+Run: 20260222-233409-74305 (iteration 10)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-10.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-10.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 22c01d8 docs: clarify sandbox vs MCP container network isolation in CLAUDE.md
+- Post-commit status: clean (only .agents/tasks/prd-review-action-plan.json modified — managed by ralph loop)
+- Verification:
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing OpenClaw binary install issue, unrelated to doc changes)
+  - Command: ./scripts/verify.sh -> SKIPPED (requires SSH to VPS; doc-only change has no deployment impact)
+  - Command: git diff CLAUDE.md -> PASS (changes match acceptance criteria)
+- Files changed:
+  - CLAUDE.md
+- What was implemented:
+  - Added "Network isolation" paragraph in Sandboxing section explaining MCP containers (Codex, Claude Code, Pi) run on codex-proxy-net while sandbox containers run on default bridge network
+  - Updated "What the sandbox protects against" to specifically mention credential proxy isolation (replacing vague "host-only services on localhost")
+  - Config block already showed bridge (correct since US-006)
+  - "Why bridge networking" paragraph already accurately explained outbound internet via Docker NAT
+  - Verified docs/SECURITY.md already had the network isolation detail (updated by US-006)
+- **Learnings for future iterations:**
+  - CLAUDE.md config block was already correct (bridge) — only the prose explanations needed updating
+  - docs/SECURITY.md was already updated by US-006 with detailed network isolation explanation
+  - Documentation-only stories are straightforward — audit existing docs, make minimal targeted changes
+---
