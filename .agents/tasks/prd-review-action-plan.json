@@ -225,9 +225,9 @@
         "Negative case: all commands succeed -> no error messages are printed, inventory returns correctly",
         "This is complementary to US-004 (which adds non-zero exit on empty inventory). US-004 handles the exit code, this story handles the diagnostic messages"
       ],
-      "startedAt": "2026-02-22T23:55:08.141274+00:00",
+      "startedAt": "2026-02-23T00:08:49.332218+00:00",
       "completedAt": null,
-      "updatedAt": "2026-02-22T23:55:08.141410+00:00"
+      "updatedAt": "2026-02-23T00:08:49.332371+00:00"
     },
     {
       "id": "US-010",
