@@ -300,12 +300,14 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 
 ## Cost Breakdown
 
-| Resource | Cost |
-|----------|------|
-| Hetzner CX43 (x86, 8 vCPU, 16GB) | ~€9.49/mo |
-| Hetzner Backups | ~€1.90/mo |
-| Tailscale | Free (personal) |
-| **Total** | **~€11.39/mo** |
+Default server type is **CX33** (4 vCPU, 8 GB RAM). Upgrade to **CX43** (8 vCPU, 16 GB RAM) when qmd semantic search is enabled — `deep_search` loads ~5.8 GB of GGUF models and needs the extra headroom. Change with `pulumi config set serverType cx43`.
+
+| Resource | CX33 (default) | CX43 (recommended for qmd) |
+|----------|---------------|---------------------------|
+| Hetzner VPS | ~€5.49/mo | ~€9.49/mo |
+| Hetzner Backups | ~€1.10/mo | ~€1.90/mo |
+| Tailscale | Free (personal) | Free (personal) |
+| **Total** | **~€6.59/mo** | **~€11.39/mo** |
 
 ## Secrets Reference
 
@@ -794,7 +796,7 @@ tail -f ~/.openclaw/logs/node.log
 
 ## Semantic Search (qmd)
 
-Each agent has a **qmd** instance providing local hybrid search (BM25 + vector + LLM reranking) over their workspace. Uses GGUF models (~1.5GB, auto-downloaded) — no API keys needed. Replaces the built-in `memorySearch` with 6 MCP tools per agent (18 total).
+Each agent has a **qmd** instance providing local hybrid search (BM25 + vector + LLM reranking) over their workspace. Uses GGUF models (~1.5GB, auto-downloaded) — no API keys needed. Replaces the built-in `memorySearch` with 6 MCP tools per agent (6 × N_agents total).
 
 **Collections per agent:**
 - `workspace` — all `.md`, `.txt`, `.csv` files in the workspace
@@ -807,7 +809,7 @@ Each agent has a **qmd** instance providing local hybrid search (BM25 + vector +
 - Embedding is serialized across agents via `flock` (memory-intensive: ~1.5GB model)
 - Initial sync runs on service startup
 
-**Tool count:** 6 tools per agent per server type. Formula: `N_agents × N_server_types × tools_per_type`. With default server types (github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6, node-exec: variable).
+**Tool count:** Depends on agent count and configured MCP server types. Formula: `N_agents × Σ(tools_per_server_type)`. Each server type contributes a fixed number of tools per agent (e.g., github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6). Check `openclaw_mcp_server_types` in `group_vars/all.yml` for the active set.
 
 **Operations:**
 ```bash
@@ -824,7 +826,7 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u qmd
 ssh ubuntu@openclaw-vps 'openclaw config get plugins.entries.openclaw-mcp-adapter.config' | jq '.servers[] | select(.name | startswith("qmd"))'
 ```
 
-**RAM consideration:** 3 qmd servers on 16GB (CX43). Models load on-demand per query, not resident. `deep_search` loads ~5.8GB of GGUF models — 16GB provides comfortable headroom. A 2GB swap is configured as defense-in-depth.
+**RAM consideration:** Models load on-demand per query, not resident. `deep_search` loads ~5.8GB of GGUF models — CX43 (16 GB) provides comfortable headroom for multiple agents. A 2GB swap is configured as defense-in-depth. CX33 (8 GB) works for single-agent setups but may OOM under concurrent `deep_search`.
 
 ## Troubleshooting
 
