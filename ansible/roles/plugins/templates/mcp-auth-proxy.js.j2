@@ -97,7 +97,8 @@ function getAccessToken() {
 function invalidateToken() {
   cachedToken = null;
   tokenMtime = 0;
-  lastSuccessfulTokenRead = 0;
+  // Preserve lastSuccessfulTokenRead so staleness tracking remains accurate
+  // after a 401-triggered invalidation + successful re-read from disk.
 }
 
 // Watch auth.json for external changes (e.g. reprovision)

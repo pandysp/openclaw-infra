@@ -37,7 +37,7 @@ git merge upstream/main
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────────────┐
-│  Your Machine   │     │         Hetzner VPS (~€11.39/mo)    │
+│  Your Machine   │     │         Hetzner VPS (~€6.59/mo)     │
 │  (Tailscale)    │────▶│                                     │
 │                 │     │  ┌─────────────────────────────┐    │
 │  No public IP   │     │  │   OpenClaw Gateway          │    │

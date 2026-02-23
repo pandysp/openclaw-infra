@@ -368,7 +368,7 @@
     {
       "id": "US-017",
       "title": "Investigate handler consolidation",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-016"
       ],
@@ -382,8 +382,8 @@
         "Negative case: if Ansible handler scoping prevents play-level handlers from working with all roles, explain the limitation"
       ],
       "startedAt": "2026-02-23T02:21:02.246458+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-23T02:21:02.246640+00:00"
+      "completedAt": "2026-02-23T02:41:24.499171+00:00",
+      "updatedAt": "2026-02-23T02:41:24.499053+00:00"
     }
   ]
 }

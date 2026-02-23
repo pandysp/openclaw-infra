@@ -16,7 +16,7 @@ The `restart openclaw-gateway` handler is duplicated across 6 role handler files
 |---|------|-------------|----------------------|-------------------|
 | 1 | config | `roles/config/handlers/main.yml` | None | Yes (3 tasks) |
 | 2 | agents | `roles/agents/handlers/main.yml` | None | Yes (2 tasks) |
-| 3 | telegram | `roles/telegram/handlers/main.yml` | None | Yes (3 tasks in bindings.yml, session-cleanup.yml, channel.yml) |
+| 3 | telegram | `roles/telegram/handlers/main.yml` | None | Yes (4 tasks: 1 in bindings.yml, 1 in session-cleanup.yml, 2 in channel.yml) |
 | 4 | openclaw | `roles/openclaw/handlers/main.yml` | None | Yes (1 task in patch-heartbeat-group-fix.yml) |
 | 5 | plugins | `roles/plugins/handlers/main.yml` | `restart mcp-auth-proxy` | Yes (4 tasks) |
 | 6 | qmd | `roles/qmd/handlers/main.yml` | `reload user systemd`, `enable qmd-watch services` | **No** (dead handler) |

@@ -1044,6 +1044,9 @@
         set -euo pipefail
         # Verify the server starts and routes through the proxy.
         # With proxy pattern, the real token is injected server-side.
+        # Use set +e around timeout: exit code 124 means the timeout killed the
+        # process (expected for a long-running MCP server). Anything else is an error.
+        set +e
         RESULT=$(echo "" | timeout 5 docker run --rm -i \
           --cap-drop ALL --security-opt no-new-privileges --read-only \
           --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
@@ -1055,7 +1058,14 @@
           -e PI_MCP_SANDBOX=false \
           -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
           "{{ openclaw_mcp_adapter.pi_mcp_docker_image }}" \
-          2>&1 || true)
+          2>&1)
+        EXIT_CODE=$?
+        set -e
+        if [ "$EXIT_CODE" -ne 0 ] && [ "$EXIT_CODE" -ne 124 ]; then
+            echo "FAIL: docker run exited unexpectedly with code $EXIT_CODE"
+            echo "$RESULT" | tail -10
+            exit 1
+        fi
         if echo "$RESULT" | grep -q "pi-mcp-server started"; then
             echo "auth-smoke-ok: server initialized via proxy"
         elif echo "$RESULT" | grep -qi "invalid.*api.*key\|unauthorized\|authentication"; then
@@ -1063,8 +1073,9 @@
             echo "$RESULT" | tail -10
             exit 1
         else
-            echo "WARNING: Unexpected startup output:"
+            echo "FAIL: Unexpected startup output (server did not confirm initialization)"
             echo "$RESULT" | tail -10
+            exit 1
         fi
       args:
         executable: /bin/bash
