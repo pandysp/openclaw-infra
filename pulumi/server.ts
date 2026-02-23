@@ -64,8 +64,8 @@ export function createServer(config: ServerConfig): ServerResult {
         },
         // Enable backups for disaster recovery
         backups: true,
-        // Use cloud-init (included in user-data)
-        // No need for additional provisioning
+        // Cloud-init bootstraps Tailscale only (~1 min).
+        // All other configuration is handled by Ansible (triggered by index.ts).
     });
 
     return {
