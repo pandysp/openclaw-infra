@@ -489,3 +489,36 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - Telegram and Obsidian config have naming irregularities that make generic loops misleading — better to keep them explicit
   - Investigation stories with no code changes don't need infrastructure quality gates
 ---
+
+## 2026-02-23 - US-017: Investigate handler consolidation
+Thread:
+Run: 20260222-233409-74305 (iteration 22)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-22.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-22.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: d25d3c1 docs: investigate handler consolidation (US-017)
+- Post-commit status: clean (pending progress entry commit)
+- Verification:
+  - Command: investigation-only story, no infrastructure changes -> N/A (docs only)
+  - Manual verification: confirmed only docs/investigation-handler-consolidation.md was added, no code files touched
+- Files changed:
+  - docs/investigation-handler-consolidation.md (new)
+- What was implemented:
+  - Audited all 7 handler files across ansible/roles/*/handlers/main.yml
+  - Found 6 roles (not 5 as stated in story) with identical `restart openclaw-gateway` handler: config, agents, telegram, openclaw, plugins, qmd
+  - Confirmed all 6 definitions are byte-identical (systemd restart, user scope, XDG_RUNTIME_DIR)
+  - Found qmd role defines the handler but never notifies it (dead code)
+  - Verified no `include_role` or `import_role` usage anywhere in the codebase (eliminates the main risk for handler scope issues)
+  - Verified no `meta/main.yml` role dependency files exist
+  - Researched Ansible handler scoping: handlers are play-scoped, not role-scoped; play-level handlers are accessible from all roles
+  - Documented 3 `meta: flush_handlers` usage points (telegram/cron.yml, plugins/main.yml x2) — consolidation doesn't affect flushing behavior
+  - Identified cleanup plan: 4 handler files removed entirely, 2 files retain role-specific handlers only
+  - Recommendation: GO — small effort (~7 file changes), low risk, reduces maintenance from 6 files to 1 location
+- **Learnings for future iterations:**
+  - Ansible handler scope is play-level, not role-level — role handlers are added to the global scope
+  - The story mentioned 5 duplicates but the actual count is 6 (config, agents, telegram, openclaw, plugins, qmd)
+  - qmd defines the restart handler but no task notifies it — dead code
+  - `meta: flush_handlers` flushes all pending handlers regardless of where they're defined, so consolidation is safe
+  - Investigation stories with no code changes don't need infrastructure quality gates (consistent with US-015, US-016)
+---
