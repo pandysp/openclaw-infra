@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "total": 17,
+  "remaining": 5,
+  "quality_gates": [
+    "./scripts/provision.sh --check --diff",
+    "./scripts/verify.sh",
+    "Successful deployment via ./scripts/provision.sh"
+  ],
+  "id": "US-013",
+  "title": "Fix server.ts misleading provisioning comment"
+}

@@ -211,7 +211,7 @@
     {
       "id": "US-009",
       "title": "Add error logging to dynamic inventory failures",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "US-008"
       ],
@@ -226,13 +226,13 @@
         "This is complementary to US-004 (which adds non-zero exit on empty inventory). US-004 handles the exit code, this story handles the diagnostic messages"
       ],
       "startedAt": "2026-02-23T00:08:49.332218+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-02-23T00:08:49.332371+00:00"
+      "completedAt": "2026-02-23T00:10:55.397409+00:00",
+      "updatedAt": "2026-02-23T00:10:55.397288+00:00"
     },
     {
       "id": "US-010",
       "title": "Add early SSH exit to verify.sh",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-009"
       ],
@@ -244,12 +244,15 @@
         "Example: SSH is unreachable -> output shows check 1 (Tailscale ping) result, then 'SSH connection failed \u2014 skipping 11 remote checks'",
         "Negative case: SSH works -> all 13 checks run as before with no behavioral change",
         "The script exit code reflects the SSH failure (non-zero)"
-      ]
+      ],
+      "startedAt": "2026-02-23T00:10:57.508522+00:00",
+      "completedAt": "2026-02-23T00:14:45.113878+00:00",
+      "updatedAt": "2026-02-23T00:14:45.113711+00:00"
     },
     {
       "id": "US-011",
       "title": "Fix CLAUDE.md sandbox network documentation",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-010"
       ],
@@ -261,12 +264,15 @@
         "The security model explanation mentions that sandbox containers are network-isolated from the credential proxy",
         "Example: a new contributor reads CLAUDE.md and correctly understands which containers are on which network",
         "Negative case: the documentation does not mention codex-proxy-net as the sandbox network (since US-006 changes it to bridge)"
-      ]
+      ],
+      "startedAt": "2026-02-23T00:14:47.232021+00:00",
+      "completedAt": "2026-02-23T00:23:33.812030+00:00",
+      "updatedAt": "2026-02-23T00:23:33.811904+00:00"
     },
     {
       "id": "US-012",
       "title": "Fix CLAUDE.md server type default and tool counts",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-011"
       ],
@@ -277,12 +283,15 @@
         "CLAUDE.md Semantic Search tool count formula: replace hardcoded per-type counts with a note that exact counts depend on agent count and configured server types",
         "Example: a user deploying the public template with default settings sees accurate cost and resource expectations",
         "Negative case: the documentation does not claim CX43 is the default when the code defaults to CX33"
-      ]
+      ],
+      "startedAt": "2026-02-23T00:23:35.930690+00:00",
+      "completedAt": "2026-02-23T00:33:48.190074+00:00",
+      "updatedAt": "2026-02-23T00:33:48.189927+00:00"
     },
     {
       "id": "US-013",
       "title": "Fix server.ts misleading provisioning comment",
-      "status": "open",
+      "status": "done",
       "dependsOn": [
         "US-012"
       ],
@@ -292,12 +301,15 @@
         "Example comment: 'Cloud-init bootstraps Tailscale only (~1 min). All other configuration is handled by Ansible (triggered by index.ts).'",
         "The replacement comment is concise (1-2 lines) and matches the style of existing comments in the file",
         "Negative case: the comment does not say 'no provisioning needed' or anything that implies cloud-init handles everything"
-      ]
+      ],
+      "startedAt": "2026-02-23T00:33:50.303770+00:00",
+      "completedAt": "2026-02-23T00:43:10.912455+00:00",
+      "updatedAt": "2026-02-23T00:43:10.912292+00:00"
     },
     {
       "id": "US-014",
       "title": "Fix MEMORY.md stale facts",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-013"
       ],
@@ -308,7 +320,10 @@
         "Review other MEMORY.md facts that reference specific numbers or versions and verify they match current code",
         "Example: MEMORY.md says '30s subprocess timeout' -> updated to '60s subprocess timeout'",
         "Negative case: no facts in MEMORY.md contradict the current codebase after this story is complete"
-      ]
+      ],
+      "startedAt": "2026-02-23T00:43:13.025709+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-02-23T00:43:13.025852+00:00"
     },
     {
       "id": "US-015",

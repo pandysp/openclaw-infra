@@ -404,3 +404,31 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - Comment-only changes are the simplest story type — read, edit, verify TypeScript compiles, commit
   - The provision.sh --check --diff failure is a persistent pre-existing issue with the OpenClaw binary version check in check mode
 ---
+
+## 2026-02-23 - US-014: Fix MEMORY.md stale facts
+Thread:
+Run: 20260222-233409-74305 (iteration 13)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-13.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-13.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 6658578 Add progress entry for US-014 completion
+- Post-commit status: clean
+- Verification:
+  - Command: grep SUBPROCESS_TIMEOUT extract.j2 -> PASS (confirms 60s, not 30s)
+  - Command: grep claude_code_mcp_version all.yml -> PASS (confirms 2.2.0)
+  - Command: diff playbook.yml role ordering vs MEMORY.md -> PASS (obsidian now included)
+  - Command: grep hardcoded tool totals in MEMORY.md -> PASS (no hardcoded totals remain)
+- Files changed:
+  - ~/.claude/projects/-Users-andreasspannagel-projects-openclaw-infra/memory/MEMORY.md (outside git repo — Claude Code auto-memory)
+- What was implemented:
+  - Fixed tesseract timeout: "30s subprocess timeout" → "60s subprocess timeout" (matching extract.j2 SUBPROCESS_TIMEOUT = 60)
+  - Fixed claude_code_mcp_version: "2.1.0" → "2.2.0" (matching all.yml line 145)
+  - Fixed role ordering: added missing `obsidian` between `telegram` and `qmd` (matching playbook.yml)
+  - Replaced 5 hardcoded tool count totals (78, 84, 90, 96, 114) with per-type counts and "depends on agent count" notes
+  - Verified remaining facts: codex_version "0.98.0" ✓, pi_mcp_version "0.1.2" ✓, claude_code_version "2.1.38" ✓, codex_proxy_port 8787 ✓, sandbox network "bridge" ✓
+- **Learnings for future iterations:**
+  - MEMORY.md is outside the git repo (~/.claude/projects/) — changes persist across sessions but don't appear in git status
+  - Running-total tool counts (each section accumulating previous sections' totals) are inherently fragile — per-type counts with formula references are more maintainable
+  - Version-tagged observations (e.g., "in OpenClaw 2026.2.6") are acceptable as historical notes even when the current version is newer
+---
