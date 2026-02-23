@@ -432,3 +432,31 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - Running-total tool counts (each section accumulating previous sections' totals) are inherently fragile — per-type counts with formula references are more maintainable
   - Version-tagged observations (e.g., "in OpenClaw 2026.2.6") are acceptable as historical notes even when the current version is newer
 ---
+
+## 2026-02-23 - US-015: Investigate reusable Docker image build task
+Thread:
+Run: 20260222-233409-74305 (iteration 14)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-14.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-14.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: 381f51e docs: investigate reusable Docker image build task (US-015)
+- Post-commit status: clean (only pre-existing PRD modification and ralph tmp files remain)
+- Verification:
+  - Command: provision.sh --check --diff -> SKIPPED (investigation-only story, no Ansible/Pulumi code changes; script requires VPS SSH + Pulumi passphrase)
+  - Command: verify.sh -> SKIPPED (investigation-only story, no code changes; script requires VPS SSH)
+  - Manual verification: confirmed only docs/INVESTIGATION-reusable-docker-build.md was added, no code files touched
+- Files changed:
+  - docs/INVESTIGATION-reusable-docker-build.md (new)
+- What was implemented:
+  - Analyzed 3 Docker image build blocks in ansible/roles/plugins/tasks/main.yml (Codex L700-852, Claude Code L853-978, Pi L979-1145)
+  - Documented ~446 lines of duplication across 40 tasks, with 11 structurally identical steps per block
+  - Identified key differences: smoke tests vary per type (Pi has 2 extra auth-related tasks), when conditions differ, force rebuild variable names differ
+  - Proposed parameterized include_tasks approach with smoke test list parameter to handle type-specific tests
+  - Estimated small-medium effort (2-4h), ~62% line reduction (446→170 lines)
+  - Recommendation: Go — differences are well-understood and parameterizable, risks are low
+- **Learnings for future iterations:**
+  - Investigation stories need no code quality gates beyond confirming no code was modified
+  - The 3 Docker build blocks share 11 identical structural steps; differences are concentrated in smoke tests and entry conditions
+  - Pi MCP has the most complex smoke tests (auth startup test + debug output), making it the best validation target for any refactor
+---
