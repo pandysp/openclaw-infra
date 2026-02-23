@@ -91,7 +91,15 @@ echo "2. Checking SSH access..."
 if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "ubuntu@$FULL_HOSTNAME" "echo 'SSH OK'" > /dev/null 2>&1; then
     check_pass "SSH access working"
 else
-    check_warn "SSH not accessible (may need to add SSH key to Tailscale ACLs)"
+    check_fail "SSH connection failed"
+    echo ""
+    echo -e "${RED}SSH connection failed — skipping 11 remote checks${NC}"
+    echo "   Possible causes: SSH key not in Tailscale ACLs, server still booting, sshd not running"
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════════"
+    echo "                    Verification Complete"
+    echo "═══════════════════════════════════════════════════════════════════"
+    exit 1
 fi
 
 # 3. Check Node.js version
