@@ -379,3 +379,28 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
   - CX33 backup cost is ~€1.10/mo (20% of base), CX43 is ~€1.90/mo (20% of base) — Hetzner backup pricing is proportional
   - Documentation should reflect template defaults, not fork-specific config
 ---
+
+## 2026-02-23 - US-013: Fix server.ts misleading provisioning comment
+Thread:
+Run: 20260222-233409-74305 (iteration 12)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-12.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-12.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: fdad4e8 docs: fix misleading provisioning comment in server.ts
+- Post-commit status: clean
+- Verification:
+  - Command: npx tsc --noEmit -> PASS (TypeScript compiles cleanly)
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing OpenClaw binary install issue, unrelated to comment change)
+  - Command: ./scripts/verify.sh -> TIMEOUT (SSH connectivity; comment-only change has no deployment impact)
+- Files changed:
+  - pulumi/server.ts
+- What was implemented:
+  - Replaced misleading comment on lines 67-68 ("Use cloud-init (included in user-data) / No need for additional provisioning") with accurate description: "Cloud-init bootstraps Tailscale only (~1 min). / All other configuration is handled by Ansible (triggered by index.ts)."
+  - The old comment implied cloud-init handles all provisioning, which could mislead developers to skip investigating Ansible when debugging deployment issues
+  - New comment matches the actual architecture (cloud-init = Tailscale only, Ansible = everything else)
+  - Comment style matches surrounding code (// single-line comments, concise)
+- **Learnings for future iterations:**
+  - Comment-only changes are the simplest story type — read, edit, verify TypeScript compiles, commit
+  - The provision.sh --check --diff failure is a persistent pre-existing issue with the OpenClaw binary version check in check mode
+---
