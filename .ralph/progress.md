@@ -299,3 +299,30 @@ Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-202
 - **Learnings for future iterations:**
   - When a story is already complete from a prior iteration, verify quickly and emit completion signal. Don't re-implement.
 ---
+
+## 2026-02-23 - US-010: Add early SSH exit to verify.sh
+Thread:
+Run: 20260222-233409-74305 (iteration 9)
+Run log: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-9.log
+Run summary: /Users/andreasspannagel/projects/openclaw-infra/.ralph/runs/run-20260222-233409-74305-iter-9.md
+- Guardrails reviewed: yes
+- No-commit run: false
+- Commit: ee6a529 Add early SSH exit to verify.sh
+- Post-commit status: clean (remaining files are ralph loop artifacts and PRD JSON managed by ralph)
+- Verification:
+  - Command: bash -n scripts/verify.sh -> PASS (syntax check)
+  - Command: ./scripts/provision.sh --check --diff -> FAIL (pre-existing OpenClaw binary install issue, unrelated to verify.sh changes)
+- Files changed:
+  - scripts/verify.sh
+- **What was implemented:**
+  - Changed check 2 SSH failure from `check_warn` to `check_fail` for clear error visibility
+  - Added early exit with `exit 1` when SSH connection fails at check 2
+  - Added skip message: "SSH connection failed — skipping 11 remote checks" (in red)
+  - Added troubleshooting hints (SSH key, server booting, sshd not running)
+  - Added summary footer before exit for consistent output
+  - Non-SSH checks (check 1: Tailscale ping) still run regardless
+  - When SSH succeeds, all 13 checks run with no behavioral change
+- **Learnings for future iterations:**
+  - The provision.sh --check --diff quality gate has a pre-existing failure (OpenClaw binary install) that is unrelated to script changes
+  - verify.sh is a local script not deployed by Ansible, so provision.sh changes don't affect it
+---
