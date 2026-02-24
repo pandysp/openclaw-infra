@@ -1346,18 +1346,14 @@
     {% endfor %}
     fi
 
-    # qmd servers — local semantic search (no tokens/proxy needed)
+    # qmd servers — HTTP daemon mode (decoupled from gateway lifecycle)
+    # Port assignment positional over qmd_workspaces list, must match qmd role.
     QMD_BINARY="{{ (qmd_mcp_binary.stdout | default('')) | trim }}"
     if [ -n "$QMD_BINARY" ] && [ -x "$QMD_BINARY" ]; then
-    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'qmd') %}
-        QMD_CONFIG="{{ srv.cwd }}/.qmd"
-        QMD_INDEX="{{ srv.cwd }}/.qmd/index.sqlite"
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
-            --arg cmd "$QMD_BINARY" \
-            --arg cwd "{{ srv.cwd }}" \
-            --arg config_dir "$QMD_CONFIG" \
-            --arg index_path "$QMD_INDEX" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, args: ["mcp"], cwd: $cwd, timeout: 300000, env: {QMD_CONFIG_DIR: $config_dir, INDEX_PATH: $index_path}}]')
+    {% for ws in qmd_workspaces %}
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ ws.server_name }}" \
+            --arg url "http://localhost:{{ ws.port }}/mcp" \
+            '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 300000}]')
     {% endfor %}
     else
         echo "NOTE: qmd binary not found, skipping qmd MCP servers"
@@ -1368,13 +1364,15 @@
     NODE_EXEC_BINARY="{{ (node_exec_mcp_binary.stdout | default('')) | trim }}"
     OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
     NODE_ID=$(XDG_RUNTIME_DIR=/run/user/1000 openclaw config get tools.exec.node 2>/dev/null || echo "")
+    GW_TOKEN=$(XDG_RUNTIME_DIR=/run/user/1000 openclaw config get gateway.auth.token 2>/dev/null || echo "")
     if [ -n "$NODE_ID" ] && [ -n "$OPENCLAW_BIN" ] && [ -x "$NODE_EXEC_BINARY" ]; then
     {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'node-exec') %}
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
             --arg cmd "$NODE_EXEC_BINARY" \
             --arg node_id "$NODE_ID" \
             --arg openclaw_bin "$OPENCLAW_BIN" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000"}}]')
+            --arg gw_token "$GW_TOKEN" \
+            '. + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000", OPENCLAW_TOKEN: $gw_token}}]')
     {% endfor %}
     else
         echo "NOTE: Skipping node-exec MCP servers (node_id='${NODE_ID}', binary='${NODE_EXEC_BINARY}')" >&2
@@ -1528,11 +1526,18 @@
   register: agents_list_json
   changed_when: false
 
+- name: Write agents list to temp file for deny rules
+  ansible.builtin.copy:
+    content: "{{ agents_list_json.stdout }}"
+    dest: /tmp/ansible-agents-list.json
+    mode: "0600"
+  changed_when: false
+
 - name: Set per-agent tool deny rules for MCP tools
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    AGENTS_JSON='{{ agents_list_json.stdout }}'
+    AGENTS_JSON=$(cat /tmp/ansible-agents-list.json)
     AGENT_INDEX=$(echo "$AGENTS_JSON" | jq -r 'to_entries[] | select(.value.id == "{{ item.id }}") | .key')
     if [ -z "$AGENT_INDEX" ]; then
         echo "SKIP: Agent '{{ item.id }}' not found in agents list"
@@ -1570,6 +1575,12 @@
   register: deny_result
   changed_when: "'UPDATED' in deny_result.stdout"
   notify: restart openclaw-gateway
+
+- name: Clean up agents list temp file
+  ansible.builtin.file:
+    path: /tmp/ansible-agents-list.json
+    state: absent
+  changed_when: false
 
 # --- Disable built-in memorySearch when qmd servers are registered ---
 # Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are

@@ -14,7 +14,7 @@
 - name: Install qmd via bun
   ansible.builtin.shell: |
     export PATH="$HOME/.bun/bin:$PATH"
-    bun install -g "github:tobi/qmd#{{ qmd_version }}"
+    bun install -g "@tobilu/qmd@{{ qmd_version }}"
   args:
     executable: /bin/bash
     creates: /home/ubuntu/.bun/bin/qmd
@@ -29,14 +29,9 @@
   ansible.builtin.command: /home/ubuntu/.bun/bin/qmd status
   changed_when: false
 
-# --- Phase 2: Determine active workspaces ---
-
-- name: Determine active workspaces for qmd
-  ansible.builtin.set_fact:
-    qmd_workspaces: >-
-      {{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}
-
-# --- Phase 3: Per-agent setup ---
+# --- Phase 2: Per-agent setup ---
+# qmd_workspaces is derived in playbook.yml pre_tasks (tags: always).
+# It is available here and in the plugins role regardless of which tags are run.
 
 - name: Create .qmd directories
   ansible.builtin.file:
@@ -103,6 +98,38 @@
   notify:
     - reload user systemd
     - enable qmd-watch services
+
+# --- Phase 3b: HTTP daemon services ---
+
+- name: Install qmd HTTP daemon systemd services
+  ansible.builtin.template:
+    src: qmd-http.service.j2
+    dest: "/home/ubuntu/.config/systemd/user/qmd-http-{{ item.agent_id }}.service"
+    mode: "0644"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  register: qmd_http_service_result
+  notify:
+    - reload user systemd
+    - enable qmd-http services
+
+- name: Flush handlers before HTTP daemon health check
+  ansible.builtin.meta: flush_handlers
+  when: qmd_http_service_result is changed
+
+- name: Wait for qmd HTTP daemons to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ item.port }}/health"
+    status_code: 200
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  retries: 10
+  delay: 3
+  register: _qmd_health
+  until: _qmd_health is succeeded
+  when: qmd_http_service_result is changed
 
 # --- Phase 4: Force reindex support ---
 

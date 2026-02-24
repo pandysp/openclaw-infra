@@ -41,6 +41,9 @@ npm-debug.log*
 tmp/
 temp/
 
+# Ralph (AI agent runtime logs and run artifacts)
+.ralph/
+
 # Backups (contain secrets and session data)
 backups/
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=qmd MCP HTTP server ({{ item.agent_id }})
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.bun/bin/qmd mcp --http --port {{ item.port }}
+Environment=HOME=/home/ubuntu
+Environment=QMD_CONFIG_DIR={{ item.workspace_dir }}/.qmd
+Environment=INDEX_PATH={{ item.workspace_dir }}/.qmd/index.sqlite
+Environment=PATH=/home/ubuntu/.bun/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=30
+MemoryMax=7G
+
+[Install]
+WantedBy=default.target

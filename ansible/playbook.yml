@@ -70,6 +70,24 @@
       when: openclaw_workspaces is not defined
       tags: [always]
 
+    - name: Initialize qmd_workspaces list
+      ansible.builtin.set_fact:
+        qmd_workspaces: []
+      tags: [always]
+
+    - name: Derive qmd_workspaces (agents with workspace repos + assigned HTTP port + server name)
+      ansible.builtin.set_fact:
+        qmd_workspaces: >-
+          {{ qmd_workspaces + [item | combine({
+               'port': qmd_http_base_port | int + _idx,
+               'server_name': 'qmd' if item.agent_id == 'main' else 'qmd-' ~ item.agent_id
+             })] }}
+      loop: "{{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}"
+      loop_control:
+        index_var: _idx
+        label: "{{ item.agent_id }}"
+      tags: [always]
+
     # Obsidian GitHub tokens: agent → PAT mapping for HTTPS clones
     - name: Use manually defined Obsidian GitHub tokens (override)
       ansible.builtin.set_fact:

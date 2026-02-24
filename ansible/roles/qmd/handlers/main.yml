@@ -18,6 +18,18 @@
   loop_control:
     label: "{{ item.agent_id }}"
 
+- name: enable qmd-http services
+  ansible.builtin.systemd:
+    name: "qmd-http-{{ item.agent_id }}.service"
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+  loop: "{{ qmd_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
 - name: restart openclaw-gateway
   ansible.builtin.systemd:
     name: openclaw-gateway

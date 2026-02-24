@@ -300,7 +300,7 @@ After destroying and redeploying, old Tailscale devices show as "offline" in you
 
 ## Cost Breakdown
 
-Default server type is **CX33** (4 vCPU, 8 GB RAM). Upgrade to **CX43** (8 vCPU, 16 GB RAM) when qmd semantic search is enabled — `deep_search` loads ~5.8 GB of GGUF models and needs the extra headroom. Change with `pulumi config set serverType cx43`.
+Default server type is **CX33** (4 vCPU, 8 GB RAM). Upgrade to **CX43** (8 vCPU, 16 GB RAM) when qmd semantic search is enabled — `deep_search` loads ~2.1 GB of GGUF models and the reranker needs CPU headroom (~2 min per query across 8 vCPUs). Change with `pulumi config set serverType cx43`.
 
 | Resource | CX33 (default) | CX43 (recommended for qmd) |
 |----------|---------------|---------------------------|
@@ -714,13 +714,15 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 Agents can run shell commands on your Mac via the node host feature. This enables tmux-based workflows where a VPS agent controls a Claude Code session on your local machine.
 
+Agents access node exec via the `mac_run` MCP tool (provided by `node-exec-mcp`), not the built-in exec tool. Each agent gets its own scoped tool: `mac_run` (main), `mac-manon_run`, etc.
+
 ```
 ┌──────────────────────┐     ┌────────────────────────┐     ┌──────────────────────┐
-│  VPS Agent           │     │  OpenClaw Gateway      │     │  Mac (Node Host)     │
-│  (sandbox)           │────▶│  tools.exec.host=sandbox│────▶│  openclaw node run   │
+│  VPS Agent           │     │  MCP Adapter           │     │  Mac (Node Host)     │
+│  (sandbox)           │────▶│  node-exec-mcp (stdio) │────▶│  openclaw node run   │
 │                      │     │                        │     │  (LaunchAgent)       │
-│  uses workdir=/tmp   │     │  WebSocket via         │     │  tmux, claude        │
-│  for node commands   │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
+│  calls mac_run tool  │     │  OPENCLAW_TOKEN auth   │     │  tmux, claude        │
+│  (cwd defaults /tmp) │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
 └──────────────────────┘     └────────────────────────┘     └──────────────────────┘
 ```
 
@@ -753,14 +755,16 @@ ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
 
 Gateway-side (set by Ansible):
 ```
-tools.exec.host: sandbox        # Default sandbox; agents use host=node on-demand
+tools.exec.host: sandbox        # Built-in exec stays sandboxed (agents use mac_run MCP tool instead)
 tools.exec.security: full       # Tighten to "allowlist" after testing
 tools.exec.ask: off             # Tighten to "on-miss" after testing
-tools.exec.node: <auto>         # Auto-discovered during provisioning
+tools.exec.node: <auto>         # Auto-discovered during provisioning; used by node-exec-mcp
 ```
 
 Node-side (set by `setup-mac-node.sh`):
 - `~/.openclaw/exec-approvals.json` — `defaults.security: full` (auto-approve all commands)
+
+**How auth works:** The `node-exec-mcp` server receives `OPENCLAW_TOKEN` (the gateway token) as an env var, which `openclaw nodes run` uses to authenticate with the gateway. Without this token, the connection fails with "pairing required".
 
 **Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
 
@@ -826,7 +830,7 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u qmd
 ssh ubuntu@openclaw-vps 'openclaw config get plugins.entries.openclaw-mcp-adapter.config' | jq '.servers[] | select(.name | startswith("qmd"))'
 ```
 
-**RAM consideration:** Models load on-demand per query, not resident. `deep_search` loads ~5.8GB of GGUF models — CX43 (16 GB) provides comfortable headroom for multiple agents. A 2GB swap is configured as defense-in-depth. CX33 (8 GB) works for single-agent setups but may OOM under concurrent `deep_search`.
+**RAM consideration:** Models load on-demand per query, not resident. `deep_search` loads ~2.1GB of GGUF models (embedding 314MB + reranker 610MB + query expansion 1.2GB). CX43 (16 GB) provides comfortable headroom for multiple agents. A 2GB swap is configured as defense-in-depth. CX33 (8 GB) works for single-agent setups but may OOM under concurrent `deep_search`.
 
 ## Troubleshooting
 
