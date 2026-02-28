@@ -67,6 +67,9 @@ else
     export PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL=$(pulumi config get obsidianAndyVaultRepoUrl 2>/dev/null || echo "")
     export PROVISION_OBSIDIAN_AUTH_TOKEN=$(pulumi config get obsidianAuthToken 2>/dev/null || echo "")
     export PROVISION_OBSIDIAN_VAULT_PASSWORD=$(pulumi config get obsidianVaultPassword 2>/dev/null || echo "")
+    export PROVISION_DISCORD_BOT_TOKEN=$(pulumi config get discordBotToken 2>/dev/null || echo "")
+    export PROVISION_DISCORD_GUILD_ID=$(pulumi config get discordGuildId 2>/dev/null || echo "")
+    export PROVISION_DISCORD_USER_ID=$(pulumi config get discordUserId 2>/dev/null || echo "")
 
     # Read deploy keys: try structured export first, fall back to individual exports
     # (individual exports exist until first `pulumi up` after migration)
@@ -151,6 +154,7 @@ done
 echo "  gateway_token: set"
 echo "  claude_setup_token: set"
 echo "  telegram: $([ -n "$(read_env PROVISION_TELEGRAM_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
+echo "  discord: $([ -n "$(read_env PROVISION_DISCORD_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (main): $([ -n "$(read_env PROVISION_WORKSPACE_REPO_URL)" ] && echo "configured" || echo "skipped")"
 echo "  grok_search: $([ -n "$(read_env PROVISION_XAI_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  groq_voice: $([ -n "$(read_env PROVISION_GROQ_API_KEY)" ] && echo "configured" || echo "skipped")"
@@ -200,6 +204,9 @@ static = [
     ('obsidian_andy_vault_repo_url', 'PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL'),
     ('obsidian_auth_token', 'PROVISION_OBSIDIAN_AUTH_TOKEN'),
     ('obsidian_vault_password', 'PROVISION_OBSIDIAN_VAULT_PASSWORD'),
+    ('discord_bot_token', 'PROVISION_DISCORD_BOT_TOKEN'),
+    ('discord_guild_id', 'PROVISION_DISCORD_GUILD_ID'),
+    ('discord_user_id', 'PROVISION_DISCORD_USER_ID'),
 ]
 
 with open(sys.argv[1], 'w') as f:
@@ -365,7 +372,7 @@ if [ -f /tmp/ansible-cron-skipped ]; then
     echo "║  WARNING: Cron job setup was SKIPPED (gateway not healthy).    ║"
     echo "║  This is expected on first install (device pairing pending).   ║"
     echo "║  After approving devices, re-run:                             ║"
-    echo "║    ./scripts/provision.sh --tags telegram,whatsapp           ║"
+    echo "║    ./scripts/provision.sh --tags telegram,whatsapp,discord   ║"
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo ""
     echo "=== Provisioning complete (with warnings) ==="

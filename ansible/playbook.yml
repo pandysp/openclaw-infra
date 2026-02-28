@@ -119,7 +119,8 @@
       when: >-
         (telegram_bot_token is defined and telegram_bot_token | length > 0) or
         (openclaw_agents | selectattr('deliver_channel', 'defined')
-          | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0)
+          | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0) or
+        (discord_bot_token is defined and discord_bot_token | length > 0)
     # telegram must run immediately after agents — if sandbox runs in between,
     # agents exist without bindings and incoming messages get misrouted.
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }
@@ -129,6 +130,8 @@
       when: >-
         openclaw_agents | selectattr('deliver_channel', 'defined')
           | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0
+    # discord after whatsapp — configures Discord channel (bot token, guild allowlist).
+    - { role: discord, tags: [discord], when: discord_bot_token is defined and discord_bot_token | length > 0 }
     # obsidian before qmd — vaults must be cloned before watchers start (prevents thundering herd).
     - role: obsidian
       tags: [obsidian]
@@ -155,16 +158,16 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
 
     - name: Wait for gateway to stabilize
       ansible.builtin.pause:
         seconds: 5
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
 
     - name: Verify gateway is active
       ansible.builtin.command: systemctl --user is-active openclaw-gateway
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]

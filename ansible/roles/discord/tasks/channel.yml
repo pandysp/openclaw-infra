@@ -1,0 +1,88 @@
+---
+# Configure Discord channel settings.
+# Follows the telegram channel.yml pattern: hash-based token comparison + JSON-normalized
+# policy config. Key differences from Telegram:
+#   - Uses channels.discord.token (not botToken) — Discord schema field name
+#   - Uses channels.discord.enabled (built-in channel like Telegram, not a plugin like WhatsApp)
+#   - Guild config at channels.discord.guilds.<guildId> — uses "users" array (Discord schema,
+#     not "allowFrom" like Telegram/WhatsApp)
+#   - requireMention: false (private server; set true for public servers)
+#   - User IDs are strings (Discord snowflake IDs are 64-bit — never cast to int)
+
+- name: Configure Discord channel with secret cleanup
+  block:
+    - name: Write Discord bot token to temp file
+      ansible.builtin.copy:
+        content: "{{ discord_bot_token }}"
+        dest: /tmp/ansible-discord-bot-token
+        mode: "0600"
+      no_log: true
+      changed_when: false
+
+    - name: Set Discord bot token and configure channel
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        BOT_TOKEN=$(cat /tmp/ansible-discord-bot-token)
+        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
+        mkdir -p "$HASH_DIR"
+        CHANGED=""
+
+        # Hash-file comparison (config get redacts bot token)
+        DESIRED_HASH=$(echo -n "$BOT_TOKEN" | sha256sum | cut -d' ' -f1)
+        CURRENT_HASH=$(cat "$HASH_DIR/discord-bot-token" 2>/dev/null) || CURRENT_HASH=""
+        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ]; then
+            openclaw config set channels.discord.token "$BOT_TOKEN"
+            echo "$DESIRED_HASH" > "$HASH_DIR/discord-bot-token"
+            CHANGED="yes"
+        fi
+
+        ENABLED=$(openclaw config get channels.discord.enabled 2>/dev/null) || ENABLED=""
+        if [ "$ENABLED" != "true" ]; then
+            openclaw config set channels.discord.enabled true
+            CHANGED="yes"
+        fi
+
+        # Guild config
+        {% if discord_guild_id is defined and discord_guild_id | length > 0 %}
+        # Group policy: allowlist
+        CURRENT_GP=$(openclaw config get channels.discord.groupPolicy 2>/dev/null) || CURRENT_GP=""
+        if [ "$CURRENT_GP" != "allowlist" ]; then
+            openclaw config set channels.discord.groupPolicy "allowlist"
+            CHANGED="yes"
+        fi
+
+        # Guild config: users array + requireMention
+        {% set guild_config = {} %}
+        {% if discord_user_id is defined and discord_user_id | length > 0 %}
+        {%   set guild_config = {"users": [discord_user_id], "requireMention": false} %}
+        {% else %}
+        {%   set guild_config = {"requireMention": false} %}
+        {% endif %}
+        DESIRED_GUILD='{{ guild_config | to_json }}'
+        CURRENT_GUILD=$(openclaw config get channels.discord.guilds.{{ discord_guild_id }} 2>/dev/null) || CURRENT_GUILD="{}"
+        CG_NORM=$(echo "$CURRENT_GUILD" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        DG_NORM=$(echo "$DESIRED_GUILD" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        if [ "$CG_NORM" = "PARSE_FAIL" ] || [ "$DG_NORM" = "PARSE_FAIL" ] || [ "$CG_NORM" != "$DG_NORM" ]; then
+            openclaw config set channels.discord.guilds.{{ discord_guild_id }} --json "$DESIRED_GUILD"
+            CHANGED="yes"
+        fi
+        {% else %}
+        echo "WARNING: discord_guild_id is not set. Bot will accept messages from ALL guilds it's in." >&2
+        echo "  Set guild ID: pulumi config set discordGuildId YOUR_GUILD_ID" >&2
+        {% endif %}
+
+        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: discord_token_result
+      changed_when: "'UPDATED' in discord_token_result.stdout"
+      notify: restart openclaw-gateway
+
+  always:
+    - name: Clean up Discord bot token
+      ansible.builtin.file:
+        path: /tmp/ansible-discord-bot-token
+        state: absent
+      changed_when: false

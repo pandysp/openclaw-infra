@@ -1,0 +1,3 @@
+---
+- name: Configure Discord channel
+  ansible.builtin.include_tasks: channel.yml

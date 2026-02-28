@@ -260,6 +260,13 @@
         {% if whatsapp_elevated | length > 0 %}
         check_set_json tools.elevated.allowFrom.whatsapp '{{ whatsapp_elevated | to_json }}'
         {% endif %}
+        {% set discord_elevated = [] %}
+        {% if discord_user_id is defined and discord_user_id | length > 0 %}
+        {%   set _ = discord_elevated.append(discord_user_id) %}
+        {% endif %}
+        {% if discord_elevated | length > 0 %}
+        check_set_json tools.elevated.allowFrom.discord '{{ discord_elevated | to_json }}'
+        {% endif %}
 
         # Elevated default
         check_set agents.defaults.elevatedDefault "{{ openclaw_elevated_default }}"

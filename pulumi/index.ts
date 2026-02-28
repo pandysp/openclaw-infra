@@ -38,6 +38,7 @@ const claudeSetupToken = config.requireSecret("claudeSetupToken");
 // ============================================
 
 const telegramBotToken = config.getSecret("telegramBotToken");
+const discordBotToken = config.getSecret("discordBotToken");
 const xaiApiKey = config.getSecret("xaiApiKey");
 const groqApiKey = config.getSecret("groqApiKey");
 
@@ -56,6 +57,8 @@ const serverImage = config.get("serverImage") || "ubuntu-24.04";
 
 const telegramUserId = config.get("telegramUserId");
 const telegramGroupId = config.get("telegramGroupId");
+const discordGuildId = config.get("discordGuildId");
+const discordUserId = config.get("discordUserId");
 const githubToken = config.getSecret("githubToken");
 const workspaceRepoUrl = config.get("workspaceRepoUrl");
 // Obsidian vault for main agent uses "Andy" (person name, not agent ID)
@@ -162,6 +165,9 @@ const provisionEnv: Record<string, pulumi.Input<string>> = {
     PROVISION_GROQ_API_KEY: groqApiKey || "",
     PROVISION_GITHUB_TOKEN: githubToken || "",
     PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL: obsidianAndyVaultRepoUrl || "",
+    PROVISION_DISCORD_BOT_TOKEN: discordBotToken || "",
+    PROVISION_DISCORD_GUILD_ID: discordGuildId || "",
+    PROVISION_DISCORD_USER_ID: discordUserId || "",
 };
 
 // Add per-agent env vars
