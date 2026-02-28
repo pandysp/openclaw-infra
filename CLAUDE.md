@@ -585,6 +585,14 @@ pulumi config set telegramUserId "123456789"  # Your numeric user ID
 pulumi up
 ```
 
+**Config applied by Ansible:**
+```
+channels.telegram.tokenFile: ~/.openclaw/.telegram-bot-token  (token stored in file, not in openclaw.json)
+channels.telegram.streamMode: partial    (draft message streaming for incremental output)
+channels.telegram.configWrites: false    (prevents bot from modifying its own config via Telegram)
+channels.telegram.chunkMode: newline     (splits long messages on paragraph boundaries)
+```
+
 ### Getting Telegram IDs
 
 Use `./scripts/get-telegram-id.sh` to discover user IDs and group IDs. The script briefly pauses the gateway (~10s), polls the Telegram API for a message you send, displays the IDs, and restarts the gateway.
@@ -598,7 +606,6 @@ Use `./scripts/get-telegram-id.sh` to discover user IDs and group IDs. The scrip
 ```
 
 Alternatively, message **@userinfobot** on Telegram to get a user ID manually.
-
 ### Scheduled Tasks
 
 When Telegram is configured, these default cron jobs are created for the main agent:

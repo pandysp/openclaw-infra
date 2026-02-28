@@ -28,10 +28,10 @@ Tracking which [OpenClaw docs](https://docs.openclaw.ai) pages have been reviewe
 
 ## Potential Improvements
 
-- **Telegram `streamMode`** — set `channels.telegram.streamMode` to `"partial"` for draft message streaming. Shows incremental output instead of waiting for the full response. (Source: [Gateway Configuration](https://docs.openclaw.ai/gateway/configuration), [Telegram Channel](https://docs.openclaw.ai/channels/telegram))
-- **Telegram `configWrites: false`** — by default, the bot can modify its own config via `/config set` commands in Telegram. Disable with `channels.telegram.configWrites: false` for a security-conscious deployment. (Source: [Telegram Channel](https://docs.openclaw.ai/channels/telegram))
-- **Telegram `chunkMode: "newline"`** — splits long messages on paragraph boundaries instead of hard character limits. Small UX improvement. (Source: [Telegram Channel](https://docs.openclaw.ai/channels/telegram))
-- **Telegram `tokenFile`** — the docs support `channels.telegram.tokenFile` to read the bot token from a file path instead of storing it directly in config. Keeps the token out of `openclaw.json`. (Source: [Telegram Channel](https://docs.openclaw.ai/channels/telegram))
+- ~~**Telegram `streamMode`**~~ — **Applied.** Set `channels.telegram.streamMode` to `"partial"` for draft message streaming.
+- ~~**Telegram `configWrites: false`**~~ — **Applied.** Disabled config writes via Telegram for security.
+- ~~**Telegram `chunkMode: "newline"`**~~ — **Applied.** Splits long messages on paragraph boundaries.
+- ~~**Telegram `tokenFile`**~~ — **Applied.** Bot token read from `~/.openclaw/.telegram-bot-token` file instead of stored in config.
 - **Telegram privacy mode** — by default, Telegram bots only see @mentions and `/commands` in groups (privacy mode enabled). To let the bot see all group messages, disable privacy via BotFather `/setprivacy` or add the bot as a group admin. Only relevant if the bot is used in group chats. (Source: [Telegram Channel](https://docs.openclaw.ai/channels/telegram))
 - ~~**Workspace as private git repo**~~ — **Implemented.** Hourly auto-sync via systemd timer with Pulumi-generated ED25519 deploy key. See CLAUDE.md "Workspace Git Sync" section.
 
