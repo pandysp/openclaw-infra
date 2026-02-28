@@ -12,4 +12,6 @@
   ansible.builtin.include_tasks: cron.yml
   when: >-
     (telegram_user_id is defined and telegram_user_id | length > 0) or
-    (telegram_group_id is defined and telegram_group_id | length > 0)
+    (telegram_group_id is defined and telegram_group_id | length > 0) or
+    (openclaw_agents | selectattr('deliver_channel', 'defined')
+      | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0)

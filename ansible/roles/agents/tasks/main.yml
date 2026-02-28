@@ -54,7 +54,7 @@
         dest: /tmp/ansible_agents_current.json
         mode: '0600'
 
-    - name: Set per-agent heartbeat targeting to Telegram
+    - name: Set per-agent heartbeat targeting
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
@@ -64,7 +64,7 @@
             cat /tmp/ansible_agents_current.json >&2
             exit 1
         fi
-        DESIRED='{"target":"telegram","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"}'
+        DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"}'
         CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="{}"
@@ -79,7 +79,7 @@
             echo "OK"
         else
             openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
-            echo "UPDATED: {{ item.id }} heartbeat → telegram:{{ item.deliver_to }}"
+            echo "UPDATED: {{ item.id }} heartbeat → {{ item.deliver_channel | default('telegram') }}:{{ item.deliver_to }}"
         fi
       args:
         executable: /bin/bash

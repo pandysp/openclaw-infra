@@ -95,6 +95,11 @@ qmd_version: "1.0.7"
 # Base port for qmd HTTP daemons (one per agent, assigned by position in qmd_workspaces).
 # Port N+0 = first agent, N+1 = second, etc. Re-run --tags qmd,plugins if agents change.
 qmd_http_base_port: 8191
+# Additional qmd collections beyond the base 'workspace' collection (which always indexes
+# the entire workspace root). Use these for targeted search (-c <name>) on specific
+# subdirectories. Paths are relative to the workspace root. qmd silently skips missing paths.
+# Override in openclaw.yml with deployment-specific collections.
+qmd_extra_collections: []
 
 # Agent definitions — single-agent default for new deployments.
 # Override in openclaw.yml for multi-agent setups (see openclaw.yml.example).
@@ -103,6 +108,7 @@ openclaw_agents:
     is_default: true
     deliver_to: "{{ telegram_user_id | default('') }}"
     deliver_type: "dm"
+    deliver_channel: "telegram"
     heartbeat_every: "15m"
 
 # Legacy cron job names (removed during migration to per-agent jobs)

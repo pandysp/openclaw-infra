@@ -178,6 +178,9 @@
         # Includes bundled plugins (device-pair, memory-core, etc.) because
         # plugins.allow blocks ALL plugins not listed, including bundled ones.
         {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram"] %}
+        {% if openclaw_agents | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
+        {%   set _ = plugin_allow.append("whatsapp") %}
+        {% endif %}
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
@@ -192,6 +195,15 @@
         {% endif %}
         {% if elevated_users | length > 0 %}
         check_set_json tools.elevated.allowFrom.telegram '{{ elevated_users | to_json }}'
+        {% endif %}
+        {% set whatsapp_elevated = [] %}
+        {% for agent in openclaw_agents %}
+        {%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_to | default('') | length > 0 %}
+        {%     set _ = whatsapp_elevated.append(agent.deliver_to) %}
+        {%   endif %}
+        {% endfor %}
+        {% if whatsapp_elevated | length > 0 %}
+        check_set_json tools.elevated.allowFrom.whatsapp '{{ whatsapp_elevated | to_json }}'
         {% endif %}
 
         # Elevated default
@@ -325,3 +337,62 @@
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
         - /tmp/ansible-compaction-memoryflush
+
+- name: Enforce agent auth-profiles — setup token present, api-key profile absent
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 << 'PYEOF'
+    import json, os
+    from pathlib import Path
+
+    openclaw_dir = Path(os.path.expanduser("~/.openclaw"))
+    token_file = openclaw_dir / "anthropic-auth-token"
+
+    if not token_file.exists():
+        print("SKIP: anthropic-auth-token not found")
+        raise SystemExit(0)
+
+    token = token_file.read_text().strip()
+    changed_agents = []
+
+    for agent_dir in sorted((openclaw_dir / "agents").iterdir()):
+        profiles_path = agent_dir / "agent" / "auth-profiles.json"
+        if not profiles_path.exists():
+            continue
+
+        content = profiles_path.read_text().strip()
+        try:
+            data = json.loads(content) if content else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        profiles = data.get("profiles", {})
+        original_profiles = dict(profiles)
+
+        # Ensure setup token profile exists with current token
+        desired_default = {"type": "token", "provider": "anthropic", "token": token}
+        if profiles.get("anthropic:default") != desired_default:
+            profiles["anthropic:default"] = desired_default
+
+        # Remove legacy api-key profile
+        profiles.pop("anthropic:api-key", None)
+
+        if profiles != original_profiles or not content:
+            data["version"] = 1
+            data["profiles"] = profiles
+            if "lastGood" not in data:
+                data["lastGood"] = {"anthropic": "anthropic:default"}
+            profiles_path.write_text(json.dumps(data, indent=2) + "\n")
+            profiles_path.chmod(0o600)
+            changed_agents.append(agent_dir.name)
+
+    if changed_agents:
+        print("CHANGED: " + ", ".join(changed_agents))
+    else:
+        print("OK")
+    PYEOF
+  args:
+    executable: /bin/bash
+  register: auth_profiles_result
+  changed_when: "'CHANGED:' in auth_profiles_result.stdout"
+  notify: restart openclaw-gateway

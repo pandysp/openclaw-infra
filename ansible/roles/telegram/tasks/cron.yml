@@ -91,11 +91,13 @@
         label: "{{ item }}"
       changed_when: false
 
-    # Build deliver_to lookup map from openclaw_agents
+    # Build deliver_to and deliver_channel lookup maps from openclaw_agents
     - name: Build agent delivery map
       ansible.builtin.set_fact:
         agent_deliver_map: >-
           {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_to'))) }}
+        agent_channel_map: >-
+          {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_channel', default='telegram'))) }}
 
     - name: Validate cron job agent IDs exist in openclaw_agents
       ansible.builtin.assert:
@@ -152,7 +154,8 @@
                 --arg tz "{{ openclaw_timezone }}" \
                 --arg message "$MSG" \
                 --arg delivery_to "{{ agent_deliver_map[job.agent] }}" \
-                '. + [{name: $name, agentId: $agent, schedule: $schedule, tz: $tz, message: $message, delivery_channel: "telegram", delivery_to: $delivery_to}]')
+                --arg delivery_channel "{{ agent_channel_map[job.agent] | default('telegram') }}" \
+                '. + [{name: $name, agentId: $agent, schedule: $schedule, tz: $tz, message: $message, delivery_channel: $delivery_channel, delivery_to: $delivery_to}]')
             {% endfor %}
             DESIRED=$(echo "$DESIRED" | jq -cS 'sort_by(.name)')
 
@@ -188,7 +191,7 @@
                     --session isolated \
                     --agent "{{ job.agent }}" \
                     --message "$MSG" \
-                    --deliver --channel telegram --to "{{ agent_deliver_map[job.agent] }}"
+                    --deliver --channel {{ agent_channel_map[job.agent] | default('telegram') }} --to "{{ agent_deliver_map[job.agent] }}"
                 {% endfor %}
 
                 echo "UPDATED"

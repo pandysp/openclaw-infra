@@ -1,0 +1,24 @@
+---
+- name: Configure WhatsApp channel
+  ansible.builtin.include_tasks: channel.yml
+
+- name: Check WhatsApp session status
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    STATUS=$(openclaw channels status --probe 2>&1) || true
+    if echo "$STATUS" | grep -qi "whatsapp.*ready"; then
+        echo "WhatsApp session is active"
+    else
+        echo "WARNING: WhatsApp session is NOT active. QR code scan required."
+        echo "  Run: ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels login --channel whatsapp --qr-terminal'"
+    fi
+  args:
+    executable: /bin/bash
+  register: whatsapp_session_check
+  changed_when: false
+  failed_when: false
+
+- name: Show WhatsApp session status
+  ansible.builtin.debug:
+    var: whatsapp_session_check.stdout_lines

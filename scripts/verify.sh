@@ -244,9 +244,24 @@ else
     echo "   Telegram not configured (optional)"
 fi
 
-# 13. Check cron jobs
+# 13. Check WhatsApp channel (if configured)
 echo ""
-echo "13. Checking scheduled tasks..."
+echo "13. Checking WhatsApp channel..."
+WHATSAPP_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+    "openclaw channels status 2>&1" || echo "FAILED")
+
+if [[ "$WHATSAPP_STATUS" == *"WhatsApp"*"enabled"* ]] || [[ "$WHATSAPP_STATUS" == *"whatsapp"*"enabled"* ]]; then
+    check_pass "WhatsApp channel enabled"
+elif [[ "$WHATSAPP_STATUS" == *"WhatsApp"* ]] || [[ "$WHATSAPP_STATUS" == *"whatsapp"* ]]; then
+    check_warn "WhatsApp channel found but may need QR scan"
+    echo "$WHATSAPP_STATUS" | grep -i whatsapp | head -3 | sed 's/^/   /'
+else
+    echo "   WhatsApp not configured (optional)"
+fi
+
+# 14. Check cron jobs
+echo ""
+echo "14. Checking scheduled tasks..."
 CRON_LIST=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
     "openclaw cron list 2>&1" || echo "FAILED")
 

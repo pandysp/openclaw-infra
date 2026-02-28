@@ -8,7 +8,7 @@
 
 - name: Build binding entries
   ansible.builtin.set_fact:
-    _telegram_bindings: "{{ _telegram_bindings + [{'agentId': item.id, 'match': {'channel': 'telegram', 'peer': {'kind': item.deliver_type, 'id': item.deliver_to | string}}}] }}"
+    _telegram_bindings: "{{ _telegram_bindings + [{'agentId': item.id, 'match': {'channel': item.deliver_channel | default('telegram'), 'peer': {'kind': item.deliver_type, 'id': item.deliver_to | string}}}] }}"
   loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | list }}"
   loop_control:
     label: "{{ item.id }}"

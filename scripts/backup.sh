@@ -103,7 +103,8 @@ except (json.JSONDecodeError, IOError) as e:
     sys.exit(1)
 # Redact all known sensitive fields
 for path in [('gateway','auth','token'), ('gateway','remote','token'),
-             ('channels','telegram','botToken'), ('tools','web','search','grok','apiKey')]:
+             ('channels','telegram','botToken'), ('channels','whatsapp','credentials'),
+             ('tools','web','search','grok','apiKey')]:
     obj = c
     for key in path[:-1]:
         obj = obj.get(key, {})

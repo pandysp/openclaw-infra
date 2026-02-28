@@ -57,10 +57,10 @@
         fi
     }
 
-    # Build DM allowFrom list from all agents with DM deliver_to
+    # Build DM allowFrom list from telegram agents with DM deliver_to
     {% set dm_allow = [] %}
     {% for agent in openclaw_agents %}
-    {%   if agent.deliver_type == 'dm' and agent.deliver_to | default('') | length > 0 %}
+    {%   if (agent.deliver_channel | default('telegram')) == 'telegram' and agent.deliver_type == 'dm' and agent.deliver_to | default('') | length > 0 %}
     {%     set _ = dm_allow.append(agent.deliver_to | int) %}
     {%   endif %}
     {% endfor %}
@@ -75,17 +75,17 @@
     fi
     {% endif %}
 
-    # Configure group chats (iterate all group-type agents with a deliver_to)
+    # Configure group chats (iterate telegram group-type agents with a deliver_to)
     {% set group_agents = [] %}
     {% for agent in openclaw_agents %}
-    {%   if agent.deliver_type == 'group' and agent.deliver_to | default('') | length > 0 %}
+    {%   if (agent.deliver_channel | default('telegram')) == 'telegram' and agent.deliver_type == 'group' and agent.deliver_to | default('') | length > 0 %}
     {%     set _ = group_agents.append(agent) %}
     {%   endif %}
     {% endfor %}
     {% if group_agents | length > 0 %}
     {% set group_allow = [] %}
     {% for agent in openclaw_agents %}
-    {%   if agent.deliver_to | default('') | length > 0 and agent.deliver_type == 'dm' %}
+    {%   if (agent.deliver_channel | default('telegram')) == 'telegram' and agent.deliver_to | default('') | length > 0 and agent.deliver_type == 'dm' %}
     {%     set _ = group_allow.append(agent.deliver_to | int) %}
     {%   endif %}
     {% endfor %}

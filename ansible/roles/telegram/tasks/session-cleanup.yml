@@ -44,7 +44,8 @@
             continue
 
         current_to = entry.get("deliveryContext", {}).get("to", "")
-        normalized_current = current_to.replace("telegram:", "")
+        deliver_channel = agent.get("deliver_channel", "telegram")
+        normalized_current = current_to.replace(deliver_channel + ":", "")
         normalized_expected = str(deliver_to)
 
         if normalized_current == normalized_expected:

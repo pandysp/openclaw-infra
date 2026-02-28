@@ -1,0 +1,82 @@
+---
+# Configure WhatsApp channel settings.
+# Mirrors the telegram channel.yml structure but uses channels.whatsapp.* config paths
+# and string-typed phone numbers (E.164 format) instead of int user IDs.
+
+- name: Configure WhatsApp channel
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    CHANGED=""
+
+    # Enable WhatsApp plugin (uses plugins.entries path, NOT channels.whatsapp.enabled)
+    CURRENT_ENABLED=$(openclaw config get plugins.entries.whatsapp.enabled 2>/dev/null) || CURRENT_ENABLED=""
+    if [ "$CURRENT_ENABLED" != "true" ]; then
+        openclaw config set plugins.entries.whatsapp.enabled true
+        CHANGED="yes"
+    fi
+
+    # DM policy: allowlist
+    CURRENT_DM=$(openclaw config get channels.whatsapp.dmPolicy 2>/dev/null) || CURRENT_DM=""
+    if [ "$CURRENT_DM" != "allowlist" ]; then
+        openclaw config set channels.whatsapp.dmPolicy "allowlist"
+        CHANGED="yes"
+    fi
+
+    # Build DM allowFrom list from WhatsApp agents with DM deliver_to (string array, not int)
+    {% set wa_dm_allow = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_type == 'dm' and agent.deliver_to | default('') | length > 0 %}
+    {%     set _ = wa_dm_allow.append(agent.deliver_to) %}
+    {%   endif %}
+    {% endfor %}
+    {% if wa_dm_allow | length > 0 %}
+    DESIRED_ALLOW='{{ wa_dm_allow | to_json }}'
+    CURRENT_ALLOW=$(openclaw config get channels.whatsapp.allowFrom 2>/dev/null) || CURRENT_ALLOW="[]"
+    C_NORM=$(echo "$CURRENT_ALLOW" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED_ALLOW" | jq -cS '.')
+    if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
+        openclaw config set channels.whatsapp.allowFrom --json "$DESIRED_ALLOW"
+        CHANGED="yes"
+    fi
+    {% endif %}
+
+    # Configure group chats (iterate WhatsApp group-type agents)
+    {% set wa_group_agents = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_type == 'group' and agent.deliver_to | default('') | length > 0 %}
+    {%     set _ = wa_group_agents.append(agent) %}
+    {%   endif %}
+    {% endfor %}
+    {% if wa_group_agents | length > 0 %}
+    {% set wa_group_allow = [] %}
+    {% for agent in openclaw_agents %}
+    {%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_to | default('') | length > 0 and agent.deliver_type == 'dm' %}
+    {%     set _ = wa_group_allow.append(agent.deliver_to) %}
+    {%   endif %}
+    {% endfor %}
+    CURRENT_GP=$(openclaw config get channels.whatsapp.groupPolicy 2>/dev/null) || CURRENT_GP=""
+    if [ "$CURRENT_GP" != "allowlist" ]; then
+        openclaw config set channels.whatsapp.groupPolicy "allowlist"
+        CHANGED="yes"
+    fi
+    {% set wa_groups_dict = {} %}
+    {% for ga in wa_group_agents %}
+    {%   set _ = wa_groups_dict.update({ga.deliver_to: {"allowFrom": wa_group_allow, "requireMention": false}}) %}
+    {% endfor %}
+    DESIRED_GROUPS='{{ wa_groups_dict | to_json }}'
+    CURRENT_GROUPS=$(openclaw config get channels.whatsapp.groups 2>/dev/null) || CURRENT_GROUPS="{}"
+    CG_NORM=$(echo "$CURRENT_GROUPS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    DG_NORM=$(echo "$DESIRED_GROUPS" | jq -cS '.')
+    if [ "$CG_NORM" = "PARSE_FAIL" ] || [ "$CG_NORM" != "$DG_NORM" ]; then
+        openclaw config set channels.whatsapp.groups --json "$DESIRED_GROUPS"
+        CHANGED="yes"
+    fi
+    {% endif %}
+
+    if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
+  args:
+    executable: /bin/bash
+  register: whatsapp_channel_result
+  changed_when: "'UPDATED' in whatsapp_channel_result.stdout"
+  notify: restart openclaw-gateway
