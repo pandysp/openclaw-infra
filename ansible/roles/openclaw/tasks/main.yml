@@ -2,6 +2,9 @@
 - name: Install OpenClaw
   ansible.builtin.include_tasks: install.yml
 
+- name: Install beads (bd)
+  ansible.builtin.include_tasks: beads.yml
+
 - name: Patch heartbeat group delivery bug
   ansible.builtin.include_tasks: patch-heartbeat-group-fix.yml
 

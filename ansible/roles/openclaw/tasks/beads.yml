@@ -1,0 +1,31 @@
+---
+- name: Check installed bd version
+  ansible.builtin.shell: bd --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo ""
+  args:
+    executable: /bin/bash
+  register: beads_installed_version
+  changed_when: false
+
+- name: Install or upgrade beads (bd)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | \
+      BD_VERSION="{{ beads_version }}" bash
+    echo "INSTALLED"
+  args:
+    executable: /bin/bash
+  register: beads_install
+  changed_when: "'INSTALLED' in beads_install.stdout"
+  when: beads_installed_version.stdout | trim != beads_version
+
+- name: Symlink bd to /usr/local/bin
+  become: true
+  ansible.builtin.file:
+    src: /home/ubuntu/.local/bin/bd
+    dest: /usr/local/bin/bd
+    state: link
+    force: true
+
+- name: Show beads status
+  ansible.builtin.debug:
+    msg: "Beads {{ beads_version }} {{ 'already installed' if beads_installed_version.stdout | trim == beads_version else 'installed successfully' }}"

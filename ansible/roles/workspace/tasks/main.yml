@@ -157,6 +157,49 @@
   loop_control:
     label: "{{ item.item.agent_id }}"
 
+- name: Initialize beads in workspace
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ item.item.workspace_dir }}"
+    if [ ! -d ".beads" ]; then
+      bd init --no-interactive 2>/dev/null || bd init
+      bd config set sync.branch beads-sync
+      echo "INITIALIZED"
+    else
+      echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: beads_init
+  changed_when: "'INITIALIZED' in beads_init.stdout"
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
+- name: Inject Beads task system into AGENTS.md
+  ansible.builtin.blockinfile:
+    path: "{{ item.item.workspace_dir }}/AGENTS.md"
+    marker: "<!-- {mark} beads-task-system -->"
+    insertbefore: "^## Safety"
+    block: |
+      ## Task System
+
+      **Beads is the canonical task system.** All actionable work is tracked as Beads issues. `TODO.md` is no longer used.
+
+      - `bd ready` — Show issues ready to work (no blockers)
+      - `bd blocked` — Show blocked issues
+      - `bd create --title="..." --type=task --priority=2` — Create issue (priority: 0=critical, 4=backlog)
+      - `bd update <id> --status=in_progress` — Claim work
+      - `bd close <id>` — Mark complete
+      - `bd sync` — Sync with git remote (run at session end)
+
+      Run `bd prime` at session start for full Beads context.
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
 - name: Add sandbox path workaround to AGENTS.md
   ansible.builtin.blockinfile:
     path: "{{ item.item.workspace_dir }}/AGENTS.md"
