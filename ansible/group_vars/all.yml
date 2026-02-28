@@ -207,6 +207,18 @@ claude_code_plugins:
     - "astral@astral-sh"
     - "typescript-lsp@pandysp"
 
+# Obsidian Headless Sync (obsidian-headless npm package)
+# Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.
+# Override in openclaw.yml to enable and configure per-deployment.
+obsidian_headless_enabled: false
+obsidian_headless_version: "0.0.3"
+obsidian_headless_memory_max: "256M"
+obsidian_headless_agents: []
+obsidian_headless_initial_sync_timeout: 300
+# Common non-vault directories to exclude from Obsidian Sync.
+# Override in openclaw.yml to add workspace-specific exclusions.
+obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env"
+
 # Obsidian vault definitions (cloned into <workspace>/obsidian/<name>/).
 # Default: none. Override in openclaw.yml for vault access.
 openclaw_obsidian_vaults: []

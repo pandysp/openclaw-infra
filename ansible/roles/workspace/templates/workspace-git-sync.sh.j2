@@ -14,14 +14,13 @@ if ! git diff --cached --quiet; then
     git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-# Reconcile with remote before pushing (local workspace takes precedence on conflict)
-git fetch origin main
-if ! git rebase -X ours origin/main 2>/dev/null; then
-    echo "Rebase failed, falling back to merge" >&2
-    git rebase --abort 2>/dev/null || true
+# Reconcile with remote before pushing (local workspace takes precedence on conflict).
+# Uses merge (not rebase) — simpler for auto-synced workspaces, avoids rebase complexity.
+git fetch origin main 2>/dev/null || true
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
     if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
         git merge --abort 2>/dev/null || true
-        echo "WARNING: Cannot reconcile, forcing local state for {{ item.agent_id }}" >&2
+        echo "WARNING: Cannot merge, forcing local state for {{ item.agent_id }}" >&2
         git push --force-with-lease origin main
     fi
 fi

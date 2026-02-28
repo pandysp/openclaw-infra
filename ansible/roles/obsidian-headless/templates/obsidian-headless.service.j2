@@ -1,0 +1,19 @@
+[Unit]
+Description=Obsidian Sync daemon ({{ item.agent_id }})
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=/home/ubuntu/.openclaw/obsidian-headless.env
+Environment=HOME=/home/ubuntu
+Environment=PATH=/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/.npm-global/bin/ob sync --path {{ item.workspace_dir }} --continuous
+Restart=on-failure
+RestartSec=30
+MemoryMax={{ obsidian_headless_memory_max }}
+
+[Install]
+WantedBy=default.target

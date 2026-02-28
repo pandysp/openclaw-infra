@@ -133,6 +133,10 @@
     - role: obsidian
       tags: [obsidian]
       when: openclaw_obsidian_vaults | default([]) | selectattr('repo_url', 'ne', '') | list | length > 0
+    # obsidian-headless after obsidian — syncs workspaces to Obsidian Sync cloud for phone access.
+    - role: obsidian-headless
+      tags: [obsidian-headless]
+      when: obsidian_headless_enabled | default(false) | bool
     # qmd after obsidian — needs workspace dirs from agents role, before plugins registers MCP servers.
     - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
     # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.

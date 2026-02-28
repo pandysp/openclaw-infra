@@ -1,0 +1,79 @@
+---
+# Obsidian Headless Sync — runs obsidian-headless as per-workspace systemd daemons
+# to enable near-real-time sync from agent workspaces to Obsidian Sync cloud.
+#
+# Prerequisites:
+#   - obsidian_auth_token and obsidian_vault_password secrets passed via provision.sh
+#   - _openclaw_workspaces defined in playbook pre_tasks
+#   - Node.js installed on VPS host
+
+# Determine which workspaces get Obsidian Sync
+- name: Determine obsidian-headless workspaces
+  ansible.builtin.set_fact:
+    _obsidian_headless_workspaces: >-
+      {{ _openclaw_workspaces
+         | selectattr('agent_id', 'in', obsidian_headless_agents)
+         | list }}
+
+- name: Validate obsidian-headless secrets
+  ansible.builtin.assert:
+    that:
+      - obsidian_auth_token is defined and obsidian_auth_token | length > 0
+      - obsidian_vault_password is defined and obsidian_vault_password | length > 0
+    fail_msg: "obsidian_auth_token and obsidian_vault_password must be set (via provision.sh secrets)"
+
+- name: Install obsidian-headless npm package
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH=$HOME/.npm-global/bin:$PATH
+    CURRENT=$(npm list -g obsidian-headless --depth=0 2>/dev/null | grep obsidian-headless | awk -F@ '{print $NF}' || echo "")
+    if [ "$CURRENT" = "{{ obsidian_headless_version }}" ]; then
+      echo "OK"
+    else
+      npm install -g obsidian-headless@{{ obsidian_headless_version }}
+      echo "INSTALLED"
+    fi
+  args:
+    executable: /bin/bash
+  register: npm_install
+  changed_when: "'INSTALLED' in npm_install.stdout"
+
+- name: Write obsidian-headless auth token env file
+  ansible.builtin.copy:
+    content: "OBSIDIAN_AUTH_TOKEN={{ obsidian_auth_token }}\n"
+    dest: /home/ubuntu/.openclaw/obsidian-headless.env
+    mode: "0600"
+  no_log: true
+
+- name: Write obsidian vault password file
+  ansible.builtin.copy:
+    content: "{{ obsidian_vault_password }}"
+    dest: /home/ubuntu/.openclaw/obsidian-vault-password
+    mode: "0600"
+  no_log: true
+
+# Per-workspace vault setup (idempotent — skips if already linked)
+- name: Setup Obsidian Sync per workspace
+  ansible.builtin.include_tasks: setup-vault.yml
+  loop: "{{ _obsidian_headless_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+# Deploy systemd services
+- name: Ensure systemd user directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user
+    state: directory
+    mode: "0755"
+
+- name: Deploy obsidian-headless systemd services
+  ansible.builtin.template:
+    src: obsidian-headless.service.j2
+    dest: "/home/ubuntu/.config/systemd/user/obsidian-headless-{{ item.agent_id }}.service"
+    mode: "0644"
+  loop: "{{ _obsidian_headless_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  notify:
+    - reload user systemd
+    - enable obsidian-headless services

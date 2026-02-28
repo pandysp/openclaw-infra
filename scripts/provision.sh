@@ -65,6 +65,8 @@ else
     export PROVISION_GROQ_API_KEY=$(pulumi config get groqApiKey 2>/dev/null || echo "")
     export PROVISION_GITHUB_TOKEN=$(pulumi config get githubToken 2>/dev/null || echo "")
     export PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL=$(pulumi config get obsidianAndyVaultRepoUrl 2>/dev/null || echo "")
+    export PROVISION_OBSIDIAN_AUTH_TOKEN=$(pulumi config get obsidianAuthToken 2>/dev/null || echo "")
+    export PROVISION_OBSIDIAN_VAULT_PASSWORD=$(pulumi config get obsidianVaultPassword 2>/dev/null || echo "")
 
     # Read deploy keys: try structured export first, fall back to individual exports
     # (individual exports exist until first `pulumi up` after migration)
@@ -154,6 +156,7 @@ echo "  grok_search: $([ -n "$(read_env PROVISION_XAI_API_KEY)" ] && echo "confi
 echo "  groq_voice: $([ -n "$(read_env PROVISION_GROQ_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (main): $([ -n "$(read_env PROVISION_GITHUB_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  obsidian (andy): $([ -n "$(read_env PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL)" ] && echo "configured" || echo "skipped")"
+echo "  obsidian_headless: $([ -n "$(read_env PROVISION_OBSIDIAN_AUTH_TOKEN)" ] && echo "configured" || echo "skipped")"
 for id in "${agent_ids[@]}"; do
     [ -z "$id" ] && continue
     upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
@@ -195,6 +198,8 @@ static = [
     ('groq_api_key', 'PROVISION_GROQ_API_KEY'),
     ('github_token', 'PROVISION_GITHUB_TOKEN'),
     ('obsidian_andy_vault_repo_url', 'PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL'),
+    ('obsidian_auth_token', 'PROVISION_OBSIDIAN_AUTH_TOKEN'),
+    ('obsidian_vault_password', 'PROVISION_OBSIDIAN_VAULT_PASSWORD'),
 ]
 
 with open(sys.argv[1], 'w') as f:

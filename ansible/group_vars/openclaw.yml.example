@@ -67,6 +67,18 @@
 #     repo_url: "{{ obsidian_my_vault_repo_url | default('') }}"
 #     agents: ["main"]
 
+# --- Obsidian Headless Sync (optional) ---
+# Run obsidian-headless daemons to sync workspaces to Obsidian Sync cloud.
+# Requires an Obsidian Sync subscription and secrets via provision.sh:
+#   pulumi config set obsidianAuthToken --secret <token>        # from ~/.obsidian-headless/auth_token
+#   pulumi config set obsidianVaultPassword --secret <password>  # E2E encryption password
+#
+# obsidian_headless_enabled: true
+# obsidian_headless_agents:
+#   - "main"
+# # Override excluded folders (default: .git,.venv,node_modules,.cache,.env)
+# obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env,.beads,.claude"
+
 # --- Advanced: manual overrides for auto-generated config ---
 # The following variables are normally auto-generated from openclaw_agents.
 # Define them here ONLY if you need non-standard naming or custom server configurations.

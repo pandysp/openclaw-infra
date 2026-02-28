@@ -288,11 +288,11 @@
         git commit -m "Initial workspace sync"
     fi
 
-    # Reconcile with remote before pushing (local workspace takes precedence on conflict)
+    # Reconcile with remote before pushing (local workspace takes precedence on conflict).
+    # Uses merge (not rebase) — simpler for auto-synced workspaces, avoids rebase complexity.
     RECONCILED=true
     if git fetch origin main 2>/dev/null; then
-        if ! git rebase -X ours origin/main 2>/dev/null; then
-            git rebase --abort 2>/dev/null || true
+        if git rev-parse --verify origin/main >/dev/null 2>&1; then
             if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
                 git merge --abort 2>/dev/null || true
                 RECONCILED=false

@@ -1,0 +1,78 @@
+---
+# Per-workspace Obsidian Sync setup (included from main.yml loop).
+# Idempotent: skips all setup if the workspace is already linked.
+#
+# Receives `item` from the loop with keys: agent_id, workspace_dir
+
+- name: "Check if {{ item.agent_id }} workspace is already linked"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH=$HOME/.npm-global/bin:$PATH
+    export OBSIDIAN_AUTH_TOKEN="{{ obsidian_auth_token }}"
+    ob sync-status --path "{{ item.workspace_dir }}" 2>&1
+  args:
+    executable: /bin/bash
+  register: sync_status
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+# Full setup block — only runs if workspace is not yet linked to Obsidian Sync
+- name: "Setup Obsidian Sync for {{ item.agent_id }}"
+  when: sync_status.rc != 0
+  environment:
+    PATH: "/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+    OBSIDIAN_AUTH_TOKEN: "{{ obsidian_auth_token }}"
+  block:
+    - name: "Create remote vault for {{ item.agent_id }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ob sync-create-remote \
+          --name "{{ item.agent_id }}-workspace" \
+          --encryption e2ee \
+          --password "$(cat /home/ubuntu/.openclaw/obsidian-vault-password)"
+      args:
+        executable: /bin/bash
+      no_log: true
+
+    - name: "Get vault ID for {{ item.agent_id }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ob sync-list-remote 2>&1 | grep "{{ item.agent_id }}-workspace" | awk '{print $1}'
+      args:
+        executable: /bin/bash
+      register: vault_id
+      failed_when: vault_id.stdout | length == 0
+
+    - name: "Link vault to {{ item.agent_id }} workspace"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ob sync-setup \
+          --vault "{{ vault_id.stdout | trim }}" \
+          --path "{{ item.workspace_dir }}" \
+          --password "$(cat /home/ubuntu/.openclaw/obsidian-vault-password)" \
+          --device-name "openclaw-vps-{{ item.agent_id }}"
+      args:
+        executable: /bin/bash
+      no_log: true
+
+    - name: "Configure exclusions for {{ item.agent_id }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ob sync-config \
+          --path "{{ item.workspace_dir }}" \
+          --excluded-folders "{{ obsidian_headless_excluded_folders }}"
+      args:
+        executable: /bin/bash
+
+    - name: "Initial sync for {{ item.agent_id }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        timeout {{ obsidian_headless_initial_sync_timeout }} \
+          ob sync --path "{{ item.workspace_dir }}"
+      args:
+        executable: /bin/bash
+      register: initial_sync
+      # timeout exits 124 on success (sync completed = "Fully synced" before timeout)
+      # or the process ends naturally with rc=0
+      failed_when: initial_sync.rc not in [0, 124]
