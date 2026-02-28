@@ -137,6 +137,26 @@
   loop_control:
     label: "{{ item.item.agent_id }}"
 
+- name: Migrate memory/ to logs/ (one-time rename)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    SRC="{{ item.item.workspace_dir }}/memory"
+    DST="{{ item.item.workspace_dir }}/logs"
+    if [ -d "$SRC" ] && [ ! -d "$DST" ]; then
+      mv "$SRC" "$DST"
+      echo "MIGRATED"
+    else
+      echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: memory_migration
+  changed_when: "'MIGRATED' in memory_migration.stdout"
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
 - name: Add sandbox path workaround to AGENTS.md
   ansible.builtin.blockinfile:
     path: "{{ item.item.workspace_dir }}/AGENTS.md"

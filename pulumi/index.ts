@@ -20,6 +20,9 @@ const telegramUserId = config.get("telegramUserId");
 // Optional xAI API key for Grok web search (set via `pulumi config set --secret`)
 const xaiApiKey = config.getSecret("xaiApiKey");
 
+// Optional Groq API key for voice transcription (set via `pulumi config set --secret`)
+const groqApiKey = config.getSecret("groqApiKey");
+
 // Optional GitHub PATs for MCP adapter (set via `pulumi config set --secret`)
 const githubToken = config.getSecret("githubToken");
 const githubTokenManon = config.getSecret("githubTokenManon");
@@ -162,6 +165,7 @@ const ansibleProvision = new command.local.Command(
                 workspaceDeployKeyNici.privateKeyOpenssh,
             PROVISION_TAILSCALE_HOSTNAME: serverName,
             PROVISION_XAI_API_KEY: xaiApiKey || "",
+            PROVISION_GROQ_API_KEY: groqApiKey || "",
             PROVISION_GITHUB_TOKEN: githubToken || "",
             PROVISION_GITHUB_TOKEN_MANON: githubTokenManon || "",
             PROVISION_GITHUB_TOKEN_TL: githubTokenTl || "",

@@ -11,7 +11,14 @@
       dest: /tmp/ansible-gateway-token
     - content: "{{ xai_api_key | default('') }}"
       dest: /tmp/ansible-xai-api-key
-    - content: "{{ openclaw_custom_models | to_json }}"
+    - content: "{{ groq_api_key | default('') }}"
+      dest: /tmp/ansible-groq-api-key
+    - content: >-
+        {% if groq_api_key is defined and groq_api_key | length > 0 -%}
+        {{ openclaw_custom_models | combine({'providers': {'groq': {'baseUrl': openclaw_groq_base_url, 'apiKey': groq_api_key, 'models': []}}}, recursive=true) | to_json }}
+        {%- else -%}
+        {{ openclaw_custom_models | to_json }}
+        {%- endif %}
       dest: /tmp/ansible-custom-models
     - content: "{{ openclaw_model_fallbacks | to_json }}"
       dest: /tmp/ansible-model-fallbacks
@@ -95,7 +102,26 @@
         openclaw config unset tools.web.search.apiKey 2>/dev/null || true
         {% else %}
         for key in tools.web.search.provider tools.web.search.apiKey tools.web.search.grok.apiKey tools.web.search.timeoutSeconds; do
-            output=$(openclaw config unset "$key" 2>&1) || {
+            output=$(openclaw config unset "$key" 2>&1) && {
+                CHANGED="yes"
+            } || {
+                if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
+                    true
+                else
+                    echo "ERROR: Failed to unset $key: $output"
+                    exit 1
+                fi
+            }
+        done
+        {% endif %}
+
+        # Voice transcription — Groq provider cleanup (setting is in the settings task,
+        # after "openclaw config set models --json" which replaces the entire models object)
+        {% if not (groq_api_key is defined and groq_api_key | length > 0) %}
+        for key in models.providers.groq tools.media.audio.enabled tools.media.audio.models; do
+            output=$(openclaw config unset "$key" 2>&1) && {
+                CHANGED="yes"
+            } || {
                 if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
                     true
                 else
@@ -163,7 +189,8 @@
         check_set_json agents.defaults.model.fallbacks "$(cat /tmp/ansible-model-fallbacks)"
         check_set agents.defaults.thinkingDefault "{{ openclaw_thinking_default }}"
 
-        # Custom models: always set without tracking change (server enriches with extra fields)
+        # Custom models: always set without tracking change (server enriches with extra fields).
+        # When Groq voice is configured, the Groq provider is merged into the temp file at template time.
         openclaw config set models --json "$(cat /tmp/ansible-custom-models)"
 
         # Sandbox tool allowlist (all groups + plugins)
@@ -253,6 +280,12 @@
         check_set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
         check_set_json agents.defaults.sandbox.docker.readOnlyRoot '{{ openclaw_sandbox_read_only_root | to_json }}'
 
+        # Voice transcription — enable audio (provider merged into models JSON above; cleanup in secrets task)
+        {% if groq_api_key is defined and groq_api_key | length > 0 %}
+        check_set tools.media.audio.enabled true
+        check_set_json tools.media.audio.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}"}]'
+        {% endif %}
+
         if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
       args:
         executable: /bin/bash
@@ -334,6 +367,7 @@
       loop:
         - /tmp/ansible-gateway-token
         - /tmp/ansible-xai-api-key
+        - /tmp/ansible-groq-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
         - /tmp/ansible-compaction-memoryflush

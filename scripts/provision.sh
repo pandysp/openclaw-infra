@@ -50,6 +50,7 @@ if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     workspace_nici_deploy_key="${PROVISION_WORKSPACE_NICI_DEPLOY_KEY:-}"
     tailscale_hostname="${PROVISION_TAILSCALE_HOSTNAME:-openclaw-vps}"
     xai_api_key="${PROVISION_XAI_API_KEY:-}"
+    groq_api_key="${PROVISION_GROQ_API_KEY:-}"
     github_token="${PROVISION_GITHUB_TOKEN:-}"
     github_token_manon="${PROVISION_GITHUB_TOKEN_MANON:-}"
     github_token_tl="${PROVISION_GITHUB_TOKEN_TL:-}"
@@ -91,6 +92,7 @@ else
     workspace_nici_deploy_key=$(pulumi stack output workspaceNiciDeployPrivateKey --show-secrets 2>/dev/null || echo "")
     tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
     xai_api_key=$(pulumi config get xaiApiKey 2>/dev/null || echo "")
+    groq_api_key=$(pulumi config get groqApiKey 2>/dev/null || echo "")
     github_token=$(pulumi config get githubToken 2>/dev/null || echo "")
     github_token_manon=$(pulumi config get githubTokenManon 2>/dev/null || echo "")
     github_token_tl=$(pulumi config get githubTokenTl 2>/dev/null || echo "")
@@ -152,6 +154,7 @@ echo "  workspace_sync (henning): $([ -n "$workspace_henning_repo_url" ] && echo
 echo "  workspace_sync (ph): $([ -n "$workspace_ph_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (nici): $([ -n "$workspace_nici_repo_url" ] && echo "configured" || echo "skipped")"
 echo "  grok_search: $([ -n "$xai_api_key" ] && echo "configured" || echo "skipped")"
+echo "  groq_voice: $([ -n "$groq_api_key" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (main): $([ -n "$github_token" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (manon): $([ -n "$github_token_manon" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (tl): $([ -n "$github_token_tl" ] && echo "configured" || echo "skipped")"
@@ -189,6 +192,7 @@ env \
   _S_WHATSAPP_NICI_PHONE="$whatsapp_nici_phone" \
   _S_WORKSPACE_REPO_URL="$workspace_repo_url" \
   _S_XAI_API_KEY="$xai_api_key" \
+  _S_GROQ_API_KEY="$groq_api_key" \
   _S_WORKSPACE_MANON_REPO_URL="$workspace_manon_repo_url" \
   _S_WORKSPACE_TL_REPO_URL="$workspace_tl_repo_url" \
   _S_WORKSPACE_HENNING_REPO_URL="$workspace_henning_repo_url" \
@@ -210,7 +214,7 @@ keys = [
     'gateway_token', 'claude_setup_token', 'telegram_bot_token',
     'telegram_user_id', 'telegram_manon_user_id', 'telegram_group_id',
     'telegram_henning_user_id', 'telegram_ph_group_id', 'whatsapp_nici_phone',
-    'workspace_repo_url', 'xai_api_key',
+    'workspace_repo_url', 'xai_api_key', 'groq_api_key',
     'workspace_manon_repo_url', 'workspace_tl_repo_url',
     'workspace_henning_repo_url', 'workspace_ph_repo_url', 'workspace_nici_repo_url',
     'github_token', 'github_token_manon', 'github_token_tl',
