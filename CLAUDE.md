@@ -35,20 +35,7 @@ git merge upstream/main
 
 ## Architecture
 
-```
-┌─────────────────┐     ┌─────────────────────────────────────┐
-│  Your Machine   │     │         Hetzner VPS (~€6.59/mo)     │
-│  (Tailscale)    │────▶│                                     │
-│                 │     │  ┌─────────────────────────────┐    │
-│  No public IP   │     │  │   OpenClaw Gateway          │    │
-│  exposure       │     │  │   localhost:18789           │    │
-│                 │     │  │   (systemd user service)    │    │
-└─────────────────┘     │  └─────────────────────────────┘    │
-                        │                                     │
-                        │  Hetzner Firewall: No inbound       │
-                        │  Tailscale Serve → localhost:18789  │
-                        └─────────────────────────────────────┘
-```
+Your Machine (Tailscale) → Hetzner VPS → Gateway (systemd, localhost:18789) via Tailscale Serve. No public ports. Hetzner firewall + UFW block all inbound except Tailscale.
 
 ## Security Model
 
@@ -64,32 +51,7 @@ git merge upstream/main
 
 For the full threat model, see [docs/SECURITY.md](./docs/SECURITY.md).
 
-### Why Not Docker?
-
-The [official Hetzner guide](https://docs.openclaw.ai/platforms/hetzner) runs the gateway in Docker. We use systemd instead because:
-
-- **Smaller attack surface** — Docker daemon runs as root. Our gateway runs as an unprivileged user.
-- **Simpler operations** — `systemctl --user` and `journalctl` are easier to debug than container logs.
-- **No persistence problem** — Docker requires baking binaries into images (they're lost on restart). With systemd, files on disk stay on disk.
-- **Same restart guarantees** — systemd `Restart=on-failure` does what `restart: unless-stopped` does.
-
-Docker is installed on the server for **sandbox support** — all sessions run in Docker containers with bridge networking and a custom image (`openclaw-sandbox-custom:latest`) with a dev toolchain (Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, uv, pnpm, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client). The gateway itself runs natively.
-
-### Why Two Auth Layers?
-
-This deployment uses **Tailscale identity auth** with device pairing:
-
-1. **Tailscale network auth** - Only devices on your tailnet can reach the gateway
-2. **Device pairing** - Each browser/device must be explicitly approved
-
-**Q: Do I need to enter a token?**
-**A: No.** Tailscale identity replaces token auth. Just approve your device once.
-
-**Q: What if I share my Tailscale network?**
-**A: Device pairing prevents unauthorized access.** Others on your tailnet would need you to approve their device before they could use OpenClaw.
-
-**Q: What if device pairing doesn't work?**
-**A: Use the tokenized URL as fallback:** `pulumi stack output tailscaleUrlWithToken --show-secrets`
+Gateway runs via systemd (not Docker) as unprivileged user. Docker is used only for sandbox sessions (`openclaw-sandbox-custom:latest`). Auth: Tailscale identity + device pairing; no token needed. Fallback tokenized URL: `pulumi stack output tailscaleUrlWithToken --show-secrets`.
 
 ## Directory Structure
 
@@ -147,16 +109,6 @@ openclaw-infra/
     ├── SECURITY.md                  # Threat model
     └── TROUBLESHOOTING.md
 ```
-
-### Pulumi vs Ansible Responsibilities
-
-| Pulumi (infrastructure) | Ansible (configuration) |
-|---|---|
-| Hetzner VPS + firewall | System packages, Docker, UFW |
-| SSH keys, gateway token | OpenClaw install + onboard |
-| Workspace deploy keys | Agents, MCP servers (auto-derived from `openclaw_agents`) |
-| Cloud-init (Tailscale only) | Gateway config, Telegram, cron |
-| Triggers Ansible on server replacement | Sandbox image, plugins, workspace git sync |
 
 ### Ansible Tags
 
@@ -353,133 +305,53 @@ Default server type is **CX33** (4 vCPU, 8 GB RAM). Upgrade to **CX43** (8 vCPU,
 
 ### Key Rotation
 
-**Tailscale auth key:**
-1. Generate new key at https://login.tailscale.com/admin/settings/keys
-2. Update Pulumi config: `pulumi config set tailscaleAuthKey --secret`
-3. Redeploy: `pulumi up` (or update manually on server)
-
-**Claude setup token:**
-1. Run `claude setup-token` locally
-2. Update Pulumi config: `pulumi config set claudeSetupToken --secret`
-3. Redeploy or update on server: `openclaw auth login`
-
-**Gateway token** (auto-generated, rarely needs rotation):
-1. Redeploy with `pulumi up` (generates new token)
-2. Re-pair browser devices after rotation
-3. Re-run local CLI onboard with new token (see [Local CLI](#local-cli))
-
-**Telegram bot token** (if compromised):
-1. Revoke old token: Message @BotFather, send `/revoke`, select your bot
-2. Get new token: `/token` in @BotFather
-3. Update Pulumi config: `pulumi config set telegramBotToken --secret`
-4. Redeploy: `pulumi up`
-
-## Prerequisites
-
-Before deploying, you need:
-
-1. **Hetzner Cloud API Token** — Create a **dedicated project** for OpenClaw at [console.hetzner.cloud](https://console.hetzner.cloud/), then generate a Read & Write token (Security → API Tokens)
-2. **Tailscale Auth Key** — Generate at [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) with **Reusable** and **Ephemeral** enabled. New to Tailscale? See [README.md](./README.md#first-time-tailscale-setup).
-3. **Claude Max Setup Token** — Run `claude setup-token` in your terminal. Token starts with `sk-ant-oat01-...`. Note: setup tokens only have `user:inference` scope (missing `user:profile`), so `/status` won't show usage tracking. See [GitHub issue #4614](https://github.com/openclaw/openclaw/issues/4614).
-4. **Local Tools** — Node.js 18+, Pulumi CLI (`curl -fsSL https://get.pulumi.com | sh`), Ansible (`pip install ansible`), Tailscale app, OpenClaw CLI (`brew install openclaw-cli`)
+Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude token: `claudeSetupToken` + `openclaw auth login` on server. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
 
 ## First-Time Setup
 
 ```bash
-# 1. Clone and install dependencies
-cd ~/projects/openclaw-infra
-npm install
-
-# 2. Initialize Pulumi stack (you'll be prompted to set a passphrase)
 cd pulumi
-pulumi stack init prod
-# SAVE YOUR PASSPHRASE - you'll need it for all future pulumi commands
+pulumi stack init prod   # set a passphrase and save it — required for all future pulumi commands
 
-# 3. Configure Hetzner token
+# Required secrets
 pulumi config set hcloud:token --secret
-
-# 4. Configure secrets
 pulumi config set tailscaleAuthKey --secret
 pulumi config set claudeSetupToken --secret
 
-# 5. (Optional) Enable web search, Telegram, or workspace sync
-pulumi config set xaiApiKey --secret               # xAI API key for Grok web search
-pulumi config set telegramBotToken --secret       # From @BotFather
-pulumi config set telegramUserId "YOUR_USER_ID"   # ./scripts/get-telegram-id.sh or @userinfobot
+# Optional features
+pulumi config set xaiApiKey --secret               # web search via Grok
+pulumi config set telegramBotToken --secret        # Telegram integration
+pulumi config set telegramUserId "YOUR_USER_ID"
 pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
 
-# 6. Preview deployment
-pulumi preview
-
-# 7. Deploy (creates server + auto-runs Ansible provisioning)
-pulumi up
-
-# 8. Verify deployment
+pulumi up          # creates server + auto-runs Ansible
 cd ..
 ./scripts/verify.sh
 
-# 9. Install local CLI and connect to remote gateway (see "Local CLI" section above)
-brew install openclaw-cli
+# Connect local CLI
 openclaw onboard --non-interactive --accept-risk --flow quickstart --mode remote \
   --remote-url "wss://openclaw-vps.<tailnet>.ts.net" \
   --remote-token "$(pulumi stack output openclawGatewayToken --show-secrets)" \
   --skip-channels --skip-skills --skip-health --skip-ui --skip-daemon
-# Then approve the CLI device via SSH (see "First-Time Access" below)
 ```
 
-### First-Time Access (Device Pairing)
+### Device Pairing
 
-After deployment, you need to approve your browser as a trusted device (one-time):
+New browser or CLI client requires one-time approval:
 
-1. **Open the gateway URL** in your browser:
-   ```
-   https://openclaw-vps.<tailnet>.ts.net/chat
-   ```
-
-2. **You'll see "pairing required"** — this is expected for first-time access
-
-3. **Approve the device** (requires an already-paired device — CLI or SSH):
+1. Open `https://openclaw-vps.<tailnet>.ts.net/chat` — you'll see "pairing required"
+2. Approve via SSH (required for very first device) or paired CLI:
    ```bash
-   # Via SSH (required for first-ever device)
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
-
-   # Via local CLI (for subsequent devices, if CLI is already paired)
-   openclaw devices list
-   openclaw devices approve <request-id>
    ```
+3. Refresh browser — authenticated via Tailscale identity
 
-4. **Refresh the browser** — you're now authenticated via Tailscale identity
-
-**For subsequent access:** Just use the plain URL. Your device is paired and Tailscale identity handles auth.
-
-**New browser/device?** Repeat the pairing process above.
-
-**Fallback (if pairing doesn't work):** Use the tokenized URL:
-```bash
-pulumi stack output tailscaleUrlWithToken --show-secrets
-```
+Fallback if pairing fails: `pulumi stack output tailscaleUrlWithToken --show-secrets`
 
 ### Pulumi Passphrase
 
-Pulumi encrypts your secrets locally using a passphrase. You must set the `PULUMI_CONFIG_PASSPHRASE` environment variable for every Pulumi command:
-
-```bash
-# Option 1: Set per-command
-PULUMI_CONFIG_PASSPHRASE="your-passphrase" pulumi up
-
-# Option 2: Export for session
-export PULUMI_CONFIG_PASSPHRASE="your-passphrase"
-pulumi up
-
-# Option 3: Use a password manager / .envrc (don't commit!)
-```
-
-**Store your passphrase securely** — without it, you cannot manage or destroy your infrastructure.
-
-### Pulumi State Backend
-
-This project uses **local state storage** (`.pulumi/` directory, gitignored). For CI/CD or team use, consider migrating to [Pulumi Cloud](https://www.pulumi.com/docs/pulumi-cloud/) or [Pulumi ESC](https://www.pulumi.com/docs/esc/).
+`PULUMI_CONFIG_PASSPHRASE` env var must be set for every `pulumi` command (encrypts local state). Export for session or set per-command: `PULUMI_CONFIG_PASSPHRASE="..." pulumi up`. Without it, all Pulumi commands fail.
 
 ## Workspace Git Sync (Optional)
 
@@ -487,59 +359,14 @@ The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills
 
 **Multi-agent note:** Workspace definitions are auto-generated from `openclaw_agents` (see [Multi-Agent Setup](#multi-agent-setup-optional)). Each agent gets a workspace at `~/.openclaw/workspace-<id>` (or `~/.openclaw/workspace` for main). Run `setup-workspace.sh <agent-id>` for each agent that needs git sync.
 
-### Setup Steps
-
-**Automated (recommended):**
+### Setup
 
 ```bash
-./scripts/setup-workspace.sh <agent-id>
-# Creates the repo, adds deploy key, sets Pulumi config — all in one step.
-
-# Examples:
-./scripts/setup-workspace.sh henning          # pandysp/openclaw-workspace-henning
-./scripts/setup-workspace.sh main             # pandysp/openclaw-workspace
-./scripts/setup-workspace.sh ph --org myorg   # myorg/openclaw-workspace-ph
+./scripts/setup-workspace.sh <agent-id>   # creates repo, deploy key, Pulumi config
+pulumi up   # or: ./scripts/provision.sh --tags workspace
 ```
 
-Then deploy: `pulumi up` or `./scripts/provision.sh --tags workspace`.
-
-**Manual (if you prefer):**
-
-1. **Create a private GitHub repo** (e.g., `openclaw-workspace`)
-
-2. **Get the deploy key** (generated by Pulumi):
-   ```bash
-   cd pulumi
-   pulumi stack output workspaceDeployPublicKey
-   ```
-
-3. **Add the deploy key to your GitHub repo**:
-   ```bash
-   # Via CLI (if gh is installed):
-   pulumi stack output workspaceDeployPublicKey | gh repo deploy-key add --repo YOUR_USER/openclaw-workspace --title "OpenClaw VPS" -w -
-
-   # Or via GitHub UI:
-   # Go to your repo → Settings → Deploy keys → Add deploy key
-   # Paste the public key, check "Allow write access"
-   ```
-
-4. **Configure the repo URL**:
-   ```bash
-   pulumi config set workspaceRepoUrl "git@github.com:YOUR_USER/openclaw-workspace.git"
-   ```
-
-5. **Deploy**:
-   ```bash
-   pulumi up
-   ```
-
-### How It Works
-
-- A systemd timer runs every hour on the VPS
-- It commits any workspace changes and pushes to the remote
-- Commits are automatic with timestamps (e.g., `Auto-sync: 2026-01-15T14:00:00Z`)
-- If nothing changed, no commit is created
-- Uses an ED25519 deploy key (scoped to this single repo)
+Hourly systemd timer commits workspace changes and pushes. Deploy key: `pulumi stack output workspaceDeployPublicKey`.
 
 ### Verify Workspace Sync
 
@@ -734,13 +561,9 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 | Privilege escalation | Blocked (setuid bits stripped) |
 | Dev toolchain | Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, uv, pnpm, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
 
-**Why bridge networking:** Sessions need outbound internet for web research and git push (creating PRs). The default `none` network breaks this. Bridge gives outbound access while keeping the container isolated from the host's network stack.
+**Network:** Bridge (outbound internet for web research/git push). MCP containers (Codex, Claude Code, Pi) use a separate `codex-proxy-net`. Sandbox containers can't reach the credential proxy.
 
-**Network isolation:** MCP containers (Codex, Claude Code, Pi) run on a separate `codex-proxy-net` Docker network to access the credential-injecting proxy. Sandbox containers run on the default `bridge` network and cannot reach the proxy or obtain API tokens.
-
-**What the sandbox protects against:** A prompt-injected session can't read gateway tokens, modify its own config, access session transcripts, escalate to root, or reach the MCP credential proxy (different Docker network). It can still exfiltrate workspace data via HTTP or git push — see [Autonomous Agent Safety](docs/AUTONOMOUS-SAFETY.md) for a multi-agent design that would address this.
-
-**Custom image:** Built in two layers by the Ansible `sandbox` role: a base image (`openclaw-sandbox:trixie`) from `Dockerfile.base.j2`, then a custom image (`openclaw-sandbox-custom:latest`) from `Dockerfile.sandbox.j2` adding the dev toolchain. Neither image is pulled from a registry — both are built locally on the server. Rebuild with `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
+**Custom image:** Two layers built locally: base (`openclaw-sandbox:trixie`, Debian 13) + custom (`openclaw-sandbox-custom:latest`). Neither pulled from registry. Rebuild: `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 
 **Config:**
 ```
@@ -751,9 +574,9 @@ agents.defaults.sandbox.docker.image: openclaw-sandbox-custom:latest
 agents.defaults.sandbox.docker.readOnlyRoot: false
 ```
 
-**Writable rootfs:** Sandbox containers have a writable rootfs (`readOnlyRoot: false`) so agents can install tools at runtime (`pip install`, `npm install -g`, `curl | bash`). The container runs as UID 1000 with `--cap-drop ALL`, so system directories (`/usr/bin/`, `/etc/`) remain unwritable — only `/home/node/` is writable via the overlay layer. Installs persist for the container's lifetime (hours) but are destroyed on container recreation. For persistent installs, agents can use `/workspace/.venv/` or `/workspace/.packages/`. See [docs/SECURITY.md](./docs/SECURITY.md#writable-rootfs-rationale) for the full security analysis.
+**Writable rootfs** (`readOnlyRoot: false`): UID 1000 + `--cap-drop ALL` blocks writes to system dirs; only `/home/node/` writable. Runtime installs (`pip install`, `npm install -g`) persist for the container's lifetime. Persistent installs: `/workspace/.venv/` or `/workspace/.packages/`. See [docs/SECURITY.md](./docs/SECURITY.md#writable-rootfs-rationale).
 
-**Tool access:** Sandbox sessions have access to all standard tool groups (openclaw, runtime, fs, sessions, memory, web, ui, automation, messaging, nodes). Elevated tools (shell, system commands) are enabled. When Telegram is configured, sensitive actions require approval from the configured Telegram user. Without Telegram, elevated tools are enabled without an approval gate. Change via `./scripts/provision.sh --tags config`.
+**Tool access:** All standard tool groups enabled; elevated tools enabled (with Telegram approval gate if configured). Change via `./scripts/provision.sh --tags config`.
 
 ## Remote Node Control (Mac)
 
@@ -815,12 +638,6 @@ Node-side (set by `setup-mac-node.sh`):
 
 **Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
 
-### Known Issue: CWD Bug
-
-The gateway sends the agent's VPS workspace path (e.g., `/home/ubuntu/.openclaw/workspace`) as the working directory for node commands. This path doesn't exist on macOS, causing `spawn /bin/sh ENOENT`.
-
-**Workaround:** Agents must pass `workdir=/tmp` or `workdir=/Users/<user>` in every command targeting a node. Tracked in [openclaw/openclaw#15441](https://github.com/openclaw/openclaw/issues/15441).
-
 ### Operations
 
 ```bash
@@ -854,13 +671,7 @@ Each agent has a **qmd** instance providing local hybrid search (BM25 + vector +
 - `memory` — memory directory (`.md` files only)
 - `extracted-content` — text extracted from PDFs, images, `.docx`, `.xlsx`
 
-**How it works:**
-- A `qmd-watch-<agent_id>` systemd service watches each workspace with `inotifywait -r`
-- On file changes: debounce → extract text from binaries → `qmd update` (BM25) → `qmd embed` (vectors)
-- Embedding is serialized across agents via `flock` (memory-intensive: ~1.5GB model)
-- Initial sync runs on service startup
-
-**Tool count:** Depends on agent count and configured MCP server types. Formula: `N_agents × Σ(tools_per_server_type)`. Each server type contributes a fixed number of tools per agent (e.g., github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6). Check `openclaw_mcp_server_types` in `group_vars/all.yml` for the active set.
+**Tool count:** `N_agents × Σ(tools_per_server_type)`. Per agent: github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6. Check `openclaw_mcp_server_types` in `group_vars/all.yml`.
 
 **Operations:**
 ```bash
@@ -877,7 +688,7 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u qmd
 ssh ubuntu@openclaw-vps 'openclaw config get plugins.entries.openclaw-mcp-adapter.config' | jq '.servers[] | select(.name | startswith("qmd"))'
 ```
 
-**RAM consideration:** Models load on-demand per query, not resident. `deep_search` loads ~2.1GB of GGUF models (embedding 314MB + reranker 610MB + query expansion 1.2GB). CX43 (16 GB) provides comfortable headroom for multiple agents. A 2GB swap is configured as defense-in-depth. CX33 (8 GB) works for single-agent setups but may OOM under concurrent `deep_search`.
+**RAM:** `deep_search` loads ~2.1GB GGUF models on-demand. CX43 (16 GB) recommended for multi-agent; CX33 (8 GB) works for single-agent. 2 GB swap configured.
 
 ## Troubleshooting
 
