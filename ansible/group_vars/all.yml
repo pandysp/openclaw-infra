@@ -26,6 +26,12 @@ openclaw_version: "2026.2.21"
 openclaw_heartbeat_interval: "30m"
 openclaw_elevated_default: "off"
 
+# Voice transcription (Groq Whisper)
+# Set via: pulumi config set groqApiKey --secret
+openclaw_audio_provider: "groq"
+openclaw_audio_model: "whisper-large-v3-turbo"
+openclaw_groq_base_url: "https://api.groq.com/openai/v1"
+
 # Compaction safeguard: flush memories to disk before context compression
 # Prevents silent loss of in-context state when long sessions get compacted.
 # See: https://docs.openclaw.ai/concepts/compaction, openclaw/openclaw#5429
@@ -34,7 +40,7 @@ openclaw_compaction_reserve_tokens_floor: 24000
 openclaw_compaction_memory_flush: true
 openclaw_compaction_memory_flush_threshold: 8000
 openclaw_compaction_memory_flush_prompt: >-
-  Distill important context from this session to memory/YYYY-MM-DD.md (today's date).
+  Distill important context from this session to logs/YYYY-MM-DD.md (today's date).
   Focus on: decisions made, task progress, blockers, lessons learned.
   Skip routine exchanges. If nothing worth storing: NO_FLUSH
 openclaw_compaction_memory_flush_system_prompt: >-

@@ -150,7 +150,7 @@
 
       **Always use RELATIVE paths for file operations:**
       - `SOUL.md` not `/workspace/SOUL.md`
-      - `memory/2026-02-11.md` not `/workspace/memory/2026-02-11.md`
+      - `logs/2026-02-11.md` not `/workspace/logs/2026-02-11.md`
       - `subdir/file.txt` not `/home/ubuntu/.openclaw/workspace/subdir/file.txt`
 
       Your working directory is already the workspace root. Relative paths work
