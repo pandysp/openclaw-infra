@@ -222,9 +222,18 @@
         check_set_json agents.defaults.model.fallbacks "$(cat /tmp/ansible-model-fallbacks)"
         check_set agents.defaults.thinkingDefault "{{ openclaw_thinking_default }}"
 
-        # Custom models: always set without tracking change (server enriches with extra fields).
+        # Custom models: hash-based comparison (server enriches config with extra fields,
+        # so direct JSON comparison always finds a diff). Hash the desired value instead.
         # When Groq voice is configured, the Groq provider is merged into the temp file at template time.
-        openclaw config set models --json "$(cat /tmp/ansible-custom-models)"
+        DESIRED_MODELS=$(cat /tmp/ansible-custom-models)
+        MODELS_HASH_FILE="/home/ubuntu/.openclaw/.ansible-models-hash"
+        DESIRED_HASH=$(echo "$DESIRED_MODELS" | jq -cS '.' | sha256sum | cut -d' ' -f1)
+        CURRENT_HASH=$(cat "$MODELS_HASH_FILE" 2>/dev/null) || CURRENT_HASH=""
+        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ]; then
+            openclaw config set models --json "$DESIRED_MODELS"
+            echo "$DESIRED_HASH" > "$MODELS_HASH_FILE"
+            CHANGED="yes"
+        fi
 
         # Sandbox tool allowlist (all groups + plugins)
         {% set tool_allow = ["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"] %}
@@ -297,6 +306,7 @@
         # Exec configuration (applies to both sandbox and node exec)
         # NOTE: Gateway sends VPS workspace path as CWD to nodes — does not exist on Mac.
         # Agents must pass workdir=/tmp in exec calls. See openclaw/openclaw#15441.
+        # v2026.2.26: node rejects symlink CWDs, so DEFAULT_CWD=/private/tmp in MCP env.
         check_set tools.exec.host "{{ openclaw_exec_host }}"
         check_set tools.exec.security "{{ openclaw_exec_security }}"
         check_set tools.exec.ask "{{ openclaw_exec_ask }}"
