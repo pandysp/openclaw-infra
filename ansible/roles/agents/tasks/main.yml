@@ -14,6 +14,7 @@
         content: "{{ existing_agents.stdout }}"
         dest: /tmp/ansible_existing_agents.json
         mode: '0600'
+      changed_when: false
 
     - name: Create non-default agents
       ansible.builtin.shell: |
@@ -37,6 +38,7 @@
       ansible.builtin.file:
         path: /tmp/ansible_existing_agents.json
         state: absent
+      changed_when: false
 
 - name: Refresh agent list for heartbeat targeting
   ansible.builtin.shell: |
@@ -53,6 +55,7 @@
         content: "{{ agents_current.stdout }}"
         dest: /tmp/ansible_agents_current.json
         mode: '0600'
+      changed_when: false
 
     - name: Set per-agent heartbeat targeting
       ansible.builtin.shell: |
@@ -94,3 +97,4 @@
       ansible.builtin.file:
         path: /tmp/ansible_agents_current.json
         state: absent
+      changed_when: false

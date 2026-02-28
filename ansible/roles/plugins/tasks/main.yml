@@ -1402,12 +1402,15 @@
         DESIRED=$(cat /tmp/ansible-plugin-config)
         CHANGED=""
 
-        # Compare config JSON (normalized)
-        CURRENT=$(openclaw config get plugins.entries.openclaw-mcp-adapter.config 2>/dev/null) || CURRENT=""
-        C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        # Hash-file comparison for config (config get redacts secrets like GitHub tokens)
+        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
+        mkdir -p "$HASH_DIR"
         D_NORM=$(echo "$DESIRED" | jq -cS '.')
-        if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
+        DESIRED_HASH=$(echo -n "$D_NORM" | sha256sum | cut -d' ' -f1)
+        CURRENT_HASH=$(cat "$HASH_DIR/mcp-adapter-config" 2>/dev/null) || CURRENT_HASH=""
+        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ]; then
             openclaw config set plugins.entries.openclaw-mcp-adapter.config --json "$DESIRED"
+            echo "$DESIRED_HASH" > "$HASH_DIR/mcp-adapter-config"
             CHANGED="yes"
         fi
 

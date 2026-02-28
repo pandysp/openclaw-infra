@@ -20,6 +20,7 @@
         content: "{{ _telegram_bindings | to_json }}"
         dest: /tmp/ansible_bindings.json
         mode: '0600'
+      changed_when: false
 
     - name: Set agent bindings
       ansible.builtin.shell: |
@@ -52,6 +53,7 @@
       ansible.builtin.file:
         path: /tmp/ansible_bindings.json
         state: absent
+      changed_when: false
   when: _telegram_bindings | length > 0
 
 - name: Clear agent bindings

@@ -12,12 +12,15 @@
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     BOT_TOKEN=$(cat /tmp/ansible-telegram-bot-token)
-    DESIRED_HASH=$(echo -n "$BOT_TOKEN" | sha256sum | cut -d' ' -f1)
-    CURRENT=$(openclaw config get channels.telegram.botToken 2>/dev/null) || CURRENT=""
-    CURRENT_HASH=$(echo -n "$CURRENT" | sha256sum | cut -d' ' -f1)
+    HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
+    mkdir -p "$HASH_DIR"
     CHANGED=""
-    if [ "$CURRENT_HASH" != "$DESIRED_HASH" ]; then
+    # Hash-file comparison (config get redacts bot token)
+    DESIRED_HASH=$(echo -n "$BOT_TOKEN" | sha256sum | cut -d' ' -f1)
+    CURRENT_HASH=$(cat "$HASH_DIR/telegram-bot-token" 2>/dev/null) || CURRENT_HASH=""
+    if [ "$DESIRED_HASH" != "$CURRENT_HASH" ]; then
         openclaw config set channels.telegram.botToken "$BOT_TOKEN"
+        echo "$DESIRED_HASH" > "$HASH_DIR/telegram-bot-token"
         CHANGED="yes"
     fi
     ENABLED=$(openclaw config get channels.telegram.enabled 2>/dev/null) || ENABLED=""

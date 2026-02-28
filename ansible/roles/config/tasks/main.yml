@@ -38,6 +38,22 @@
         GATEWAY_TOKEN=$(cat /tmp/ansible-gateway-token)
         XAI_API_KEY=$(cat /tmp/ansible-xai-api-key)
         CHANGED=""
+        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
+        mkdir -p "$HASH_DIR"
+
+        # Helper: hash-file comparison for secrets (config get redacts secrets,
+        # so we store the hash of what we SET and compare on next run)
+        check_set_secret() {
+            local key="$1" value="$2" hash_name="$3"
+            local desired_hash current_hash
+            desired_hash=$(echo -n "$value" | sha256sum | cut -d' ' -f1)
+            current_hash=$(cat "$HASH_DIR/$hash_name" 2>/dev/null) || current_hash=""
+            if [ "$desired_hash" != "$current_hash" ]; then
+                openclaw config set "$key" "$value"
+                echo "$desired_hash" > "$HASH_DIR/$hash_name"
+                CHANGED="yes"
+            fi
+        }
 
         # Auth: token mode
         CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null) || CURRENT_MODE=""
@@ -46,30 +62,9 @@
             CHANGED="yes"
         fi
 
-        CURRENT_RAW=$(openclaw config get gateway.auth.token 2>/dev/null) || CURRENT_RAW=""
-        if [ -n "$CURRENT_RAW" ]; then
-            CURRENT_HASH=$(echo -n "$CURRENT_RAW" | sha256sum | cut -d' ' -f1)
-        else
-            CURRENT_HASH=""
-        fi
-        DESIRED_HASH=$(echo -n "$GATEWAY_TOKEN" | sha256sum | cut -d' ' -f1)
-        if [ "$CURRENT_HASH" != "$DESIRED_HASH" ]; then
-            openclaw config set gateway.auth.token "$GATEWAY_TOKEN"
-            openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
-            CHANGED="yes"
-        else
-            # Still check remote.token separately
-            REMOTE_RAW=$(openclaw config get gateway.remote.token 2>/dev/null) || REMOTE_RAW=""
-            if [ -n "$REMOTE_RAW" ]; then
-                REMOTE_HASH=$(echo -n "$REMOTE_RAW" | sha256sum | cut -d' ' -f1)
-            else
-                REMOTE_HASH=""
-            fi
-            if [ "$REMOTE_HASH" != "$DESIRED_HASH" ]; then
-                openclaw config set gateway.remote.token "$GATEWAY_TOKEN"
-                CHANGED="yes"
-            fi
-        fi
+        # Gateway auth + remote tokens (redacted by config get)
+        check_set_secret gateway.auth.token "$GATEWAY_TOKEN" gateway-auth-token
+        check_set_secret gateway.remote.token "$GATEWAY_TOKEN" gateway-remote-token
 
         # Web search (Grok / xAI)
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
@@ -82,17 +77,7 @@
             openclaw config set tools.web.search.provider grok
             CHANGED="yes"
         fi
-        CURRENT_XAI_RAW=$(openclaw config get tools.web.search.grok.apiKey 2>/dev/null) || CURRENT_XAI_RAW=""
-        if [ -n "$CURRENT_XAI_RAW" ]; then
-            CURRENT_XAI_HASH=$(echo -n "$CURRENT_XAI_RAW" | sha256sum | cut -d' ' -f1)
-        else
-            CURRENT_XAI_HASH=""
-        fi
-        DESIRED_XAI_HASH=$(echo -n "$XAI_API_KEY" | sha256sum | cut -d' ' -f1)
-        if [ "$CURRENT_XAI_HASH" != "$DESIRED_XAI_HASH" ]; then
-            openclaw config set tools.web.search.grok.apiKey "$XAI_API_KEY"
-            CHANGED="yes"
-        fi
+        check_set_secret tools.web.search.grok.apiKey "$XAI_API_KEY" xai-api-key
         CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null) || CURRENT_TIMEOUT=""
         if [ "$CURRENT_TIMEOUT" != "60" ]; then
             openclaw config set tools.web.search.timeoutSeconds 60
@@ -151,8 +136,8 @@
         SERVICE_TOKEN=$(grep -oP 'OPENCLAW_GATEWAY_TOKEN=\K[^\s"]+' "$SERVICE_FILE" 2>/dev/null) || SERVICE_TOKEN=""
         [ -n "$SERVICE_TOKEN" ] || { echo "SKIP: no token in service file"; exit 0; }
 
-        # Get current config token
-        CONFIG_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null) || CONFIG_TOKEN=""
+        # Get current config token (read from JSON file — config get redacts secrets)
+        CONFIG_TOKEN=$(jq -r '.gateway.auth.token // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || CONFIG_TOKEN=""
         [ -n "$CONFIG_TOKEN" ] || { echo "SKIP: no config token"; exit 0; }
 
         # Compare via SHA-256 hash
@@ -226,12 +211,13 @@
         # so direct JSON comparison always finds a diff). Hash the desired value instead.
         # When Groq voice is configured, the Groq provider is merged into the temp file at template time.
         DESIRED_MODELS=$(cat /tmp/ansible-custom-models)
-        MODELS_HASH_FILE="/home/ubuntu/.openclaw/.ansible-models-hash"
+        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
+        mkdir -p "$HASH_DIR"
         DESIRED_HASH=$(echo "$DESIRED_MODELS" | jq -cS '.' | sha256sum | cut -d' ' -f1)
-        CURRENT_HASH=$(cat "$MODELS_HASH_FILE" 2>/dev/null) || CURRENT_HASH=""
+        CURRENT_HASH=$(cat "$HASH_DIR/custom-models" 2>/dev/null) || CURRENT_HASH=""
         if [ "$DESIRED_HASH" != "$CURRENT_HASH" ]; then
             openclaw config set models --json "$DESIRED_MODELS"
-            echo "$DESIRED_HASH" > "$MODELS_HASH_FILE"
+            echo "$DESIRED_HASH" > "$HASH_DIR/custom-models"
             CHANGED="yes"
         fi
 
