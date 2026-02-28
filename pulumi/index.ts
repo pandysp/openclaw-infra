@@ -9,50 +9,39 @@ import { generateUserData } from "./user-data";
 // Load configuration
 const config = new pulumi.Config();
 
-// Required secrets (set via `pulumi config set --secret`)
+// ============================================
+// Agent configuration
+// ============================================
+
+// Additional agent IDs (comma-separated). Main agent is always present.
+// Example: pulumi config set agentIds "manon,tl,henning,ph,nici"
+const agentIds = (config.get("agentIds") || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+// Helper: convert agent ID to PascalCase for config key derivation
+// e.g., "manon" -> "Manon", "tl" -> "Tl", "ph" -> "Ph"
+function toPascal(id: string): string {
+    return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+// ============================================
+// Required secrets
+// ============================================
+
 const tailscaleAuthKey = config.requireSecret("tailscaleAuthKey");
 const claudeSetupToken = config.requireSecret("claudeSetupToken");
 
-// Optional Telegram configuration (set via `pulumi config set`)
+// ============================================
+// Global optional config
+// ============================================
+
 const telegramBotToken = config.getSecret("telegramBotToken");
-const telegramUserId = config.get("telegramUserId");
-
-// Optional xAI API key for Grok web search (set via `pulumi config set --secret`)
 const xaiApiKey = config.getSecret("xaiApiKey");
-
-// Optional Groq API key for voice transcription (set via `pulumi config set --secret`)
 const groqApiKey = config.getSecret("groqApiKey");
 
-// Optional GitHub PATs for MCP adapter (set via `pulumi config set --secret`)
-const githubToken = config.getSecret("githubToken");
-const githubTokenManon = config.getSecret("githubTokenManon");
-const githubTokenTl = config.getSecret("githubTokenTl");
-const githubTokenHenning = config.getSecret("githubTokenHenning");
-const githubTokenPh = config.getSecret("githubTokenPh");
-const githubTokenNici = config.getSecret("githubTokenNici");
-
-// Optional multi-agent Telegram configuration
-const telegramManonUserId = config.get("telegramManonUserId");
-const telegramGroupId = config.get("telegramGroupId");
-const telegramHenningUserId = config.get("telegramHenningUserId");
-const telegramPhGroupId = config.get("telegramPhGroupId");
-const whatsappNiciPhone = config.get("whatsappNiciPhone");
-
-// Optional workspace git sync (set via `pulumi config set`)
-const workspaceRepoUrl = config.get("workspaceRepoUrl");
-const workspaceManonRepoUrl = config.get("workspaceManonRepoUrl");
-const workspaceTlRepoUrl = config.get("workspaceTlRepoUrl");
-const workspaceHenningRepoUrl = config.get("workspaceHenningRepoUrl");
-const workspacePhRepoUrl = config.get("workspacePhRepoUrl");
-const workspaceNiciRepoUrl = config.get("workspaceNiciRepoUrl");
-
-// Optional Obsidian vault repos (cloned via HTTPS + GitHub PAT, no deploy keys)
-const obsidianAndyVaultRepoUrl = config.get("obsidianAndyVaultRepoUrl");
-const obsidianManonVaultRepoUrl = config.get("obsidianManonVaultRepoUrl");
-const obsidianTlVaultRepoUrl = config.get("obsidianTlVaultRepoUrl");
-
 // Tailscale configuration
-// Find your tailnet name at: https://login.tailscale.com/admin/dns
 const tailnetDnsName = config.get("tailnetDnsName") || "";
 
 // Server configuration (with defaults)
@@ -62,42 +51,71 @@ const serverLocation = config.get("serverLocation") || "nbg1"; // Nuremberg (alt
 const serverImage = config.get("serverImage") || "ubuntu-24.04";
 
 // ============================================
+// Main agent config (no suffix in key names)
+// ============================================
+
+const telegramUserId = config.get("telegramUserId");
+const telegramGroupId = config.get("telegramGroupId");
+const githubToken = config.getSecret("githubToken");
+const workspaceRepoUrl = config.get("workspaceRepoUrl");
+// Obsidian vault for main agent uses "Andy" (person name, not agent ID)
+const obsidianAndyVaultRepoUrl = config.get("obsidianAndyVaultRepoUrl");
+
+// ============================================
+// Per-agent config (derived from agentIds)
+// ============================================
+
+// Read per-agent config keys using PascalCase convention.
+// Missing keys return undefined — not all agents have all features.
+const agentConfig: Record<
+    string,
+    {
+        githubToken: pulumi.Output<string> | undefined;
+        telegramUserId: string | undefined;
+        telegramGroupId: string | undefined;
+        whatsappPhone: string | undefined;
+        workspaceRepoUrl: string | undefined;
+        obsidianVaultRepoUrl: string | undefined;
+    }
+> = {};
+
+for (const id of agentIds) {
+    const p = toPascal(id);
+    agentConfig[id] = {
+        githubToken: config.getSecret(`githubToken${p}`),
+        telegramUserId: config.get(`telegram${p}UserId`),
+        telegramGroupId: config.get(`telegram${p}GroupId`),
+        whatsappPhone: config.get(`whatsapp${p}Phone`),
+        workspaceRepoUrl: config.get(`workspace${p}RepoUrl`),
+        obsidianVaultRepoUrl: config.get(`obsidian${p}VaultRepoUrl`),
+    };
+}
+
+// ============================================
 // Security: Generate Gateway Token
 // ============================================
 
-// Generate a random gateway token (simpler than ED25519 key derivation, equally secure)
 const gatewayToken = new random.RandomPassword("openclaw-gateway-token", {
     length: 48,
     special: false,
 });
 
 // ============================================
-// Workspace Git Sync: Deploy Key
+// Workspace Git Sync: Deploy Keys
 // ============================================
 
-// Generate ED25519 deploy key for pushing workspace to a private GitHub repo
-// Only meaningful if workspaceRepoUrl is configured, but always generated
-// so the public key can be retrieved before the first deploy
+// Main agent deploy key (always generated so public key can be retrieved before first deploy)
 const workspaceDeployKey = new tls.PrivateKey("workspace-deploy-key", {
     algorithm: "ED25519",
 });
 
-// Deploy keys for additional agent workspaces
-const workspaceDeployKeyManon = new tls.PrivateKey("workspace-deploy-key-manon", {
-    algorithm: "ED25519",
-});
-const workspaceDeployKeyTl = new tls.PrivateKey("workspace-deploy-key-tl", {
-    algorithm: "ED25519",
-});
-const workspaceDeployKeyHenning = new tls.PrivateKey("workspace-deploy-key-henning", {
-    algorithm: "ED25519",
-});
-const workspaceDeployKeyPh = new tls.PrivateKey("workspace-deploy-key-ph", {
-    algorithm: "ED25519",
-});
-const workspaceDeployKeyNici = new tls.PrivateKey("workspace-deploy-key-nici", {
-    algorithm: "ED25519",
-});
+// Per-agent deploy keys — logical names match existing resources (URN-safe, no regeneration)
+const agentDeployKeys: Record<string, tls.PrivateKey> = {};
+for (const id of agentIds) {
+    agentDeployKeys[id] = new tls.PrivateKey(`workspace-deploy-key-${id}`, {
+        algorithm: "ED25519",
+    });
+}
 
 // ============================================
 // Infrastructure Resources
@@ -126,59 +144,50 @@ const { server, sshKey, privateKey } = createServer({
 // Ansible Provisioning (auto-triggered on server replacement)
 // ============================================
 
+// Build environment variables dynamically
+const provisionEnv: Record<string, pulumi.Input<string>> = {
+    // Pass all secrets directly so provision.sh doesn't need to
+    // call `pulumi stack output` (which can't read in-flight state)
+    PULUMI_CONFIG_PASSPHRASE: process.env.PULUMI_CONFIG_PASSPHRASE || "",
+    PROVISION_AGENT_IDS: agentIds.join(","),
+    PROVISION_GATEWAY_TOKEN: gatewayToken.result,
+    PROVISION_CLAUDE_SETUP_TOKEN: claudeSetupToken,
+    PROVISION_TELEGRAM_BOT_TOKEN: telegramBotToken || "",
+    PROVISION_TELEGRAM_USER_ID: telegramUserId || "",
+    PROVISION_TELEGRAM_GROUP_ID: telegramGroupId || "",
+    PROVISION_WORKSPACE_REPO_URL: workspaceRepoUrl || "",
+    PROVISION_WORKSPACE_DEPLOY_KEY: workspaceDeployKey.privateKeyOpenssh,
+    PROVISION_TAILSCALE_HOSTNAME: serverName,
+    PROVISION_XAI_API_KEY: xaiApiKey || "",
+    PROVISION_GROQ_API_KEY: groqApiKey || "",
+    PROVISION_GITHUB_TOKEN: githubToken || "",
+    PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL: obsidianAndyVaultRepoUrl || "",
+};
+
+// Add per-agent env vars
+for (const id of agentIds) {
+    const upper = id.toUpperCase();
+    const cfg = agentConfig[id];
+    provisionEnv[`PROVISION_GITHUB_TOKEN_${upper}`] = cfg.githubToken || "";
+    provisionEnv[`PROVISION_TELEGRAM_${upper}_USER_ID`] =
+        cfg.telegramUserId || "";
+    provisionEnv[`PROVISION_TELEGRAM_${upper}_GROUP_ID`] =
+        cfg.telegramGroupId || "";
+    provisionEnv[`PROVISION_WHATSAPP_${upper}_PHONE`] =
+        cfg.whatsappPhone || "";
+    provisionEnv[`PROVISION_WORKSPACE_${upper}_REPO_URL`] =
+        cfg.workspaceRepoUrl || "";
+    provisionEnv[`PROVISION_WORKSPACE_${upper}_DEPLOY_KEY`] =
+        agentDeployKeys[id].privateKeyOpenssh;
+    provisionEnv[`PROVISION_OBSIDIAN_${upper}_VAULT_REPO_URL`] =
+        cfg.obsidianVaultRepoUrl || "";
+}
+
 const ansibleProvision = new command.local.Command(
     "ansible-provision",
     {
         create: pulumi.interpolate`cd ${__dirname}/.. && ./scripts/provision.sh`,
-        environment: {
-            // Pass all secrets directly so provision.sh doesn't need to
-            // call `pulumi stack output` (which can't read in-flight state)
-            PULUMI_CONFIG_PASSPHRASE:
-                process.env.PULUMI_CONFIG_PASSPHRASE || "",
-            PROVISION_GATEWAY_TOKEN: gatewayToken.result,
-            PROVISION_CLAUDE_SETUP_TOKEN: claudeSetupToken,
-            PROVISION_TELEGRAM_BOT_TOKEN: telegramBotToken || "",
-            PROVISION_TELEGRAM_USER_ID: telegramUserId || "",
-            PROVISION_WORKSPACE_REPO_URL: workspaceRepoUrl || "",
-            PROVISION_WORKSPACE_DEPLOY_KEY:
-                workspaceDeployKey.privateKeyOpenssh,
-            PROVISION_TELEGRAM_MANON_USER_ID: telegramManonUserId || "",
-            PROVISION_TELEGRAM_GROUP_ID: telegramGroupId || "",
-            PROVISION_WORKSPACE_MANON_REPO_URL: workspaceManonRepoUrl || "",
-            PROVISION_WORKSPACE_MANON_DEPLOY_KEY:
-                workspaceDeployKeyManon.privateKeyOpenssh,
-            PROVISION_WORKSPACE_TL_REPO_URL: workspaceTlRepoUrl || "",
-            PROVISION_WORKSPACE_TL_DEPLOY_KEY:
-                workspaceDeployKeyTl.privateKeyOpenssh,
-            PROVISION_TELEGRAM_HENNING_USER_ID: telegramHenningUserId || "",
-            PROVISION_TELEGRAM_PH_GROUP_ID: telegramPhGroupId || "",
-            PROVISION_WHATSAPP_NICI_PHONE: whatsappNiciPhone || "",
-            PROVISION_WORKSPACE_HENNING_REPO_URL:
-                workspaceHenningRepoUrl || "",
-            PROVISION_WORKSPACE_HENNING_DEPLOY_KEY:
-                workspaceDeployKeyHenning.privateKeyOpenssh,
-            PROVISION_WORKSPACE_PH_REPO_URL: workspacePhRepoUrl || "",
-            PROVISION_WORKSPACE_PH_DEPLOY_KEY:
-                workspaceDeployKeyPh.privateKeyOpenssh,
-            PROVISION_WORKSPACE_NICI_REPO_URL: workspaceNiciRepoUrl || "",
-            PROVISION_WORKSPACE_NICI_DEPLOY_KEY:
-                workspaceDeployKeyNici.privateKeyOpenssh,
-            PROVISION_TAILSCALE_HOSTNAME: serverName,
-            PROVISION_XAI_API_KEY: xaiApiKey || "",
-            PROVISION_GROQ_API_KEY: groqApiKey || "",
-            PROVISION_GITHUB_TOKEN: githubToken || "",
-            PROVISION_GITHUB_TOKEN_MANON: githubTokenManon || "",
-            PROVISION_GITHUB_TOKEN_TL: githubTokenTl || "",
-            PROVISION_GITHUB_TOKEN_HENNING: githubTokenHenning || "",
-            PROVISION_GITHUB_TOKEN_PH: githubTokenPh || "",
-            PROVISION_GITHUB_TOKEN_NICI: githubTokenNici || "",
-            PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL:
-                obsidianAndyVaultRepoUrl || "",
-            PROVISION_OBSIDIAN_MANON_VAULT_REPO_URL:
-                obsidianManonVaultRepoUrl || "",
-            PROVISION_OBSIDIAN_TL_VAULT_REPO_URL:
-                obsidianTlVaultRepoUrl || "",
-        },
+        environment: provisionEnv,
         // Re-run Ansible whenever the server is replaced
         triggers: [server.id],
     },
@@ -205,45 +214,37 @@ export const firewallId = firewall.id;
 // Gateway token (for client configuration)
 export const openclawGatewayToken = pulumi.secret(gatewayToken.result);
 
-// Workspace deploy keys (andy/main)
+// Main workspace deploy keys (kept for backward compatibility)
 export const workspaceDeployPublicKey = workspaceDeployKey.publicKeyOpenssh;
 export const workspaceDeployPrivateKey = pulumi.secret(
     workspaceDeployKey.privateKeyOpenssh
 );
 
-// Workspace deploy keys (manon)
-export const workspaceManonDeployPublicKey =
-    workspaceDeployKeyManon.publicKeyOpenssh;
-export const workspaceManonDeployPrivateKey = pulumi.secret(
-    workspaceDeployKeyManon.privateKeyOpenssh
-);
+// All agent workspace deploy keys as a structured JSON export (includes main)
+// Usage: pulumi stack output agentWorkspaceKeys --json --show-secrets | jq '."manon".publicKey'
+const allKeyIds = ["main", ...agentIds];
+const allKeys = [
+    workspaceDeployKey,
+    ...agentIds.map((id) => agentDeployKeys[id]),
+];
 
-// Workspace deploy keys (tl)
-export const workspaceTlDeployPublicKey =
-    workspaceDeployKeyTl.publicKeyOpenssh;
-export const workspaceTlDeployPrivateKey = pulumi.secret(
-    workspaceDeployKeyTl.privateKeyOpenssh
-);
-
-// Workspace deploy keys (henning)
-export const workspaceHenningDeployPublicKey =
-    workspaceDeployKeyHenning.publicKeyOpenssh;
-export const workspaceHenningDeployPrivateKey = pulumi.secret(
-    workspaceDeployKeyHenning.privateKeyOpenssh
-);
-
-// Workspace deploy keys (ph)
-export const workspacePhDeployPublicKey =
-    workspaceDeployKeyPh.publicKeyOpenssh;
-export const workspacePhDeployPrivateKey = pulumi.secret(
-    workspaceDeployKeyPh.privateKeyOpenssh
-);
-
-// Workspace deploy keys (nici)
-export const workspaceNiciDeployPublicKey =
-    workspaceDeployKeyNici.publicKeyOpenssh;
-export const workspaceNiciDeployPrivateKey = pulumi.secret(
-    workspaceDeployKeyNici.privateKeyOpenssh
+export const agentWorkspaceKeys = pulumi.secret(
+    pulumi
+        .all(
+            allKeys.map((k) =>
+                pulumi.all([k.publicKeyOpenssh, k.privateKeyOpenssh])
+            )
+        )
+        .apply((resolved) => {
+            const result: Record<
+                string,
+                { publicKey: string; privateKey: string }
+            > = {};
+            resolved.forEach(([pub, priv], i) => {
+                result[allKeyIds[i]] = { publicKey: pub, privateKey: priv };
+            });
+            return result;
+        })
 );
 
 // Access information

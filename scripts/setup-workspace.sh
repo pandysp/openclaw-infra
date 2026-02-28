@@ -46,15 +46,13 @@ else
     REPO_NAME="openclaw-workspace-${AGENT_ID}"
 fi
 
-# Derive Pulumi export/config names from agent ID
+# Derive Pulumi config key from agent ID
 if [ "$AGENT_ID" = "main" ]; then
-    DEPLOY_KEY_EXPORT="workspaceDeployPublicKey"
     CONFIG_KEY="workspaceRepoUrl"
 else
     # Convert agent-id to PascalCase for Pulumi naming convention
     # e.g., "tl" -> "Tl", "henning" -> "Henning"
     PASCAL_ID="$(echo "$AGENT_ID" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
-    DEPLOY_KEY_EXPORT="workspace${PASCAL_ID}DeployPublicKey"
     CONFIG_KEY="workspace${PASCAL_ID}RepoUrl"
 fi
 
@@ -72,7 +70,7 @@ REPO_SSH_URL="git@github.com:${FULL_REPO}.git"
 echo "=== Workspace setup for agent '${AGENT_ID}' ==="
 echo "  Repo:       ${FULL_REPO}"
 echo "  SSH URL:    ${REPO_SSH_URL}"
-echo "  Deploy key: pulumi stack output ${DEPLOY_KEY_EXPORT}"
+echo "  Deploy key: pulumi stack output agentWorkspaceKeys --json --show-secrets | jq '.\"${AGENT_ID}\".publicKey'"
 echo "  Config key: ${CONFIG_KEY}"
 echo ""
 
@@ -88,17 +86,18 @@ else
     echo "Created."
 fi
 
-# Step 2: Get deploy key from Pulumi
+# Step 2: Get deploy key from Pulumi (structured export)
 echo "Reading deploy key from Pulumi..."
 cd "$PULUMI_DIR"
-DEPLOY_PUBLIC_KEY=$(pulumi stack output "$DEPLOY_KEY_EXPORT" 2>/dev/null) || {
-    echo "ERROR: Could not read ${DEPLOY_KEY_EXPORT} from Pulumi."
+DEPLOY_PUBLIC_KEY=$(pulumi stack output agentWorkspaceKeys --json --show-secrets 2>/dev/null \
+    | jq -r ".\"${AGENT_ID}\".publicKey // empty") || {
+    echo "ERROR: Could not read deploy key for '${AGENT_ID}' from agentWorkspaceKeys."
     echo "Have you run 'pulumi up' at least once to generate the deploy keys?"
     exit 1
 }
 
 if [ -z "$DEPLOY_PUBLIC_KEY" ]; then
-    echo "ERROR: Deploy key is empty."
+    echo "ERROR: Deploy key is empty for agent '${AGENT_ID}'."
     exit 1
 fi
 

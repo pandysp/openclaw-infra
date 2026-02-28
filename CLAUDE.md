@@ -207,13 +207,19 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journal
 
 ### Update OpenClaw
 
+**Important:** Always keep the local CLI, Mac node host, and VPS gateway on the same version. Version mismatches cause protocol errors (e.g., `system.run.prepare` not supported). After upgrading the gateway, upgrade local too:
+
 ```bash
-# Via Ansible (preferred)
+# 1. Update VPS gateway (via Ansible — preferred)
 ./scripts/provision.sh --tags openclaw
 
 # Or via SSH (manual)
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash'
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
+
+# 2. Update local CLI + node host to match
+brew upgrade openclaw-cli
+openclaw node restart   # if node exec is enabled
 ```
 
 ### View Cloud-Init Logs

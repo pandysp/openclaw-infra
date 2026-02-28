@@ -6,6 +6,7 @@
 
 - name: Get installed OpenClaw version
   ansible.builtin.command: openclaw --version
+  check_mode: false
   register: openclaw_installed_version
   changed_when: false
   failed_when: false
@@ -55,6 +56,7 @@
 
     - name: Verify openclaw binary works
       ansible.builtin.command: openclaw --version
+      check_mode: false
       register: openclaw_post_install_version
       changed_when: false
 
@@ -103,6 +105,7 @@
 
     - name: Verify restored binary works
       ansible.builtin.command: openclaw --version
+      check_mode: false
       register: openclaw_restored_version
       changed_when: false
       ignore_errors: true

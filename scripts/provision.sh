@@ -22,89 +22,91 @@ ANSIBLE_DIR="$REPO_DIR/ansible"
 SECRETS_DIR=$(mktemp -d)
 trap 'rm -rf "$SECRETS_DIR"' EXIT
 
+# Read env var by name, defaulting to empty string (safe under set -u)
+read_env() {
+    eval "printf '%s' \"\${$1:-}\""
+}
+
 echo "=== Reading secrets ==="
+
+# Read agent IDs — from Pulumi env var (set during `pulumi up`) or Pulumi CLI (day-2 manual runs)
+agent_ids_str="${PROVISION_AGENT_IDS:-}"
 
 # Prefer PROVISION_* env vars (set by Pulumi), fall back to Pulumi CLI (day-2 manual runs)
 if [ -n "${PROVISION_GATEWAY_TOKEN:-}" ]; then
     echo "Using secrets from Pulumi environment variables"
-    gateway_token="$PROVISION_GATEWAY_TOKEN"
-    claude_setup_token="${PROVISION_CLAUDE_SETUP_TOKEN:-}"
-    telegram_bot_token="${PROVISION_TELEGRAM_BOT_TOKEN:-}"
-    telegram_user_id="${PROVISION_TELEGRAM_USER_ID:-}"
-    telegram_manon_user_id="${PROVISION_TELEGRAM_MANON_USER_ID:-}"
-    telegram_group_id="${PROVISION_TELEGRAM_GROUP_ID:-}"
-    workspace_repo_url="${PROVISION_WORKSPACE_REPO_URL:-}"
-    workspace_deploy_private_key="${PROVISION_WORKSPACE_DEPLOY_KEY:-}"
-    workspace_manon_repo_url="${PROVISION_WORKSPACE_MANON_REPO_URL:-}"
-    workspace_manon_deploy_key="${PROVISION_WORKSPACE_MANON_DEPLOY_KEY:-}"
-    workspace_tl_repo_url="${PROVISION_WORKSPACE_TL_REPO_URL:-}"
-    workspace_tl_deploy_key="${PROVISION_WORKSPACE_TL_DEPLOY_KEY:-}"
-    telegram_henning_user_id="${PROVISION_TELEGRAM_HENNING_USER_ID:-}"
-    telegram_ph_group_id="${PROVISION_TELEGRAM_PH_GROUP_ID:-}"
-    whatsapp_nici_phone="${PROVISION_WHATSAPP_NICI_PHONE:-}"
-    workspace_henning_repo_url="${PROVISION_WORKSPACE_HENNING_REPO_URL:-}"
-    workspace_henning_deploy_key="${PROVISION_WORKSPACE_HENNING_DEPLOY_KEY:-}"
-    workspace_ph_repo_url="${PROVISION_WORKSPACE_PH_REPO_URL:-}"
-    workspace_ph_deploy_key="${PROVISION_WORKSPACE_PH_DEPLOY_KEY:-}"
-    workspace_nici_repo_url="${PROVISION_WORKSPACE_NICI_REPO_URL:-}"
-    workspace_nici_deploy_key="${PROVISION_WORKSPACE_NICI_DEPLOY_KEY:-}"
-    tailscale_hostname="${PROVISION_TAILSCALE_HOSTNAME:-openclaw-vps}"
-    xai_api_key="${PROVISION_XAI_API_KEY:-}"
-    groq_api_key="${PROVISION_GROQ_API_KEY:-}"
-    github_token="${PROVISION_GITHUB_TOKEN:-}"
-    github_token_manon="${PROVISION_GITHUB_TOKEN_MANON:-}"
-    github_token_tl="${PROVISION_GITHUB_TOKEN_TL:-}"
-    github_token_henning="${PROVISION_GITHUB_TOKEN_HENNING:-}"
-    github_token_ph="${PROVISION_GITHUB_TOKEN_PH:-}"
-    github_token_nici="${PROVISION_GITHUB_TOKEN_NICI:-}"
-    obsidian_andy_vault_repo_url="${PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL:-}"
-    obsidian_manon_vault_repo_url="${PROVISION_OBSIDIAN_MANON_VAULT_REPO_URL:-}"
-    obsidian_tl_vault_repo_url="${PROVISION_OBSIDIAN_TL_VAULT_REPO_URL:-}"
+    # All PROVISION_* vars already in environment — nothing to do here
 else
     echo "Reading secrets from Pulumi CLI"
     cd "$PULUMI_DIR"
-    gateway_token=$(pulumi stack output openclawGatewayToken --show-secrets) || {
+
+    # Read agent IDs from Pulumi config if not in environment
+    if [ -z "$agent_ids_str" ]; then
+        agent_ids_str=$(pulumi config get agentIds 2>/dev/null || echo "")
+    fi
+
+    # Required
+    export PROVISION_GATEWAY_TOKEN=$(pulumi stack output openclawGatewayToken --show-secrets) || {
         echo "ERROR: Failed to read gateway token from Pulumi. Is PULUMI_CONFIG_PASSPHRASE set?"
         exit 1
     }
-    claude_setup_token=$(pulumi config get claudeSetupToken) || {
+    export PROVISION_CLAUDE_SETUP_TOKEN=$(pulumi config get claudeSetupToken) || {
         echo "ERROR: Failed to read claudeSetupToken from Pulumi config."
         exit 1
     }
-    workspace_deploy_private_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    telegram_bot_token=$(pulumi config get telegramBotToken 2>/dev/null || echo "")
-    telegram_user_id=$(pulumi config get telegramUserId 2>/dev/null || echo "")
-    telegram_manon_user_id=$(pulumi config get telegramManonUserId 2>/dev/null || echo "")
-    telegram_group_id=$(pulumi config get telegramGroupId 2>/dev/null || echo "")
-    workspace_repo_url=$(pulumi config get workspaceRepoUrl 2>/dev/null || echo "")
-    workspace_manon_repo_url=$(pulumi config get workspaceManonRepoUrl 2>/dev/null || echo "")
-    workspace_manon_deploy_key=$(pulumi stack output workspaceManonDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    workspace_tl_repo_url=$(pulumi config get workspaceTlRepoUrl 2>/dev/null || echo "")
-    workspace_tl_deploy_key=$(pulumi stack output workspaceTlDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    telegram_henning_user_id=$(pulumi config get telegramHenningUserId 2>/dev/null || echo "")
-    telegram_ph_group_id=$(pulumi config get telegramPhGroupId 2>/dev/null || echo "")
-    whatsapp_nici_phone=$(pulumi config get whatsappNiciPhone 2>/dev/null || echo "")
-    workspace_henning_repo_url=$(pulumi config get workspaceHenningRepoUrl 2>/dev/null || echo "")
-    workspace_henning_deploy_key=$(pulumi stack output workspaceHenningDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    workspace_ph_repo_url=$(pulumi config get workspacePhRepoUrl 2>/dev/null || echo "")
-    workspace_ph_deploy_key=$(pulumi stack output workspacePhDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    workspace_nici_repo_url=$(pulumi config get workspaceNiciRepoUrl 2>/dev/null || echo "")
-    workspace_nici_deploy_key=$(pulumi stack output workspaceNiciDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    tailscale_hostname=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
-    xai_api_key=$(pulumi config get xaiApiKey 2>/dev/null || echo "")
-    groq_api_key=$(pulumi config get groqApiKey 2>/dev/null || echo "")
-    github_token=$(pulumi config get githubToken 2>/dev/null || echo "")
-    github_token_manon=$(pulumi config get githubTokenManon 2>/dev/null || echo "")
-    github_token_tl=$(pulumi config get githubTokenTl 2>/dev/null || echo "")
-    github_token_henning=$(pulumi config get githubTokenHenning 2>/dev/null || echo "")
-    github_token_ph=$(pulumi config get githubTokenPh 2>/dev/null || echo "")
-    github_token_nici=$(pulumi config get githubTokenNici 2>/dev/null || echo "")
-    obsidian_andy_vault_repo_url=$(pulumi config get obsidianAndyVaultRepoUrl 2>/dev/null || echo "")
-    obsidian_manon_vault_repo_url=$(pulumi config get obsidianManonVaultRepoUrl 2>/dev/null || echo "")
-    obsidian_tl_vault_repo_url=$(pulumi config get obsidianTlVaultRepoUrl 2>/dev/null || echo "")
+
+    # Main agent config (no suffix in key names)
+    export PROVISION_TELEGRAM_BOT_TOKEN=$(pulumi config get telegramBotToken 2>/dev/null || echo "")
+    export PROVISION_TELEGRAM_USER_ID=$(pulumi config get telegramUserId 2>/dev/null || echo "")
+    export PROVISION_TELEGRAM_GROUP_ID=$(pulumi config get telegramGroupId 2>/dev/null || echo "")
+    export PROVISION_WORKSPACE_REPO_URL=$(pulumi config get workspaceRepoUrl 2>/dev/null || echo "")
+    export PROVISION_TAILSCALE_HOSTNAME=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
+    export PROVISION_XAI_API_KEY=$(pulumi config get xaiApiKey 2>/dev/null || echo "")
+    export PROVISION_GROQ_API_KEY=$(pulumi config get groqApiKey 2>/dev/null || echo "")
+    export PROVISION_GITHUB_TOKEN=$(pulumi config get githubToken 2>/dev/null || echo "")
+    export PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL=$(pulumi config get obsidianAndyVaultRepoUrl 2>/dev/null || echo "")
+
+    # Read deploy keys: try structured export first, fall back to individual exports
+    # (individual exports exist until first `pulumi up` after migration)
+    _keys_json=$(pulumi stack output agentWorkspaceKeys --json --show-secrets 2>/dev/null || echo "{}")
+    _main_key=$(echo "$_keys_json" | jq -r '.main.privateKey // ""')
+    if [ -z "$_main_key" ]; then
+        _main_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
+    fi
+    export PROVISION_WORKSPACE_DEPLOY_KEY="$_main_key"
+
+    # Per-agent config (from Pulumi CLI)
+    export PROVISION_AGENT_IDS="$agent_ids_str"
+    IFS=',' read -ra _cli_agents <<< "$agent_ids_str"
+    for _id in "${_cli_agents[@]}"; do
+        [ -z "$_id" ] && continue
+        _upper=$(echo "$_id" | tr '[:lower:]' '[:upper:]')
+        _pascal=$(echo "$_id" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+
+        export "PROVISION_GITHUB_TOKEN_${_upper}=$(pulumi config get "githubToken${_pascal}" 2>/dev/null || echo "")"
+        export "PROVISION_TELEGRAM_${_upper}_USER_ID=$(pulumi config get "telegram${_pascal}UserId" 2>/dev/null || echo "")"
+        export "PROVISION_TELEGRAM_${_upper}_GROUP_ID=$(pulumi config get "telegram${_pascal}GroupId" 2>/dev/null || echo "")"
+        export "PROVISION_WHATSAPP_${_upper}_PHONE=$(pulumi config get "whatsapp${_pascal}Phone" 2>/dev/null || echo "")"
+        export "PROVISION_WORKSPACE_${_upper}_REPO_URL=$(pulumi config get "workspace${_pascal}RepoUrl" 2>/dev/null || echo "")"
+        # Try structured export, fall back to individual export
+        _agent_key=$(echo "$_keys_json" | jq -r ".\"${_id}\".privateKey // \"\"")
+        if [ -z "$_agent_key" ]; then
+            _agent_key=$(pulumi stack output "workspace${_pascal}DeployPrivateKey" --show-secrets 2>/dev/null || echo "")
+        fi
+        export "PROVISION_WORKSPACE_${_upper}_DEPLOY_KEY=${_agent_key}"
+        export "PROVISION_OBSIDIAN_${_upper}_VAULT_REPO_URL=$(pulumi config get "obsidian${_pascal}VaultRepoUrl" 2>/dev/null || echo "")"
+    done
+fi
+
+# Parse agent IDs into array (handles empty string → empty array)
+agent_ids=()
+if [ -n "$agent_ids_str" ]; then
+    IFS=',' read -ra agent_ids <<< "$agent_ids_str"
 fi
 
 # Validate required secrets
+gateway_token=$(read_env PROVISION_GATEWAY_TOKEN)
+claude_setup_token=$(read_env PROVISION_CLAUDE_SETUP_TOKEN)
 if [ -z "$gateway_token" ]; then
     echo "ERROR: gateway_token is empty."
     exit 1
@@ -132,38 +134,36 @@ validate_deploy_key() {
         fi
     fi
 }
-validate_deploy_key "workspace (main)" "$workspace_repo_url" "$workspace_deploy_private_key"
-validate_deploy_key "workspace (manon)" "$workspace_manon_repo_url" "$workspace_manon_deploy_key"
-validate_deploy_key "workspace (tl)" "$workspace_tl_repo_url" "$workspace_tl_deploy_key"
-validate_deploy_key "workspace (henning)" "$workspace_henning_repo_url" "$workspace_henning_deploy_key"
-validate_deploy_key "workspace (ph)" "$workspace_ph_repo_url" "$workspace_ph_deploy_key"
-validate_deploy_key "workspace (nici)" "$workspace_nici_repo_url" "$workspace_nici_deploy_key"
+validate_deploy_key "workspace (main)" \
+    "$(read_env PROVISION_WORKSPACE_REPO_URL)" \
+    "$(read_env PROVISION_WORKSPACE_DEPLOY_KEY)"
+for id in "${agent_ids[@]}"; do
+    [ -z "$id" ] && continue
+    upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
+    validate_deploy_key "workspace ($id)" \
+        "$(read_env "PROVISION_WORKSPACE_${upper}_REPO_URL")" \
+        "$(read_env "PROVISION_WORKSPACE_${upper}_DEPLOY_KEY")"
+done
 
+# Status summary
 echo "  gateway_token: set"
 echo "  claude_setup_token: set"
-echo "  telegram: $([ -n "$telegram_bot_token" ] && echo "configured" || echo "skipped")"
-echo "  telegram_manon: $([ -n "$telegram_manon_user_id" ] && echo "configured" || echo "skipped")"
-echo "  telegram_group: $([ -n "$telegram_group_id" ] && echo "configured" || echo "skipped")"
-echo "  telegram_henning: $([ -n "$telegram_henning_user_id" ] && echo "configured" || echo "skipped")"
-echo "  telegram_ph_group: $([ -n "$telegram_ph_group_id" ] && echo "configured" || echo "skipped")"
-echo "  whatsapp_nici: $([ -n "$whatsapp_nici_phone" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync (main): $([ -n "$workspace_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync (manon): $([ -n "$workspace_manon_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync (tl): $([ -n "$workspace_tl_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync (henning): $([ -n "$workspace_henning_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync (ph): $([ -n "$workspace_ph_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  workspace_sync (nici): $([ -n "$workspace_nici_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  grok_search: $([ -n "$xai_api_key" ] && echo "configured" || echo "skipped")"
-echo "  groq_voice: $([ -n "$groq_api_key" ] && echo "configured" || echo "skipped")"
-echo "  github_mcp (main): $([ -n "$github_token" ] && echo "configured" || echo "skipped")"
-echo "  github_mcp (manon): $([ -n "$github_token_manon" ] && echo "configured" || echo "skipped")"
-echo "  github_mcp (tl): $([ -n "$github_token_tl" ] && echo "configured" || echo "skipped")"
-echo "  github_mcp (henning): $([ -n "$github_token_henning" ] && echo "configured" || echo "skipped")"
-echo "  github_mcp (ph): $([ -n "$github_token_ph" ] && echo "configured" || echo "skipped")"
-echo "  github_mcp (nici): $([ -n "$github_token_nici" ] && echo "configured" || echo "skipped")"
-echo "  obsidian (andy): $([ -n "$obsidian_andy_vault_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  obsidian (manon): $([ -n "$obsidian_manon_vault_repo_url" ] && echo "configured" || echo "skipped")"
-echo "  obsidian (tl): $([ -n "$obsidian_tl_vault_repo_url" ] && echo "configured" || echo "skipped")"
+echo "  telegram: $([ -n "$(read_env PROVISION_TELEGRAM_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
+echo "  workspace_sync (main): $([ -n "$(read_env PROVISION_WORKSPACE_REPO_URL)" ] && echo "configured" || echo "skipped")"
+echo "  grok_search: $([ -n "$(read_env PROVISION_XAI_API_KEY)" ] && echo "configured" || echo "skipped")"
+echo "  groq_voice: $([ -n "$(read_env PROVISION_GROQ_API_KEY)" ] && echo "configured" || echo "skipped")"
+echo "  github_mcp (main): $([ -n "$(read_env PROVISION_GITHUB_TOKEN)" ] && echo "configured" || echo "skipped")"
+echo "  obsidian (andy): $([ -n "$(read_env PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL)" ] && echo "configured" || echo "skipped")"
+for id in "${agent_ids[@]}"; do
+    [ -z "$id" ] && continue
+    upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
+    [ -n "$(read_env "PROVISION_TELEGRAM_${upper}_USER_ID")" ] && echo "  telegram_${id}: configured"
+    [ -n "$(read_env "PROVISION_TELEGRAM_${upper}_GROUP_ID")" ] && echo "  telegram_${id}_group: configured"
+    [ -n "$(read_env "PROVISION_WHATSAPP_${upper}_PHONE")" ] && echo "  whatsapp_${id}: configured"
+    echo "  workspace_sync ($id): $([ -n "$(read_env "PROVISION_WORKSPACE_${upper}_REPO_URL")" ] && echo "configured" || echo "skipped")"
+    echo "  github_mcp ($id): $([ -n "$(read_env "PROVISION_GITHUB_TOKEN_${upper}")" ] && echo "configured" || echo "skipped")"
+    [ -n "$(read_env "PROVISION_OBSIDIAN_${upper}_VAULT_REPO_URL")" ] && echo "  obsidian ($id): configured"
+done
 
 # Read Codex auth credentials from local machine (optional)
 # Run `codex login` locally to create ~/.codex/auth.json before deploying.
@@ -180,53 +180,44 @@ echo "  codex_auth: $([ -n "$codex_auth_json" ] && echo "found (~/.codex/auth.js
 
 # Write secrets to temp YAML file using Python for safe escaping
 SECRETS_FILE="$SECRETS_DIR/secrets.yml"
-env \
-  _S_GATEWAY_TOKEN="$gateway_token" \
-  _S_CLAUDE_SETUP_TOKEN="$claude_setup_token" \
-  _S_TELEGRAM_BOT_TOKEN="$telegram_bot_token" \
-  _S_TELEGRAM_USER_ID="$telegram_user_id" \
-  _S_TELEGRAM_MANON_USER_ID="$telegram_manon_user_id" \
-  _S_TELEGRAM_GROUP_ID="$telegram_group_id" \
-  _S_TELEGRAM_HENNING_USER_ID="$telegram_henning_user_id" \
-  _S_TELEGRAM_PH_GROUP_ID="$telegram_ph_group_id" \
-  _S_WHATSAPP_NICI_PHONE="$whatsapp_nici_phone" \
-  _S_WORKSPACE_REPO_URL="$workspace_repo_url" \
-  _S_XAI_API_KEY="$xai_api_key" \
-  _S_GROQ_API_KEY="$groq_api_key" \
-  _S_WORKSPACE_MANON_REPO_URL="$workspace_manon_repo_url" \
-  _S_WORKSPACE_TL_REPO_URL="$workspace_tl_repo_url" \
-  _S_WORKSPACE_HENNING_REPO_URL="$workspace_henning_repo_url" \
-  _S_WORKSPACE_PH_REPO_URL="$workspace_ph_repo_url" \
-  _S_WORKSPACE_NICI_REPO_URL="$workspace_nici_repo_url" \
-  _S_GITHUB_TOKEN="$github_token" \
-  _S_GITHUB_TOKEN_MANON="$github_token_manon" \
-  _S_GITHUB_TOKEN_TL="$github_token_tl" \
-  _S_GITHUB_TOKEN_HENNING="$github_token_henning" \
-  _S_GITHUB_TOKEN_PH="$github_token_ph" \
-  _S_GITHUB_TOKEN_NICI="$github_token_nici" \
-  _S_OBSIDIAN_ANDY_VAULT_REPO_URL="$obsidian_andy_vault_repo_url" \
-  _S_OBSIDIAN_MANON_VAULT_REPO_URL="$obsidian_manon_vault_repo_url" \
-  _S_OBSIDIAN_TL_VAULT_REPO_URL="$obsidian_tl_vault_repo_url" \
-  python3 -c "
+python3 -c "
 import json, sys, os
-# json.dumps() safely quotes strings for YAML (handles quotes, backslashes, special chars)
-keys = [
-    'gateway_token', 'claude_setup_token', 'telegram_bot_token',
-    'telegram_user_id', 'telegram_manon_user_id', 'telegram_group_id',
-    'telegram_henning_user_id', 'telegram_ph_group_id', 'whatsapp_nici_phone',
-    'workspace_repo_url', 'xai_api_key', 'groq_api_key',
-    'workspace_manon_repo_url', 'workspace_tl_repo_url',
-    'workspace_henning_repo_url', 'workspace_ph_repo_url', 'workspace_nici_repo_url',
-    'github_token', 'github_token_manon', 'github_token_tl',
-    'github_token_henning', 'github_token_ph', 'github_token_nici',
-    'obsidian_andy_vault_repo_url', 'obsidian_manon_vault_repo_url',
-    'obsidian_tl_vault_repo_url',
+
+# Static keys: (yaml_key, env_var) — main agent + global config
+static = [
+    ('gateway_token', 'PROVISION_GATEWAY_TOKEN'),
+    ('claude_setup_token', 'PROVISION_CLAUDE_SETUP_TOKEN'),
+    ('telegram_bot_token', 'PROVISION_TELEGRAM_BOT_TOKEN'),
+    ('telegram_user_id', 'PROVISION_TELEGRAM_USER_ID'),
+    ('telegram_group_id', 'PROVISION_TELEGRAM_GROUP_ID'),
+    ('workspace_repo_url', 'PROVISION_WORKSPACE_REPO_URL'),
+    ('xai_api_key', 'PROVISION_XAI_API_KEY'),
+    ('groq_api_key', 'PROVISION_GROQ_API_KEY'),
+    ('github_token', 'PROVISION_GITHUB_TOKEN'),
+    ('obsidian_andy_vault_repo_url', 'PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL'),
 ]
+
 with open(sys.argv[1], 'w') as f:
     f.write('---\n')
-    for k in keys:
-        v = os.environ['_S_' + k.upper()]
-        f.write(f'{k}: {json.dumps(v)}\n')
+    for yaml_key, env_var in static:
+        v = os.environ.get(env_var, '')
+        f.write(f'{yaml_key}: {json.dumps(v)}\n')
+
+    # Per-agent keys (derived from PROVISION_AGENT_IDS)
+    agent_ids = [a.strip() for a in os.environ.get('PROVISION_AGENT_IDS', '').split(',') if a.strip()]
+    for aid in agent_ids:
+        upper = aid.upper()
+        per_agent = [
+            (f'github_token_{aid}', f'PROVISION_GITHUB_TOKEN_{upper}'),
+            (f'telegram_{aid}_user_id', f'PROVISION_TELEGRAM_{upper}_USER_ID'),
+            (f'telegram_{aid}_group_id', f'PROVISION_TELEGRAM_{upper}_GROUP_ID'),
+            (f'whatsapp_{aid}_phone', f'PROVISION_WHATSAPP_{upper}_PHONE'),
+            (f'workspace_{aid}_repo_url', f'PROVISION_WORKSPACE_{upper}_REPO_URL'),
+            (f'obsidian_{aid}_vault_repo_url', f'PROVISION_OBSIDIAN_{upper}_VAULT_REPO_URL'),
+        ]
+        for yaml_key, env_var in per_agent:
+            v = os.environ.get(env_var, '')
+            f.write(f'{yaml_key}: {json.dumps(v)}\n')
 " "$SECRETS_FILE"
 
 # Append deploy keys (block scalar when non-empty, explicit empty string otherwise)
@@ -239,18 +230,22 @@ append_deploy_key() {
         printf '%s: ""\n' "$name" >> "$file"
     fi
 }
-append_deploy_key "workspace_deploy_key" "$workspace_deploy_private_key" "$SECRETS_FILE"
-append_deploy_key "workspace_manon_deploy_key" "$workspace_manon_deploy_key" "$SECRETS_FILE"
-append_deploy_key "workspace_tl_deploy_key" "$workspace_tl_deploy_key" "$SECRETS_FILE"
-append_deploy_key "workspace_henning_deploy_key" "$workspace_henning_deploy_key" "$SECRETS_FILE"
-append_deploy_key "workspace_ph_deploy_key" "$workspace_ph_deploy_key" "$SECRETS_FILE"
-append_deploy_key "workspace_nici_deploy_key" "$workspace_nici_deploy_key" "$SECRETS_FILE"
+append_deploy_key "workspace_deploy_key" "$(read_env PROVISION_WORKSPACE_DEPLOY_KEY)" "$SECRETS_FILE"
+for id in "${agent_ids[@]}"; do
+    [ -z "$id" ] && continue
+    upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
+    append_deploy_key "workspace_${id}_deploy_key" \
+        "$(read_env "PROVISION_WORKSPACE_${upper}_DEPLOY_KEY")" "$SECRETS_FILE"
+done
 
 # Append Codex auth credentials (block scalar preserves JSON structure)
 append_deploy_key "codex_auth_json" "$codex_auth_json" "$SECRETS_FILE"
 chmod 600 "$SECRETS_FILE"
 
 echo "=== Waiting for Tailscale SSH connectivity ==="
+
+tailscale_hostname=$(read_env PROVISION_TAILSCALE_HOSTNAME)
+tailscale_hostname="${tailscale_hostname:-openclaw-vps}"
 
 resolve_tailscale_ips() {
     # Returns ALL IPv4 addresses for peers whose HostName starts with the
