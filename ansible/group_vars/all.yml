@@ -75,7 +75,7 @@ openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
 
 # beads (bd) — AI-native issue tracker (https://github.com/steveyegge/beads)
-beads_version: "0.49.6"
+beads_version: "0.56.1"
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
@@ -191,6 +191,7 @@ claude_code_plugins:
   marketplaces:
     - repo: "anthropics/claude-plugins-official"
     - repo: "pandysp/claude-plugins"
+    - repo: "astral-sh/claude-code-plugins"
   plugins:
     - "code-review"
     - "code-simplifier"
@@ -202,7 +203,7 @@ claude_code_plugins:
     - "pr-review-toolkit"
     - "ralph-loop"
     - "security-guidance"
-    - "ty-lsp@pandysp"
+    - "astral@astral-sh"
     - "typescript-lsp@pandysp"
 
 # Obsidian vault definitions (cloned into <workspace>/obsidian/<name>/).

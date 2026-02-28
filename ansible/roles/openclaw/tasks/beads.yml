@@ -1,45 +1,36 @@
 ---
-# Check via full path since /home/ubuntu/.local/bin may not be in PATH yet
 - name: Check installed bd version
   ansible.builtin.shell: |
-    for bin in /home/ubuntu/.local/bin/bd /usr/local/bin/bd; do
-      if [ -x "$bin" ]; then "$bin" --version 2>/dev/null; exit 0; fi
-    done
-    echo ""
+    if [ -x /usr/local/bin/bd ]; then
+      /usr/local/bin/bd --version 2>/dev/null || echo ""
+    else
+      echo ""
+    fi
   args:
     executable: /bin/bash
   register: beads_installed_version
   changed_when: false
 
-- name: Install or upgrade beads (bd)
+- name: Extract installed beads semver
+  ansible.builtin.set_fact:
+    beads_installed_semver: "{{ beads_installed_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') | default('') }}"
+
+- name: Install or upgrade beads (bd) from GitHub release
   ansible.builtin.shell: |
-    curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+    set -euo pipefail
+    TMPDIR=$(mktemp -d)
+    trap 'rm -rf "$TMPDIR"' EXIT
+    curl -fsSL "https://github.com/steveyegge/beads/releases/download/v{{ beads_version }}/beads_{{ beads_version }}_linux_amd64.tar.gz" \
+      | tar -xz -C "$TMPDIR" bd
+    install -m 0755 "$TMPDIR/bd" /usr/local/bin/bd
     echo "INSTALLED"
   args:
     executable: /bin/bash
-  register: beads_install
-  # Install script exits rc=1 if ~/.local/bin not in PATH — that's fine, symlink handles it
-  failed_when: "'bd installed to' not in beads_install.stdout"
-  changed_when: "'INSTALLED' in beads_install.stdout"
-  when: beads_installed_version.stdout | trim == ""
-
-- name: Symlink bd to /usr/local/bin
   become: true
-  ansible.builtin.file:
-    src: /home/ubuntu/.local/bin/bd
-    dest: /usr/local/bin/bd
-    state: link
-    force: true
-
-- name: Get installed bd version
-  ansible.builtin.command: /usr/local/bin/bd --version
-  register: beads_final_version
-  changed_when: false
-
-- name: Update beads_version fact to match installed version
-  ansible.builtin.set_fact:
-    beads_version: "{{ beads_final_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') }}"
+  register: beads_install
+  changed_when: "'INSTALLED' in beads_install.stdout"
+  when: beads_installed_semver == "" or beads_installed_semver != beads_version
 
 - name: Show beads status
   ansible.builtin.debug:
-    msg: "Beads {{ beads_version }} ready"
+    msg: "Beads {{ beads_version }} ready (installed: {{ beads_installed_semver | default('fresh') }})"

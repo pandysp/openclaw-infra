@@ -140,6 +140,39 @@
       changed_when: "'UPDATED' in config_secrets.stdout"
       notify: restart openclaw-gateway
 
+    - name: Check daemon service file token matches gateway.auth.token
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        SERVICE_FILE="/home/ubuntu/.config/systemd/user/openclaw-gateway.service"
+        [ -f "$SERVICE_FILE" ] || { echo "SKIP: no service file"; exit 0; }
+
+        # Extract token from service file Environment= line
+        SERVICE_TOKEN=$(grep -oP 'OPENCLAW_GATEWAY_TOKEN=\K[^\s"]+' "$SERVICE_FILE" 2>/dev/null) || SERVICE_TOKEN=""
+        [ -n "$SERVICE_TOKEN" ] || { echo "SKIP: no token in service file"; exit 0; }
+
+        # Get current config token
+        CONFIG_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null) || CONFIG_TOKEN=""
+        [ -n "$CONFIG_TOKEN" ] || { echo "SKIP: no config token"; exit 0; }
+
+        # Compare via SHA-256 hash
+        SERVICE_HASH=$(echo -n "$SERVICE_TOKEN" | sha256sum | cut -d' ' -f1)
+        CONFIG_HASH=$(echo -n "$CONFIG_TOKEN" | sha256sum | cut -d' ' -f1)
+
+        if [ "$SERVICE_HASH" != "$CONFIG_HASH" ]; then
+            openclaw daemon install --force
+            systemctl --user daemon-reload
+            echo "REGENERATED: service file token updated to match gateway.auth.token"
+        else
+            echo "OK"
+        fi
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: daemon_token_sync
+      changed_when: "'REGENERATED' in daemon_token_sync.stdout"
+      notify: restart openclaw-gateway
+
     - name: Configure gateway settings
       ansible.builtin.shell: |
         set -euo pipefail

@@ -22,6 +22,79 @@
   changed_when: false
   failed_when: false
 
+- name: Auto-pair VPS CLI if gateway health check failed
+  when: gateway_health.rc != 0
+  block:
+    - name: Trigger pairing request via health check
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR=/run/user/1000
+        openclaw health || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Wait for pairing request to register
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Read gateway token and find pending pairing request
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+
+        # Read the gateway token from config
+        GW_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null) || {
+            echo "SKIP: cannot read gateway token" >&2
+            exit 1
+        }
+
+        # List devices with token auth to find pending request
+        # UUID-with-dashes regex matches request IDs (not paired device hex IDs)
+        DEVICES_OUT=$(OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
+            echo "SKIP: devices list failed: $DEVICES_OUT" >&2
+            exit 1
+        }
+
+        REQUEST_ID=$(echo "$DEVICES_OUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1) || REQUEST_ID=""
+
+        if [ -z "$REQUEST_ID" ]; then
+            echo "SKIP: no pending pairing request found"
+            exit 1
+        fi
+
+        # Approve the pending request
+        OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
+        echo "PAIRED: approved request $REQUEST_ID"
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: auto_pair_result
+      changed_when: "'PAIRED' in auto_pair_result.stdout"
+      failed_when: false
+
+    - name: Re-check gateway health after pairing
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR=/run/user/1000
+        for i in $(seq 1 6); do
+            if openclaw health >/dev/null 2>&1; then
+                echo "Gateway is healthy after auto-pairing"
+                exit 0
+            fi
+            sleep 5
+        done
+        echo "WARNING: Gateway still not healthy after auto-pairing" >&2
+        exit 1
+      args:
+        executable: /bin/bash
+      register: gateway_health_retry
+      changed_when: false
+      failed_when: false
+
+    - name: Update gateway_health fact after auto-pairing
+      ansible.builtin.set_fact:
+        gateway_health: "{{ gateway_health_retry }}"
+      when: gateway_health_retry.rc is defined
+
 - name: Skip cron setup if gateway is not healthy
   when: gateway_health.rc != 0
   block:

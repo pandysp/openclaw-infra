@@ -11,3 +11,34 @@
   args:
     executable: /bin/bash
   when: not daemon_service.stat.exists
+
+- name: Check daemon service file version matches installed binary
+  when: daemon_service.stat.exists
+  block:
+    - name: Extract version from daemon service file
+      ansible.builtin.shell: |
+        grep -oP 'OPENCLAW_SERVICE_VERSION=\K[^\s"]+' /home/ubuntu/.config/systemd/user/openclaw-gateway.service 2>/dev/null || echo ""
+      args:
+        executable: /bin/bash
+      register: daemon_service_version
+      changed_when: false
+
+    - name: Get installed openclaw version
+      ansible.builtin.command: openclaw --version
+      register: openclaw_binary_version
+      changed_when: false
+
+    - name: Regenerate daemon service file if version drifted
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR=/run/user/1000
+        openclaw daemon install --force
+        systemctl --user daemon-reload
+        echo "REGENERATED: service={{ daemon_service_version.stdout | trim }} binary={{ openclaw_binary_version.stdout | trim }}"
+      args:
+        executable: /bin/bash
+      register: daemon_version_regen
+      changed_when: true
+      notify: restart openclaw-gateway
+      when: >-
+        daemon_service_version.stdout | trim == "" or
+        daemon_service_version.stdout | trim != openclaw_binary_version.stdout | trim
