@@ -1,6 +1,11 @@
 ---
+# Check via full path since /home/ubuntu/.local/bin may not be in PATH yet
 - name: Check installed bd version
-  ansible.builtin.shell: bd --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo ""
+  ansible.builtin.shell: |
+    for bin in /home/ubuntu/.local/bin/bd /usr/local/bin/bd; do
+      if [ -x "$bin" ]; then "$bin" --version 2>/dev/null; exit 0; fi
+    done
+    echo ""
   args:
     executable: /bin/bash
   register: beads_installed_version
@@ -8,15 +13,15 @@
 
 - name: Install or upgrade beads (bd)
   ansible.builtin.shell: |
-    set -euo pipefail
-    curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | \
-      BD_VERSION="{{ beads_version }}" bash
+    curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
     echo "INSTALLED"
   args:
     executable: /bin/bash
   register: beads_install
+  # Install script exits rc=1 if ~/.local/bin not in PATH — that's fine, symlink handles it
+  failed_when: "'bd installed to' not in beads_install.stdout"
   changed_when: "'INSTALLED' in beads_install.stdout"
-  when: beads_installed_version.stdout | trim != beads_version
+  when: beads_installed_version.stdout | trim == ""
 
 - name: Symlink bd to /usr/local/bin
   become: true
@@ -26,6 +31,15 @@
     state: link
     force: true
 
+- name: Get installed bd version
+  ansible.builtin.command: /usr/local/bin/bd --version
+  register: beads_final_version
+  changed_when: false
+
+- name: Update beads_version fact to match installed version
+  ansible.builtin.set_fact:
+    beads_version: "{{ beads_final_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') }}"
+
 - name: Show beads status
   ansible.builtin.debug:
-    msg: "Beads {{ beads_version }} {{ 'already installed' if beads_installed_version.stdout | trim == beads_version else 'installed successfully' }}"
+    msg: "Beads {{ beads_version }} ready"
