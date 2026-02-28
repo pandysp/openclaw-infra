@@ -407,6 +407,27 @@
     proto: tcp
   when: proxy_required | bool
 
+- name: Get Docker bridge gateway IP
+  ansible.builtin.shell: |
+    docker network inspect bridge --format '{{ '{{' }}range .IPAM.Config{{ '}}{{' }}.Gateway{{ '}}{{' }}end{{ '}}' }}'
+  args:
+    executable: /bin/bash
+  register: docker_bridge_info
+  changed_when: false
+  when: proxy_required | bool
+
+- name: Allow Docker bridge containers to reach proxy port (sandbox git push)
+  become: true
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ docker_bridge_info.stdout | trim | regex_replace('\\.[0-9]+$', '.0/16') }}"
+    to_port: "{{ openclaw_mcp_adapter.codex_proxy_port }}"
+    proto: tcp
+    comment: "sandbox git push via proxy"
+  when:
+    - proxy_required | bool
+    - docker_bridge_info.stdout | default('') | trim | length > 0
+
 - name: Deploy mcp-auth-proxy
   when: proxy_required | bool
   block:
@@ -490,6 +511,7 @@
       [url "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/github-{{ item.agent_id }}/"]
           insteadOf = https://github.com/
           insteadOf = git@github.com:
+          insteadOf = git@{{ item.ssh_alias }}:
     dest: "{{ item.workspace_dir }}/.git-proxy-config"
     mode: "0644"
   loop: "{{ _openclaw_workspaces }}"
