@@ -24,6 +24,8 @@ openclaw_custom_models:
           maxTokens: 128000
 openclaw_version: "2026.2.26"
 openclaw_heartbeat_interval: "30m"
+openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
+openclaw_cooldown_failure_window_hours: 1  # reset cooldown error count after 1h (default: 24)
 openclaw_elevated_default: "off"
 
 # Voice transcription (Groq Whisper)

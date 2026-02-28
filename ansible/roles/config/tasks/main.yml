@@ -275,11 +275,18 @@
         check_set agents.defaults.userTimezone "{{ openclaw_timezone }}"
         check_set agents.defaults.envelopeTimezone user
 
+        # Agent timeout: max seconds per conversation turn (default 600 = 10min)
+        check_set agents.defaults.timeoutSeconds "{{ openclaw_agent_timeout_seconds }}"
+
         # Heartbeat interval
         check_set agents.defaults.heartbeat.every "{{ openclaw_heartbeat_interval }}"
 
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
         check_set messages.queue.mode collect
+
+        # Auth cooldown: reset error count after N hours
+        # Prevents timeouts from compounding into multi-hour lockouts
+        check_set auth.cooldowns.failureWindowHours "{{ openclaw_cooldown_failure_window_hours }}"
 
         # Concurrency: allow more parallel sessions across all agents
         check_set agents.defaults.maxConcurrent "{{ openclaw_max_concurrent }}"
