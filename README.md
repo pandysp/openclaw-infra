@@ -10,7 +10,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
 - **Telegram**: Optional scheduled tasks (configurable cron jobs)
-- **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
+- **Workspace sync**: Hourly git backup of the agent's workspace to a private GitHub repo
 
 ## Prerequisites
 
@@ -22,6 +22,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
 - Tailscale MagicDNS and HTTPS enabled ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)) — required for Tailscale Serve
 - Claude setup token (run `claude setup-token`)
+- [GitHub CLI](https://cli.github.com/) (`gh`) authenticated (`gh auth login`)
 
 See [CLAUDE.md](./CLAUDE.md#prerequisites) for detailed setup instructions.
 
@@ -62,6 +63,27 @@ To enable optional Telegram notifications:
 
 3. **Configure**: See [Quick Start](#quick-start) below for the Pulumi commands.
 
+### Workspace GitHub Repo
+
+The agent's workspace (memories, notes, tasks) is synced hourly to a private GitHub repo. This gives you version history, visibility into what the agent is doing, and continuous backup.
+
+The `setup-workspace.sh` script handles everything — repo creation, deploy key, and Pulumi config:
+
+```bash
+# After first `pulumi up` (generates the deploy key)
+./scripts/setup-workspace.sh main
+
+# Then re-deploy to activate the sync
+cd pulumi && pulumi up
+```
+
+The script will:
+1. Create a private repo (e.g., `youruser/openclaw-workspace`)
+2. Read the deploy key from Pulumi and add it to the repo
+3. Set the `workspaceRepoUrl` in Pulumi config
+
+After deployment, the workspace syncs every hour via a systemd timer. Browse your workspace at `https://github.com/youruser/openclaw-workspace`.
+
 ## Quick Start
 
 ```bash
@@ -78,11 +100,13 @@ pulumi config set claudeSetupToken --secret    # From `claude setup-token`
 pulumi config set telegramBotToken --secret    # From @BotFather
 pulumi config set telegramUserId "YOUR_ID"     # ./scripts/get-telegram-id.sh or @userinfobot
 
-# Optional: hourly workspace backup to a private GitHub repo
-pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
-
-# Deploy
+# Deploy (generates deploy keys for workspace sync)
 pulumi up
+
+# Set up workspace git sync (creates private GitHub repo + deploy key)
+cd ..
+./scripts/setup-workspace.sh main
+cd pulumi
 
 # Verify (wait ~5 min for cloud-init)
 cd ..

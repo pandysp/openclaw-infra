@@ -401,11 +401,10 @@ pulumi config set hcloud:token --secret
 pulumi config set tailscaleAuthKey --secret
 pulumi config set claudeSetupToken --secret
 
-# 5. (Optional) Enable web search, Telegram, or workspace sync
+# 5. (Optional) Enable web search or Telegram
 pulumi config set xaiApiKey --secret               # xAI API key for Grok web search
 pulumi config set telegramBotToken --secret       # From @BotFather
 pulumi config set telegramUserId "YOUR_USER_ID"   # ./scripts/get-telegram-id.sh or @userinfobot
-pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
 
 # 6. Preview deployment
 pulumi preview
@@ -413,7 +412,13 @@ pulumi preview
 # 7. Deploy (creates server + auto-runs Ansible provisioning)
 pulumi up
 
-# 8. Verify deployment
+# 8. Set up workspace git sync (creates private GitHub repo + deploy key)
+cd ..
+./scripts/setup-workspace.sh main
+# Then re-deploy to activate:
+cd pulumi && pulumi up
+
+# 9. Verify deployment
 cd ..
 ./scripts/verify.sh
 
@@ -480,9 +485,9 @@ pulumi up
 
 This project uses **local state storage** (`.pulumi/` directory, gitignored). For CI/CD or team use, consider migrating to [Pulumi Cloud](https://www.pulumi.com/docs/pulumi-cloud/) or [Pulumi ESC](https://www.pulumi.com/docs/esc/).
 
-## Workspace Git Sync (Optional)
+## Workspace Git Sync
 
-The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills, and prompts. Syncing it to a private GitHub repo gives you version history, visibility into agent changes, and continuous backup.
+The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills, and prompts. Every new user should set up a private GitHub repo for workspace sync — it gives you version history, visibility into what the agent is doing, and continuous backup. Without it, workspace data only exists on the VPS and is lost if the server is destroyed.
 
 **Multi-agent note:** Workspace definitions are auto-generated from `openclaw_agents` (see [Multi-Agent Setup](#multi-agent-setup-optional)). Each agent gets a workspace at `~/.openclaw/workspace-<id>` (or `~/.openclaw/workspace` for main). Run `setup-workspace.sh <agent-id>` for each agent that needs git sync.
 
