@@ -14,15 +14,15 @@ if ! git diff --cached --quiet; then
     git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-# Reconcile with remote before pushing
+# Reconcile with remote before pushing (local workspace takes precedence on conflict)
 git fetch origin main
-if ! git rebase origin/main 2>/dev/null; then
+if ! git rebase -X ours origin/main 2>/dev/null; then
     echo "Rebase failed, falling back to merge" >&2
-    git rebase --abort
-    if ! git merge origin/main --no-edit; then
-        git merge --abort
-        echo "ERROR: Cannot reconcile local and remote changes for {{ item.agent_id }}" >&2
-        exit 1
+    git rebase --abort 2>/dev/null || true
+    if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
+        git merge --abort 2>/dev/null || true
+        echo "WARNING: Cannot reconcile, forcing local state for {{ item.agent_id }}" >&2
+        git push --force-with-lease origin main
     fi
 fi
 

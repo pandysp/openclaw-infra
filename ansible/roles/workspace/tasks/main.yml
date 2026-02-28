@@ -275,20 +275,43 @@
   ansible.builtin.shell: |
     set -euo pipefail
     cd "{{ item.item.workspace_dir }}"
+
+    # Rename branch to main if needed (handles git default of master)
+    CURRENT=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [ "$CURRENT" != "main" ] && [ -n "$CURRENT" ]; then
+        git branch -m "$CURRENT" main
+    fi
+
+    # Commit any local changes (Ansible-written templates, etc.)
     git add -A
     if ! git diff --cached --quiet; then
         git commit -m "Initial workspace sync"
-        # Rename branch to main if needed (handles git default of master)
-        CURRENT=$(git rev-parse --abbrev-ref HEAD)
-        if [ "$CURRENT" != "main" ]; then
-            git branch -m "$CURRENT" main
+    fi
+
+    # Reconcile with remote before pushing (local workspace takes precedence on conflict)
+    RECONCILED=true
+    if git fetch origin main 2>/dev/null; then
+        if ! git rebase -X ours origin/main 2>/dev/null; then
+            git rebase --abort 2>/dev/null || true
+            if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
+                git merge --abort 2>/dev/null || true
+                RECONCILED=false
+            fi
         fi
-        git push -u origin main || {
-            echo "ERROR: Initial push failed for {{ item.item.agent_id }}. Check deploy key and remote." >&2
-            exit 1
-        }
+    fi
+
+    # Push (force-with-lease if reconciliation failed, normal otherwise)
+    LOCAL=$(git rev-parse HEAD 2>/dev/null) || LOCAL=""
+    REMOTE=$(git rev-parse origin/main 2>/dev/null) || REMOTE=""
+    if [ "$LOCAL" != "$REMOTE" ]; then
+        if [ "$RECONCILED" = "false" ]; then
+            echo "WARNING: Conflict in {{ item.item.agent_id }}, force-pushing local state" >&2
+            git push -u --force-with-lease origin main
+        else
+            git push -u origin main
+        fi
     else
-        echo "Nothing to commit"
+        echo "Nothing to push"
     fi
   args:
     executable: /bin/bash
