@@ -1,8 +1,8 @@
 ---
-- name: Write Telegram bot token to temp file
+- name: Write Telegram bot token to dedicated file
   ansible.builtin.copy:
     content: "{{ telegram_bot_token }}"
-    dest: /tmp/ansible-telegram-bot-token
+    dest: "{{ ansible_env.HOME }}/.openclaw/.telegram-bot-token"
     mode: "0600"
   no_log: true
   changed_when: false
@@ -11,15 +11,15 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    BOT_TOKEN=$(cat /tmp/ansible-telegram-bot-token)
-    DESIRED_HASH=$(echo -n "$BOT_TOKEN" | sha256sum | cut -d' ' -f1)
-    CURRENT=$(openclaw config get channels.telegram.botToken 2>/dev/null) || CURRENT=""
-    CURRENT_HASH=$(echo -n "$CURRENT" | sha256sum | cut -d' ' -f1)
     CHANGED=""
-    if [ "$CURRENT_HASH" != "$DESIRED_HASH" ]; then
-        openclaw config set channels.telegram.botToken "$BOT_TOKEN"
+    DESIRED_TOKEN_FILE="{{ ansible_env.HOME }}/.openclaw/.telegram-bot-token"
+    CURRENT_TOKEN_FILE=$(openclaw config get channels.telegram.tokenFile 2>/dev/null) || CURRENT_TOKEN_FILE=""
+    if [ "$CURRENT_TOKEN_FILE" != "$DESIRED_TOKEN_FILE" ]; then
+        openclaw config set channels.telegram.tokenFile "$DESIRED_TOKEN_FILE"
         CHANGED="yes"
     fi
+    # Remove inline botToken if present (superseded by tokenFile)
+    openclaw config unset channels.telegram.botToken 2>/dev/null || true
     ENABLED=$(openclaw config get channels.telegram.enabled 2>/dev/null) || ENABLED=""
     if [ "$ENABLED" != "true" ]; then
         openclaw config set channels.telegram.enabled true
@@ -43,6 +43,27 @@
     CURRENT_DM=$(openclaw config get channels.telegram.dmPolicy 2>/dev/null) || CURRENT_DM=""
     if [ "$CURRENT_DM" != "allowlist" ]; then
         openclaw config set channels.telegram.dmPolicy "allowlist"
+        CHANGED="yes"
+    fi
+
+    # Stream mode: partial for draft message streaming
+    CURRENT_SM=$(openclaw config get channels.telegram.streamMode 2>/dev/null) || CURRENT_SM=""
+    if [ "$CURRENT_SM" != "partial" ]; then
+        openclaw config set channels.telegram.streamMode "partial"
+        CHANGED="yes"
+    fi
+
+    # Disable config writes via Telegram for security
+    CURRENT_CW=$(openclaw config get channels.telegram.configWrites 2>/dev/null) || CURRENT_CW=""
+    if [ "$CURRENT_CW" != "false" ]; then
+        openclaw config set channels.telegram.configWrites false
+        CHANGED="yes"
+    fi
+
+    # Chunk mode: split on paragraph boundaries
+    CURRENT_CM=$(openclaw config get channels.telegram.chunkMode 2>/dev/null) || CURRENT_CM=""
+    if [ "$CURRENT_CM" != "newline" ]; then
+        openclaw config set channels.telegram.chunkMode "newline"
         CHANGED="yes"
     fi
 
@@ -114,9 +135,3 @@
   register: telegram_policies_result
   changed_when: "'UPDATED' in telegram_policies_result.stdout"
   notify: restart openclaw-gateway
-
-- name: Clean up Telegram bot token
-  ansible.builtin.file:
-    path: /tmp/ansible-telegram-bot-token
-    state: absent
-  changed_when: false
