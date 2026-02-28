@@ -89,6 +89,7 @@ openclaw-infra/
 │       ├── telegram/  # Telegram channel config, cron jobs (conditional)
 │       ├── whatsapp/  # WhatsApp channel config (conditional)
 │       ├── obsidian/  # Clone/update Obsidian vaults in workspaces (conditional)
+│       ├── obsidian-headless/  # Obsidian Sync daemon per workspace (conditional)
 │       ├── qmd/       # qmd semantic search: install, per-agent watchers
 │       ├── plugins/   # MCP adapter, Codex/Claude Code/Pi/qmd servers, deny rules
 │       ├── sandbox/   # Pull base image, build custom Docker image
@@ -125,6 +126,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
 | `whatsapp` | whatsapp | Configure WhatsApp channel for agents using `deliver_channel: whatsapp` |
 | `obsidian` | obsidian | Clone/update Obsidian vaults in agent workspaces |
+| `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
 | `plugins` | plugins | MCP adapter, Codex/Claude Code/Pi containers, GitHub MCP, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
@@ -285,6 +287,8 @@ Default server type is **CX33** (4 vCPU, 8 GB RAM). Upgrade to **CX43** (8 vCPU,
 | xAI API key | (Optional) Enables web search via Grok | x.ai/api → API Keys |
 | Groq API key | (Optional) Enables voice transcription via Whisper | console.groq.com → API Keys |
 | Codex auth (`~/.codex/auth.json`) | (Optional) Powers Codex MCP servers for coding assistance | Run `codex login` locally, auto-deployed by provision.sh |
+| Obsidian auth token | (Optional) Authenticates with Obsidian Sync API | `ob login` locally, copy from `~/.obsidian-headless/auth_token` |
+| Obsidian vault password | (Optional) E2EE encryption for Obsidian Sync vaults | User-chosen password |
 
 ## Security DO's and DON'Ts
 
@@ -516,6 +520,51 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels status
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw agents list --json --bindings'
 ```
 
+## Obsidian Headless Sync (Optional)
+
+Near-real-time two-way sync between agent workspaces and Obsidian Sync, enabling mobile access to agent notes via the Obsidian app. Requires an Obsidian Sync subscription and the `obsidian-headless` npm package. If secrets are not set, deployment proceeds without Obsidian Sync.
+
+### Setup
+
+1. **Install `obsidian-headless` locally** and authenticate:
+   ```bash
+   npm install -g obsidian-headless
+   ob login    # creates ~/.obsidian-headless/auth_token
+   ```
+
+2. **Set Pulumi secrets:**
+   ```bash
+   cd pulumi
+   pulumi config set obsidianAuthToken --secret    # from ~/.obsidian-headless/auth_token
+   pulumi config set obsidianVaultPassword --secret # E2E encryption password (your choice)
+   ```
+
+3. **Enable in `openclaw.yml`:**
+   ```yaml
+   obsidian_headless_enabled: true
+   obsidian_headless_agents:
+     - main
+   ```
+
+4. **Provision:**
+   ```bash
+   ./scripts/provision.sh --tags obsidian-headless
+   ```
+
+### Verify
+
+```bash
+# Check daemon status (one service per agent)
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-main'
+
+# View sync logs
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u obsidian-headless-main -f'
+```
+
+### Token Expiry
+
+The Obsidian auth token may expire if the Obsidian Sync subscription lapses or is renewed. Re-run `ob login` locally, update the Pulumi secret, and re-provision with `--tags obsidian-headless`.
+
 ## Multi-Agent Setup (Optional)
 
 By default, a single `main` agent is configured. To add more agents, define `openclaw_agents` in `openclaw.yml` (see `openclaw.yml.example`).
@@ -549,7 +598,7 @@ MCP servers, workspaces, deny rules, and token mappings are generated automatica
 
 ### Role Ordering
 
-`config` -> `agents` -> `telegram` -> `whatsapp` -> `obsidian` -> `qmd` -> `plugins` -> `sandbox` -> `workspace`
+`config` -> `agents` -> `telegram` -> `whatsapp` -> `obsidian` -> `obsidian-headless` -> `qmd` -> `plugins` -> `sandbox` -> `workspace`
 
 Telegram must run immediately after agents (prevents message misrouting). Obsidian before qmd (vaults must exist before watchers start). Plugins after qmd (qmd binary needed for MCP registration).
 

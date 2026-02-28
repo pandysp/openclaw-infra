@@ -14,16 +14,27 @@
     executable: /bin/bash
   register: sync_status
   changed_when: false
-  failed_when: false
+  # rc=0: linked, rc=3: not linked. Fail on rc=1 (general error) or rc=2 (auth failure).
+  failed_when: sync_status.rc not in [0, 3]
   no_log: true
 
 # Full setup block — only runs if workspace is not yet linked to Obsidian Sync
 - name: "Setup Obsidian Sync for {{ item.agent_id }}"
-  when: sync_status.rc != 0
+  when: sync_status.rc == 3
   environment:
     PATH: "/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
     OBSIDIAN_AUTH_TOKEN: "{{ obsidian_auth_token }}"
   block:
+    - name: "Check if remote vault already exists for {{ item.agent_id }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ob sync-list-remote 2>&1 | grep -q "{{ item.agent_id }}-workspace"
+      args:
+        executable: /bin/bash
+      register: vault_exists
+      changed_when: false
+      failed_when: false
+
     - name: "Create remote vault for {{ item.agent_id }}"
       ansible.builtin.shell: |
         set -euo pipefail
@@ -34,6 +45,7 @@
       args:
         executable: /bin/bash
       no_log: true
+      when: vault_exists.rc != 0
 
     - name: "Get vault ID for {{ item.agent_id }}"
       ansible.builtin.shell: |
@@ -73,6 +85,14 @@
       args:
         executable: /bin/bash
       register: initial_sync
-      # timeout exits 124 on success (sync completed = "Fully synced" before timeout)
-      # or the process ends naturally with rc=0
+      # rc=0: sync completed naturally before timeout
+      # rc=124: timeout killed the process (sync was still in progress — incomplete)
       failed_when: initial_sync.rc not in [0, 124]
+
+    - name: "Warn if initial sync was incomplete for {{ item.agent_id }}"
+      ansible.builtin.debug:
+        msg: >-
+          Initial sync for {{ item.agent_id }} was killed by timeout after
+          {{ obsidian_headless_initial_sync_timeout }}s (rc=124). The daemon
+          will continue syncing in the background.
+      when: initial_sync.rc == 124
