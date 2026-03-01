@@ -190,6 +190,8 @@
       bd import "$BACKUP"
     fi
 
+    # Only remove the backup after a successful import (set -e means we get
+    # here only if every preceding command succeeded).
     rm -f "$BACKUP"
     echo "MIGRATED"
   args:
