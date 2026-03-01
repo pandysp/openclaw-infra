@@ -71,6 +71,10 @@ COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq
 # --- Layer 4: beads (bd) — AI-native issue tracker ---
 RUN curl -fsSL "https://github.com/steveyegge/beads/releases/download/v{{ beads_version }}/beads_{{ beads_version }}_linux_amd64.tar.gz" \
     | tar -xz -C /usr/local/bin bd
+# bd 0.55.4 links against ICU 74; Debian trixie ships ICU 76. Symlink all three sonames.
+RUN ln -sf /usr/lib/x86_64-linux-gnu/libicui18n.so.76  /usr/lib/x86_64-linux-gnu/libicui18n.so.74  \
+ && ln -sf /usr/lib/x86_64-linux-gnu/libicuuc.so.76    /usr/lib/x86_64-linux-gnu/libicuuc.so.74    \
+ && ln -sf /usr/lib/x86_64-linux-gnu/libicudata.so.76  /usr/lib/x86_64-linux-gnu/libicudata.so.74
 
 # --- Layer 5: pnpm via corepack (recommended — https://pnpm.io/installation) ---
 RUN npm install -g corepack@latest && corepack enable pnpm
