@@ -10,7 +10,7 @@ fi
 
 # Untrack any files now covered by .gitignore (e.g. .cache/, .local/ added before
 # .gitignore was provisioned). git ls-files -ci lists tracked-but-ignored files.
-git ls-files -ci --exclude-standard | xargs -r git rm --cached
+git ls-files -ci --exclude-standard -z | xargs -0 -r git rm --cached
 
 # Commit any local changes first (so they're never lost)
 git add -A

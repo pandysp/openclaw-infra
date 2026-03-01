@@ -181,8 +181,13 @@
       touch "$BACKUP"
     fi
 
-    # Remove the SQLite-backed store so init creates a fresh Dolt backend.
-    rm -rf "$BEADS_DIR"
+    # Rename (not delete) the old store so bd init can create a fresh Dolt backend.
+    # This preserves a rollback path if bd init or bd import fails — the stash
+    # directory is removed only after full success. set -euo pipefail ensures any
+    # failure after this point exits before the rm -rf, leaving both the stash
+    # and the /tmp JSONL backup for manual recovery.
+    STASH="${BEADS_DIR}.migrating"
+    mv "$BEADS_DIR" "$STASH"
 
     cd "{{ item.item.workspace_dir }}"
     if [ -n "$OLD_PREFIX" ]; then
@@ -195,12 +200,13 @@
     # Re-import existing issues if we had any.
     # -i specifies the input file; --orphan-handling resurrect restores issues
     # whose parent has been deleted rather than silently dropping them.
-    # set -euo pipefail means rm -f is only reached on full success, so the
-    # backup survives in /tmp on any import failure for manual recovery.
+    # set -euo pipefail means rm commands are only reached on full success, so
+    # both the stash and /tmp backup survive on any failure for manual recovery.
     if [ -s "$BACKUP" ]; then
       bd import -i "$BACKUP" --orphan-handling resurrect
     fi
 
+    rm -rf "$STASH"
     rm -f "$BACKUP"
     echo "MIGRATED"
   args:
@@ -339,7 +345,7 @@
 
     # Untrack any files now covered by .gitignore (e.g. .cache/ added before
     # .gitignore was provisioned). git ls-files -ci lists tracked-but-ignored files.
-    git ls-files -ci --exclude-standard | xargs -r git rm --cached
+    git ls-files -ci --exclude-standard -z | xargs -0 -r git rm --cached
 
     # Commit any local changes (Ansible-written templates, etc.)
     git add -A
