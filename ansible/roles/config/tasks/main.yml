@@ -284,6 +284,9 @@
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
         check_set messages.queue.mode collect
 
+        # Session tools: expose session transcripts to the agent for continuity
+        check_set tools.sessions.visibility agent
+
         # Auth cooldown: reset error count after N hours
         # Prevents timeouts from compounding into multi-hour lockouts
         check_set auth.cooldowns.failureWindowHours "{{ openclaw_cooldown_failure_window_hours }}"
