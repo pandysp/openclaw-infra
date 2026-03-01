@@ -67,7 +67,7 @@
             cat /tmp/ansible_agents_current.json >&2
             exit 1
         fi
-        DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"}'
+        DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if item.heartbeat_model is defined %},"model":"{{ item.heartbeat_model }}"{% endif %}'
         CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="{}"
