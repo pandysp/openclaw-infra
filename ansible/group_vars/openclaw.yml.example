@@ -27,19 +27,16 @@
 #     deliver_to: "{{ telegram_user_id | default('') }}"
 #     deliver_type: "dm"
 #     deliver_channel: "telegram"      # telegram (default), whatsapp, or discord
-#     heartbeat_every: "15m"
 #   - id: "second-agent"
 #     is_default: false
 #     deliver_to: "{{ telegram_second_user_id | default('') }}"
 #     deliver_type: "dm"
 #     deliver_channel: "telegram"
-#     heartbeat_every: "1h"
 #   - id: "whatsapp-agent"
 #     is_default: false
 #     deliver_to: "{{ whatsapp_phone | default('') }}"  # E.164 format: +491234567890
 #     deliver_type: "dm"
 #     deliver_channel: "whatsapp"
-#     heartbeat_every: "1h"
 
 # --- Discord (Option A: single agent, multi-channel sessions) ---
 # Discord channels get isolated sessions automatically. Configure at channel level:
@@ -53,7 +50,6 @@
 #     deliver_to: "YOUR_DISCORD_USER_ID"
 #     deliver_type: "dm"
 #     deliver_channel: "discord"
-#     heartbeat_every: "15m"
 
 # --- Cron jobs (override to customize schedules per agent) ---
 # all.yml provides generic main-agent defaults (daily standup + night shift).

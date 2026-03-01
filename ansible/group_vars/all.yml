@@ -134,7 +134,6 @@ openclaw_agents:
     deliver_to: "{{ telegram_user_id | default('') }}"
     deliver_type: "dm"
     deliver_channel: "telegram"
-    heartbeat_every: "15m"
 
 # Legacy cron job names (removed during migration to per-agent jobs)
 openclaw_legacy_cron_names:
