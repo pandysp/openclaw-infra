@@ -20,7 +20,22 @@ openclaw_custom_models:
           name: "Claude Opus 4.6"
           reasoning: true
           input: ["text", "image"]
-          contextWindow: 1000000
+          # 200K limit: Claude Max (subscription / setup-token auth) does NOT support 1M context.
+          # Anthropic rejects the context-1m-2025-08-07 beta header for sk-ant-oat* OAuth tokens.
+          # OpenClaw auto-skips context1m when it detects subscription auth (PR #24620, Feb 2026).
+          #
+          # This value drives compaction timing: OpenClaw compacts at
+          #   contextWindow - reserveTokensFloor  (see openclaw_compaction_reserve_tokens_floor below).
+          # Setting it to 1000000 would push the compaction trigger to ~976K — the API rejects at
+          # 200K first, compaction never fires, and sessions die with duplicate Telegram deliveries.
+          #
+          # API key auth (sk-ant-api03-*): if you switch away from Claude Max, you can set:
+          #   contextWindow: 1000000
+          #   context1m: true   ← OpenClaw injects the beta header automatically
+          # Still keep reserveTokensFloor high (~50K) to compact well before 200K — extended context
+          # bills the ENTIRE input at the premium rate ($10 vs $5/MTok input, $37.50 vs $25/MTok
+          # output), not just the excess. Staying under 200K is almost always cheaper.
+          contextWindow: 200000
           maxTokens: 128000
 openclaw_version: "2026.2.26"
 openclaw_heartbeat_interval: "30m"
@@ -38,9 +53,9 @@ openclaw_groq_base_url: "https://api.groq.com/openai/v1"
 # Prevents silent loss of in-context state when long sessions get compacted.
 # See: https://docs.openclaw.ai/concepts/compaction, openclaw/openclaw#5429
 openclaw_compaction_mode: "safeguard"
-openclaw_compaction_reserve_tokens_floor: 24000
+openclaw_compaction_reserve_tokens_floor: 50000   # was 24000; 50K gives compaction room within 200K API limit
 openclaw_compaction_memory_flush: true
-openclaw_compaction_memory_flush_threshold: 8000
+openclaw_compaction_memory_flush_threshold: 20000  # was 8000; flush memories 20K tokens before compaction trigger
 openclaw_compaction_memory_flush_prompt: >-
   Distill important context from this session to logs/YYYY-MM-DD.md (today's date).
   Focus on: decisions made, task progress, blockers, lessons learned.
