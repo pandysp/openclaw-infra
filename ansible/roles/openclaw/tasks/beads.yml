@@ -31,6 +31,14 @@
   changed_when: "'INSTALLED' in beads_install.stdout"
   when: beads_installed_semver == "" or beads_installed_semver != beads_version
 
+- name: Remove manually installed bd that shadows /usr/local/bin/bd
+  ansible.builtin.file:
+    path: /home/ubuntu/.local/bin/bd
+    state: absent
+  # ~/.local/bin typically precedes /usr/local/bin in PATH; a manually installed
+  # binary here (e.g. v0.56.1) would shadow the Ansible-managed version and cause
+  # format mismatches between the host and sandbox containers.
+
 - name: Show beads status
   ansible.builtin.debug:
     msg: "Beads {{ beads_version }} ready (installed: {{ beads_installed_semver | default('fresh') }})"

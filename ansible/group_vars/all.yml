@@ -92,8 +92,9 @@ openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
 
 # beads (bd) — AI-native issue tracker (https://github.com/steveyegge/beads)
-# Pinned to 0.49.6: last version with embedded SQLite. v0.51.0+ requires Dolt server backend.
-beads_version: "0.49.6"
+# Pinned to 0.55.4: last version with embedded Dolt (no external server). v0.56.0+ requires
+# a running Dolt SQL server. v0.51.0 removed the daemon that caused zombie process accumulation.
+beads_version: "0.55.4"
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false

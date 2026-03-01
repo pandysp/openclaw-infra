@@ -157,6 +157,50 @@
   loop_control:
     label: "{{ item.item.agent_id }}"
 
+- name: Migrate beads workspace from SQLite to embedded Dolt backend
+  ansible.builtin.shell: |
+    set -euo pipefail
+    BEADS_DIR="{{ item.item.workspace_dir }}/.beads"
+    BACKUP="/tmp/beads-migrate-{{ item.item.agent_id }}.jsonl"
+
+    # beads.db is the SQLite marker — present only in v0.49.x and earlier.
+    # v0.55.4 uses embedded Dolt and cannot open SQLite databases (issue #2016).
+    if [ ! -f "$BEADS_DIR/beads.db" ]; then
+      echo "SKIP"
+      exit 0
+    fi
+
+    # The daemon in v0.49.x maintained issues.jsonl alongside the SQLite DB as part
+    # of the JSONL sync pipeline. Copy it before nuking .beads/.
+    if [ -f "$BEADS_DIR/issues.jsonl" ]; then
+      cp "$BEADS_DIR/issues.jsonl" "$BACKUP"
+    else
+      touch "$BACKUP"
+    fi
+
+    # Remove the SQLite-backed store so init creates a fresh Dolt backend.
+    rm -rf "$BEADS_DIR"
+
+    cd "{{ item.item.workspace_dir }}"
+    bd init --no-interactive 2>/dev/null || bd init
+    bd config set sync.branch beads-sync
+
+    # Re-import existing issues if we had any.
+    if [ -s "$BACKUP" ]; then
+      bd import "$BACKUP"
+    fi
+
+    rm -f "$BACKUP"
+    echo "MIGRATED"
+  args:
+    executable: /bin/bash
+  register: beads_migrate
+  changed_when: "'MIGRATED' in beads_migrate.stdout"
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
 - name: Initialize beads in workspace
   ansible.builtin.shell: |
     set -euo pipefail
