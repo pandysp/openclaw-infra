@@ -8,6 +8,10 @@ if [ "$CURRENT_BRANCH" != "main" ] && [ -n "$CURRENT_BRANCH" ]; then
     git branch -m "$CURRENT_BRANCH" main
 fi
 
+# Untrack any files now covered by .gitignore (e.g. .cache/, .local/ added before
+# .gitignore was provisioned). git ls-files -ci lists tracked-but-ignored files.
+git ls-files -ci --exclude-standard | xargs -r git rm --cached
+
 # Commit any local changes first (so they're never lost)
 git add -A
 if ! git diff --cached --quiet; then

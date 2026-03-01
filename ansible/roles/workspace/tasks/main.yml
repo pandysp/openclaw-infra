@@ -337,6 +337,10 @@
         git branch -m "$CURRENT" main
     fi
 
+    # Untrack any files now covered by .gitignore (e.g. .cache/ added before
+    # .gitignore was provisioned). git ls-files -ci lists tracked-but-ignored files.
+    git ls-files -ci --exclude-standard | xargs -r git rm --cached
+
     # Commit any local changes (Ansible-written templates, etc.)
     git add -A
     if ! git diff --cached --quiet; then
