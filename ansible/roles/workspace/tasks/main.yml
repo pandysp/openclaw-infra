@@ -171,9 +171,12 @@
     fi
 
     # The daemon in v0.49.x maintained issues.jsonl alongside the SQLite DB as part
-    # of the JSONL sync pipeline. Copy it before nuking .beads/.
+    # of the JSONL sync pipeline. Copy it before nuking .beads/ and extract the
+    # old prefix so bd init uses the same one (prefix validation rejects mismatches).
+    OLD_PREFIX=""
     if [ -f "$BEADS_DIR/issues.jsonl" ]; then
       cp "$BEADS_DIR/issues.jsonl" "$BACKUP"
+      OLD_PREFIX=$(head -1 "$BEADS_DIR/issues.jsonl" | grep -o '"id":"[^"]*"' | sed 's/.*"id":"\([^-]*\).*/\1/')
     else
       touch "$BACKUP"
     fi
@@ -182,7 +185,11 @@
     rm -rf "$BEADS_DIR"
 
     cd "{{ item.item.workspace_dir }}"
-    bd init --no-interactive 2>/dev/null || bd init
+    if [ -n "$OLD_PREFIX" ]; then
+      bd init --prefix "$OLD_PREFIX" -q
+    else
+      bd init -q
+    fi
     bd config set sync.branch beads-sync
 
     # Re-import existing issues if we had any.
@@ -210,7 +217,7 @@
     set -euo pipefail
     cd "{{ item.item.workspace_dir }}"
     if [ ! -d ".beads" ]; then
-      bd init --no-interactive 2>/dev/null || bd init
+      bd init -q
       bd config set sync.branch beads-sync
       echo "INITIALIZED"
     else
