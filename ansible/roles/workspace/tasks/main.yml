@@ -186,12 +186,14 @@
     bd config set sync.branch beads-sync
 
     # Re-import existing issues if we had any.
+    # -i specifies the input file; --orphan-handling resurrect restores issues
+    # whose parent has been deleted rather than silently dropping them.
+    # set -euo pipefail means rm -f is only reached on full success, so the
+    # backup survives in /tmp on any import failure for manual recovery.
     if [ -s "$BACKUP" ]; then
-      bd import "$BACKUP"
+      bd import -i "$BACKUP" --orphan-handling resurrect
     fi
 
-    # Only remove the backup after a successful import (set -e means we get
-    # here only if every preceding command succeeded).
     rm -f "$BACKUP"
     echo "MIGRATED"
   args:
