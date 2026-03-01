@@ -107,6 +107,8 @@ openclaw-infra/
     ├── AUTONOMOUS-SAFETY.md         # Multi-agent safety architecture design
     ├── BROWSER-CONTROL-PLANNING.md  # Future browser automation approaches
     ├── DOCS-REVIEW.md               # Official docs review tracking
+    ├── INTEGRATIONS.md              # Telegram, WhatsApp, Discord, Obsidian setup detail
+    ├── NODE-EXEC.md                 # Remote Mac node host: setup, config, operations
     ├── SECURITY.md                  # Threat model
     └── TROUBLESHOOTING.md
 ```
@@ -225,14 +227,6 @@ brew upgrade openclaw-cli
 openclaw node restart   # if node exec is enabled
 ```
 
-### View Cloud-Init Logs
-
-Cloud-init now only handles Tailscale bootstrap (~1 minute). For provisioning details, check Ansible output.
-
-```bash
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'sudo cat /var/log/cloud-init-openclaw.log'
-```
-
 ### Run Security Audit
 
 ```bash
@@ -250,16 +244,11 @@ pulumi destroy
 
 ### Clean Up Stale Tailscale Devices
 
-After destroying and redeploying, old Tailscale devices show as "offline" in your admin console. Each redeploy creates a new device with a numeric suffix (openclaw-vps-1, openclaw-vps-2, etc.).
+After redeploy, old devices appear as `openclaw-vps-N` (offline) in your Tailscale admin console.
 
-**To clean up:**
 1. Go to https://login.tailscale.com/admin/machines
-2. Find devices named `openclaw-vps*` that show "offline"
+2. Find offline `openclaw-vps*` devices
 3. Click the device → Remove
-
-**Why not automate this?** Tailscale's API key has broad permissions (manage all devices). We deliberately use only an auth key (limited scope) for security. The tradeoff is manual cleanup of stale entries—a minor inconvenience for better security.
-
-**Alternative:** Reduce ephemeral node expiry in Tailscale settings (Settings → Device Management) to auto-delete offline devices faster. However, this affects all ephemeral devices and risks removing devices during temporary outages.
 
 ## Cost Breakdown
 
@@ -417,207 +406,59 @@ pulumi config rm xaiApiKey
 
 ## Telegram Integration (Optional)
 
-Configured via Pulumi secrets `telegramBotToken` and `telegramUserId`. If not set, deployment proceeds without Telegram. For bot creation, see [README.md](./README.md#telegram-bot-setup).
-
-```bash
-cd pulumi
-pulumi config set telegramBotToken --secret   # From @BotFather
-pulumi config set telegramUserId "123456789"  # Your numeric user ID
-pulumi up
-```
-
-### Getting Telegram IDs
-
-Use `./scripts/get-telegram-id.sh` to discover user IDs and group IDs. The script briefly pauses the gateway (~10s), polls the Telegram API for a message you send, displays the IDs, and restarts the gateway.
-
-```bash
-# Discover IDs (prints chat ID, user ID, group title)
-./scripts/get-telegram-id.sh
-
-# Discover and set a Pulumi config key in one step
-./scripts/get-telegram-id.sh --set-config telegramPhGroupId
-```
-
-Alternatively, message **@userinfobot** on Telegram to get a user ID manually.
-
-### Scheduled Tasks
-
-When Telegram is configured, these default cron jobs are created for the main agent:
+Pulumi secrets: `telegramBotToken` (from @BotFather) + `telegramUserId`. Use `./scripts/get-telegram-id.sh` to discover user/group IDs. Creates two default cron jobs for the main agent (Europe/Berlin timezone):
 
 | Job | Schedule | Purpose |
 |-----|----------|---------|
 | **Daily Standup** | 09:30 daily | Summarize what needs attention today |
 | **Night Shift** | 23:00 daily | Review notes, organize, triage tasks, prepare morning summary |
 
-All times are in **Europe/Berlin** timezone. Each job runs in an isolated session for fresh context. Override in `openclaw.yml` for additional agents or custom schedules (see `openclaw.yml.example`).
-
-### Verify Telegram
-
 ```bash
-# Via local CLI (preferred)
-openclaw channels status
-openclaw cron list
-openclaw cron run --force <job-id>
+pulumi config set telegramBotToken --secret && pulumi config set telegramUserId "123456789"
+./scripts/provision.sh --tags telegram   # after editing group_vars/openclaw.yml for custom schedules
+openclaw channels status && openclaw cron list
 ```
 
-### Customizing Schedules
-
-Edit `ansible/group_vars/openclaw.yml` to change cron job prompts or schedules, then re-provision:
-
-```bash
-# After editing group_vars/openclaw.yml:
-./scripts/provision.sh --tags telegram
-
-# Or via CLI for ad-hoc changes:
-openclaw cron list
-openclaw cron remove "Night Shift"
-openclaw cron add \
-    --name "Custom Task" \
-    --cron "0 14 * * *" \
-    --tz "Europe/Berlin" \
-    --session isolated \
-    --message "Your custom prompt here" \
-    --deliver --channel telegram --to "YOUR_USER_ID"
-```
+**Read [docs/INTEGRATIONS.md#telegram-integration](./docs/INTEGRATIONS.md#telegram-integration) in full when:** first-time Telegram setup, adding group chat routing, customizing cron schedules, or using `get-telegram-id.sh`.
 
 ## WhatsApp Integration (Optional)
 
-Agents can use WhatsApp instead of Telegram by setting `deliver_channel: "whatsapp"` in their agent definition. WhatsApp is a bundled OpenClaw plugin using the Baileys/WhatsApp Web protocol.
-
-### Setup
-
-1. **Configure the agent** in `openclaw.yml`:
-   ```yaml
-   - id: "nici"
-     deliver_channel: "whatsapp"
-     deliver_to: "{{ whatsapp_nici_phone | default('') }}"  # E.164 format
-   ```
-
-2. **Set the phone number** in Pulumi:
-   ```bash
-   cd pulumi
-   pulumi config set whatsappNiciPhone "+491234567890"
-   ```
-
-3. **Provision**:
-   ```bash
-   ./scripts/provision.sh --tags config,agents,telegram,whatsapp
-   ```
-
-4. **Scan QR code** (required after first provision and every ~14 days):
-   ```bash
-   ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels login --channel whatsapp --qr-terminal'
-   ```
-
-### Session Expiry
-
-WhatsApp Web sessions expire approximately every 14 days. A health-check cron job on the main agent monitors WhatsApp status every 30 minutes and alerts via Telegram when re-authentication is needed.
-
-### Verify WhatsApp
+Uses Baileys/WhatsApp Web protocol (not official Business API). **Sessions expire every ~14 days** — a health-check cron alerts via Telegram when re-authentication is needed. Set `deliver_channel: "whatsapp"` in the agent's `openclaw.yml` entry.
 
 ```bash
-# Check channel status
+pulumi config set whatsappNiciPhone "+491234567890"
+./scripts/provision.sh --tags config,agents,telegram,whatsapp
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels login --channel whatsapp --qr-terminal'
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels status --probe'
-
-# Check bindings
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw agents list --json --bindings'
 ```
+
+**Read [docs/INTEGRATIONS.md#whatsapp-integration](./docs/INTEGRATIONS.md#whatsapp-integration) in full when:** first-time WhatsApp setup (agent config, phone format) or re-scanning QR after session expiry.
 
 ## Discord Integration (Optional)
 
-Configured via Pulumi secret `discordBotToken` and optional `discordGuildId`/`discordUserId`. If not set, deployment proceeds without Discord. Discord is a built-in channel with native per-channel session isolation — each Discord channel automatically gets its own isolated session context.
-
-### Setup
-
-1. **Create a Discord bot** at [Discord Developer Portal](https://discord.com/developers/applications):
-   - New Application → Bot → Reset Token (copy the token)
-   - Enable **MESSAGE_CONTENT** and **SERVER_MEMBERS** privileged intents
-   - Invite to your server with `bot` + `applications.commands` scopes
-
-2. **Get IDs** (enable Developer Mode in Discord settings → right-click to Copy ID):
-   - Guild (server) ID
-   - Your user ID
-
-3. **Set Pulumi config:**
-   ```bash
-   cd pulumi
-   pulumi config set discordBotToken --secret
-   pulumi config set discordGuildId "YOUR_GUILD_ID"
-   pulumi config set discordUserId "YOUR_USER_ID"
-   ```
-
-4. **Provision:**
-   ```bash
-   ./scripts/provision.sh --tags discord
-   ```
-
-### Session Isolation
-
-Each Discord channel gets its own isolated session automatically — no additional configuration needed. Messages in `#general` and `#projects` will have separate conversation contexts.
-
-### Verify Discord
+Built-in channel with automatic **per-channel session isolation** — each Discord channel gets its own session context with no extra config. No QR code; persistent bot token with no session expiry. Pulumi secrets: `discordBotToken`, `discordGuildId`, `discordUserId`.
 
 ```bash
-# Check Discord channel config
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw config get channels.discord'
-
-# Check channel status
+pulumi config set discordBotToken --secret && pulumi config set discordGuildId "ID" && pulumi config set discordUserId "ID"
+./scripts/provision.sh --tags discord
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels status'
-
-# Check gateway logs for Discord connection
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 20 | grep -i discord'
 ```
 
-### Configuration Notes
-
-- **`requireMention`**: Set to `false` by default (private server). Set to `true` if you want the bot to only respond when @mentioned.
-- **Cron delivery**: By default, cron jobs deliver via Telegram (main agent's `deliver_channel`). To deliver via Discord instead, override the main agent's `deliver_channel: "discord"` and `deliver_to` with your Discord user ID in `openclaw.yml`.
-- **No QR code needed**: Unlike WhatsApp, Discord uses a persistent bot token with no session expiry.
+**Read [docs/INTEGRATIONS.md#discord-integration](./docs/INTEGRATIONS.md#discord-integration) in full when:** first-time Discord setup (bot creation, required intents, invite scopes) or troubleshooting Discord connection.
 
 ## Obsidian Headless Sync (Optional)
 
-Near-real-time two-way sync between agent workspaces and Obsidian Sync, enabling mobile access to agent notes via the Obsidian app. Requires an Obsidian Sync subscription and the `obsidian-headless` npm package. If secrets are not set, deployment proceeds without Obsidian Sync.
-
-### Setup
-
-1. **Install `obsidian-headless` locally** and authenticate:
-   ```bash
-   npm install -g obsidian-headless
-   ob login    # creates ~/.obsidian-headless/auth_token
-   ```
-
-2. **Set Pulumi secrets:**
-   ```bash
-   cd pulumi
-   pulumi config set obsidianAuthToken --secret    # from ~/.obsidian-headless/auth_token
-   pulumi config set obsidianVaultPassword --secret # E2E encryption password (your choice)
-   ```
-
-3. **Enable in `openclaw.yml`:**
-   ```yaml
-   obsidian_headless_enabled: true
-   obsidian_headless_agents:
-     - main
-   ```
-
-4. **Provision:**
-   ```bash
-   ./scripts/provision.sh --tags obsidian-headless
-   ```
-
-### Verify
+Two-way sync between agent workspaces and Obsidian Sync for mobile access. Requires Obsidian Sync subscription. **Auth token may expire if subscription lapses** — re-run `ob login` locally, update the Pulumi secret, and re-provision.
 
 ```bash
-# Check daemon status (one service per agent)
+ob login   # locally, creates ~/.obsidian-headless/auth_token
+pulumi config set obsidianAuthToken --secret && pulumi config set obsidianVaultPassword --secret
+# Enable in openclaw.yml: obsidian_headless_enabled: true, obsidian_headless_agents: [main]
+./scripts/provision.sh --tags obsidian-headless
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-main'
-
-# View sync logs
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u obsidian-headless-main -f'
 ```
 
-### Token Expiry
-
-The Obsidian auth token may expire if the Obsidian Sync subscription lapses or is renewed. Re-run `ob login` locally, update the Pulumi secret, and re-provision with `--tags obsidian-headless`.
+**Read [docs/INTEGRATIONS.md#obsidian-headless-sync](./docs/INTEGRATIONS.md#obsidian-headless-sync) in full when:** first-time Obsidian setup or diagnosing token expiry.
 
 ## Multi-Agent Setup (Optional)
 
@@ -668,7 +509,7 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 | Host filesystem | No access |
 | Gateway config | Isolated (can't read `~/.openclaw/`) |
 | Privilege escalation | Blocked (setuid bits stripped) |
-| Dev toolchain | Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, uv, pnpm, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
+| Dev toolchain | Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, uv, pnpm, bd, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
 
 **Network:** Bridge (outbound internet for web research/git push). MCP containers (Codex, Claude Code, Pi) use a separate `codex-proxy-net`. Sandbox containers can't reach the credential proxy.
 
@@ -689,87 +530,23 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 ## Remote Node Control (Mac)
 
-> **Disabled by default.** Node exec lets agents run arbitrary shell commands on your local machine with your user's full permissions — no sandbox. Enable with `node_exec_enabled: true` in `ansible/group_vars/all.yml` only after reading the security warnings there and in [docs/SECURITY.md](./docs/SECURITY.md) section 5.
+> **Disabled by default.** Node exec runs arbitrary shell commands on your Mac with full user permissions — no sandbox. Enable with `node_exec_enabled: true` in `group_vars/all.yml`. Read [docs/SECURITY.md](./docs/SECURITY.md) section 5 first.
 
-Agents can run shell commands on your Mac via the node host feature. This enables tmux-based workflows where a VPS agent controls a Claude Code session on your local machine.
+Architecture: VPS sandbox → `node-exec-mcp` (OPENCLAW_TOKEN auth, Tailscale Serve) → LaunchAgent on Mac. Each agent gets a scoped `mac_run` tool (`mac-<id>_run` for non-main agents).
 
-Agents access node exec via the `mac_run` MCP tool (provided by `node-exec-mcp`), not the built-in exec tool. Each agent gets its own scoped tool: `mac_run` (main), `mac-manon_run`, etc.
-
-```
-┌──────────────────────┐     ┌────────────────────────┐     ┌──────────────────────┐
-│  VPS Agent           │     │  MCP Adapter           │     │  Mac (Node Host)     │
-│  (sandbox)           │────▶│  node-exec-mcp (stdio) │────▶│  openclaw node run   │
-│                      │     │                        │     │  (LaunchAgent)       │
-│  calls mac_run tool  │     │  OPENCLAW_TOKEN auth   │     │  tmux, claude        │
-│  (cwd defaults /tmp) │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
-└──────────────────────┘     └────────────────────────┘     └──────────────────────┘
-```
-
-### Setup
-
-**1. Enable in config** (edit `ansible/group_vars/all.yml`):
-```yaml
-node_exec_enabled: true
-```
-
-**2. One-time Mac setup:**
-```bash
-./scripts/setup-mac-node.sh
-
-# Then approve pairing on the VPS:
-ssh ubuntu@openclaw-vps 'openclaw devices list'
-ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
-
-# Re-provision to install node-exec-mcp and auto-discover the node ID:
-./scripts/provision.sh --tags config,plugins
-```
-
-**What `setup-mac-node.sh` does:**
-1. Resolves gateway hostname from Tailscale
-2. Installs a persistent LaunchAgent (`ai.openclaw.node.plist`)
-3. Patches LaunchAgent to use stable Homebrew symlink (survives `brew upgrade`)
-4. Sets node-side exec approvals to auto-approve all commands (`defaults.security: full`)
-
-### Config
-
-Gateway-side (set by Ansible):
-```
-tools.exec.host: sandbox        # Built-in exec stays sandboxed (agents use mac_run MCP tool instead)
-tools.exec.security: full       # Tighten to "allowlist" after testing
-tools.exec.ask: off             # Tighten to "on-miss" after testing
-tools.exec.node: <auto>         # Auto-discovered during provisioning; used by node-exec-mcp
-```
-
-Node-side (set by `setup-mac-node.sh`):
-- `~/.openclaw/exec-approvals.json` — `defaults.security: full` (auto-approve all commands)
-
-**How auth works:** The `node-exec-mcp` server receives `OPENCLAW_TOKEN` (the gateway token) as an env var, which `openclaw nodes run` uses to authenticate with the gateway. Without this token, the connection fails with "pairing required".
-
-**Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
-
-### Operations
+**Key gotchas:**
+- Two approval layers: gateway (`tools.exec.security/ask`) AND node (`~/.openclaw/exec-approvals.json`, must have `defaults.security: full`) — both must allow the command
+- CWD defaults to `/tmp` — VPS workspace path doesn't exist on Mac; pass `workdir=/Users/<you>` explicitly
+- LaunchAgent plist patched to `/opt/homebrew/bin/openclaw` symlink (survives `brew upgrade`)
 
 ```bash
-# Check node status
-ssh ubuntu@openclaw-vps 'openclaw nodes status'
-
-# Test from VPS
-ssh ubuntu@openclaw-vps 'openclaw nodes run --cwd /tmp echo hello'
-
-# Manage Mac node host
-openclaw node status          # Check LaunchAgent
-openclaw node restart         # Restart after updates
-openclaw node stop            # Stop the service
-
-# Reset node ID pin (e.g., after re-pairing)
-ssh ubuntu@openclaw-vps 'openclaw config unset tools.exec.node'
-./scripts/provision.sh --tags config   # Re-discovers and pins
-
-# View node host logs
-tail -f ~/.openclaw/logs/node.log
+./scripts/setup-mac-node.sh                     # one-time Mac setup (installs LaunchAgent, sets approvals)
+./scripts/provision.sh --tags config,plugins    # install node-exec-mcp, pin node ID
+openclaw node status / restart / stop           # manage Mac LaunchAgent
+ssh ubuntu@openclaw-vps 'openclaw nodes status' # check from VPS side
 ```
 
-**Note:** The node host disconnects on gateway restarts but auto-reconnects (LaunchAgent handles restarts). If the node ID changes (re-pairing), re-run `./scripts/provision.sh --tags config` to update the pin.
+**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** first-time setup, debugging connection failures, resetting node ID after re-pairing, or changing exec approval settings.
 
 ## Semantic Search (qmd)
 

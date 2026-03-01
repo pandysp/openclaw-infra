@@ -23,7 +23,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - Tailscale MagicDNS and HTTPS enabled ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)) — required for Tailscale Serve
 - Claude setup token (run `claude setup-token`)
 
-See [CLAUDE.md](./CLAUDE.md#prerequisites) for detailed setup instructions.
+See [CLAUDE.md](./CLAUDE.md#first-time-setup) for detailed setup instructions.
 
 ### First-Time Tailscale Setup
 
@@ -124,7 +124,7 @@ OpenClaw requires **device pairing** for all connections — including the serve
 
 > No public SSH port is exposed. SSH works over Tailscale only.
 
-See [CLAUDE.md](./CLAUDE.md#first-time-access-device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
+See [CLAUDE.md](./CLAUDE.md#device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
 
 ## Architecture
 
