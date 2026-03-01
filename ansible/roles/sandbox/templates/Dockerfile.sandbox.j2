@@ -39,8 +39,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     # Process monitoring
     htop \
-    # Zombie reaping (PID 1 init — reaps orphaned child processes in sandbox)
-    tini \
     # Terminal multiplexer
     tmux \
     # Media processing
@@ -125,8 +123,3 @@ ENV GIT_TERMINAL_PROMPT=0
 # Stay as UID 1000 (not root). OpenClaw drops ALL capabilities via CapDrop=[ALL],
 # so root has no DAC_OVERRIDE and can't write to workspace files owned by UID 1000.
 # Running as UID 1000 directly matches the workspace file ownership.
-
-# tini as PID 1: reaps zombie processes that accumulate when child processes
-# (git, bd daemon, etc.) exit without being waited on. Without this, sandbox
-# containers hit the cgroup PID limit (~18690 zombies) in ~50 hours.
-ENTRYPOINT ["/usr/bin/tini", "--"]
