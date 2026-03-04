@@ -41,6 +41,8 @@ const telegramBotToken = config.getSecret("telegramBotToken");
 const discordBotToken = config.getSecret("discordBotToken");
 const xaiApiKey = config.getSecret("xaiApiKey");
 const groqApiKey = config.getSecret("groqApiKey");
+const obsidianAuthToken = config.getSecret("obsidianAuthToken");
+const obsidianVaultPassword = config.getSecret("obsidianVaultPassword");
 
 // Tailscale configuration
 const tailnetDnsName = config.get("tailnetDnsName") || "";
@@ -125,7 +127,7 @@ for (const id of agentIds) {
 // ============================================
 
 // 1. Create firewall (no inbound, all outbound)
-const firewall = createFirewall("openclaw-firewall");
+const firewall = createFirewall("openclaw-firewall", `${serverName}-firewall`);
 
 // 2. Generate cloud-init user-data (Tailscale-only bootstrap)
 const userData = generateUserData({
@@ -165,6 +167,8 @@ const provisionEnv: Record<string, pulumi.Input<string>> = {
     PROVISION_GROQ_API_KEY: groqApiKey || "",
     PROVISION_GITHUB_TOKEN: githubToken || "",
     PROVISION_OBSIDIAN_ANDY_VAULT_REPO_URL: obsidianAndyVaultRepoUrl || "",
+    PROVISION_OBSIDIAN_AUTH_TOKEN: obsidianAuthToken || "",
+    PROVISION_OBSIDIAN_VAULT_PASSWORD: obsidianVaultPassword || "",
     PROVISION_DISCORD_BOT_TOKEN: discordBotToken || "",
     PROVISION_DISCORD_GUILD_ID: discordGuildId || "",
     PROVISION_DISCORD_USER_ID: discordUserId || "",

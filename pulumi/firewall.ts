@@ -12,9 +12,9 @@ import * as hcloud from "@pulumi/hcloud";
  *   - Anthropic API calls
  *   - System updates
  */
-export function createFirewall(name: string): hcloud.Firewall {
-    return new hcloud.Firewall(name, {
-        name: name,
+export function createFirewall(logicalName: string, hetznerName?: string): hcloud.Firewall {
+    return new hcloud.Firewall(logicalName, {
+        name: hetznerName || logicalName,
         rules: [
             // Allow all outbound TCP (Docker, APIs, updates)
             {

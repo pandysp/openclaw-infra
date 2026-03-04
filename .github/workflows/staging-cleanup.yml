@@ -1,0 +1,74 @@
+# Staging Orphan Cleanup
+#
+# Safety net: deletes any openclaw-staging* servers and SSH keys
+# left behind by failed or interrupted staging runs.
+# Runs daily at 06:00 UTC and on manual trigger.
+#
+# Security: No untrusted inputs used in shell contexts.
+
+name: Staging Orphan Cleanup
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Install hcloud CLI
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/hetznercloud/cli/releases/latest | jq -r .tag_name)
+          curl -sL "https://github.com/hetznercloud/cli/releases/download/${VERSION}/hcloud-linux-amd64.tar.gz" -o hcloud.tar.gz
+          tar xzf hcloud.tar.gz
+          sudo mv hcloud /usr/local/bin/
+          rm hcloud.tar.gz
+
+      - name: Delete orphaned staging servers
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          SERVERS=$(hcloud server list -o noheader -o columns=id,name 2>/dev/null | grep "openclaw-staging" || true)
+          if [ -z "$SERVERS" ]; then
+            echo "No orphaned staging servers found."
+          else
+            echo "$SERVERS" | while read -r id name; do
+              echo "Deleting server: $name ($id)"
+              hcloud server delete "$id" || true
+            done
+          fi
+
+      - name: Delete orphaned staging SSH keys
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          KEYS=$(hcloud ssh-key list -o noheader -o columns=id,name 2>/dev/null | grep "openclaw-staging" || true)
+          if [ -z "$KEYS" ]; then
+            echo "No orphaned staging SSH keys found."
+          else
+            echo "$KEYS" | while read -r id name; do
+              echo "Deleting SSH key: $name ($id)"
+              hcloud ssh-key delete "$id" || true
+            done
+          fi
+
+      - name: Delete orphaned staging deploy keys
+        env:
+          GH_TOKEN: ${{ secrets.STAGING_GITHUB_TOKEN }}
+        run: |
+          for repo in pandysp/openclaw-staging-workspace pandysp/openclaw-staging-workspace-test; do
+            echo "Checking $repo..."
+            KEYS=$(gh api "repos/${repo}/keys" \
+              --jq '.[] | select(.title | startswith("staging-")) | "\(.id) \(.title)"' 2>/dev/null || true)
+            if [ -z "$KEYS" ]; then
+              echo "  No orphaned deploy keys."
+            else
+              echo "$KEYS" | while read -r id title; do
+                echo "  Removing deploy key: $title ($id)"
+                gh api -X DELETE "repos/${repo}/keys/${id}" || true
+              done
+            fi
+          done
