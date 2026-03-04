@@ -6,32 +6,9 @@
 
 OpenClaw is a self-hosted AI Agent gateway deployed on a Hetzner VPS with zero-trust networking via Tailscale. All access is through Tailscale—no public ports exposed.
 
-## Repository Layout (Public Template + Private Fork)
+## Repository
 
-This repo (`pandysp/openclaw-infra-private`) is the private deployment fork. The public template lives at `pandysp/openclaw-infra`.
-
-**Git remotes:**
-- `origin` → `pandysp/openclaw-infra-private` (private — your deployment)
-- `upstream` → `pandysp/openclaw-infra` (public — shared template)
-
-**Pushing changes:**
-- `git push` — pushes to private repo (default, safe for personal config)
-- `git push upstream main` — updates public template (only for generic improvements)
-
-**What goes where:**
-
-| Private only (`origin`) | Both repos (`upstream` too) |
-|---|---|
-| Personal Pulumi config values | Bug fixes in Ansible roles |
-| Custom cron prompt tweaks (`group_vars/all.yml`) | New features (e.g., sandbox improvements) |
-| Personal Telegram settings | Security model updates |
-| Tailnet-specific config | Documentation improvements |
-
-**Pulling template updates into private:**
-```bash
-git fetch upstream
-git merge upstream/main
-```
+This repo is `pandysp/openclaw-infra`. Personal deployment config (Pulumi secrets, `group_vars/openclaw.yml`) stays gitignored or in Pulumi encrypted state.
 
 ## Architecture
 
