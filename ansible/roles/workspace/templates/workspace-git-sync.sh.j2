@@ -3,8 +3,9 @@ set -euo pipefail
 cd {{ item.workspace_dir }}
 
 # Ensure branch is named 'main' regardless of how it was initialized
+# "HEAD" means orphan branch (no commits yet) — skip rename
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if [ "$CURRENT_BRANCH" != "main" ] && [ -n "$CURRENT_BRANCH" ]; then
+if [ "$CURRENT_BRANCH" != "main" ] && [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "HEAD" ]; then
     git branch -m "$CURRENT_BRANCH" main
 fi
 

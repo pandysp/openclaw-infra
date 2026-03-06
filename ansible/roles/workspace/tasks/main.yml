@@ -339,7 +339,7 @@
 
     # Rename branch to main if needed (handles git default of master)
     CURRENT=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [ "$CURRENT" != "main" ] && [ -n "$CURRENT" ]; then
+    if [ "$CURRENT" != "main" ] && [ -n "$CURRENT" ] && [ "$CURRENT" != "HEAD" ]; then
         git branch -m "$CURRENT" main
     fi
 
