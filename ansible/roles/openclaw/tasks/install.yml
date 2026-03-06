@@ -10,6 +10,8 @@
   register: openclaw_installed_version
   changed_when: false
   failed_when: false
+  environment:
+    PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
   when: openclaw_binary.stat.exists
 
 - name: Warn if existing openclaw binary is broken
@@ -53,12 +55,15 @@
       environment:
         OPENCLAW_NO_ONBOARD: "1"
         OPENCLAW_NO_PROMPT: "1"
+        PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
 
     - name: Verify openclaw binary works
       ansible.builtin.command: openclaw --version
       check_mode: false
       register: openclaw_post_install_version
       changed_when: false
+      environment:
+        PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
 
     - name: Confirm installed version matches target
       ansible.builtin.assert:
@@ -109,6 +114,8 @@
       register: openclaw_restored_version
       changed_when: false
       ignore_errors: true
+      environment:
+        PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
       when: openclaw_backup.stat.exists | default(false)
 
     - name: Report restore result
