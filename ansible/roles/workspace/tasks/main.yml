@@ -365,15 +365,15 @@
         fi
     fi
 
-    # Push (force-with-lease if reconciliation failed, normal otherwise)
+    # Push (best-effort: deploy keys may not be configured yet on first deploy)
     LOCAL=$(git rev-parse HEAD 2>/dev/null) || LOCAL=""
     REMOTE=$(git rev-parse origin/main 2>/dev/null) || REMOTE=""
     if [ "$LOCAL" != "$REMOTE" ]; then
         if [ "$RECONCILED" = "false" ]; then
             echo "WARNING: Conflict in {{ item.item.agent_id }}, force-pushing local state" >&2
-            git push -u --force-with-lease origin main
+            git push -u --force-with-lease origin main || echo "Push failed (deploy key may not be configured yet)"
         else
-            git push -u origin main
+            git push -u origin main || echo "Push failed (deploy key may not be configured yet)"
         fi
     else
         echo "Nothing to push"
