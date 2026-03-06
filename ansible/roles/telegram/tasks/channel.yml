@@ -42,13 +42,6 @@
     export XDG_RUNTIME_DIR=/run/user/1000
     CHANGED=""
 
-    # DM policy
-    CURRENT_DM=$(openclaw config get channels.telegram.dmPolicy 2>/dev/null) || CURRENT_DM=""
-    if [ "$CURRENT_DM" != "allowlist" ]; then
-        openclaw config set channels.telegram.dmPolicy "allowlist"
-        CHANGED="yes"
-    fi
-
     # Clear per-account config (bindings now use peer matching, not accountId,
     # so all messages go through the default account with the flat botToken).
     output=$(openclaw config unset channels.telegram.accounts 2>&1) || {
@@ -61,6 +54,8 @@
     }
 
     # Build DM allowFrom list from telegram agents with DM deliver_to
+    # NOTE: allowFrom MUST be set BEFORE dmPolicy="allowlist" — otherwise
+    # config validation rejects the empty allowFrom on fresh servers.
     {% set dm_allow = [] %}
     {% for agent in openclaw_agents %}
     {%   if (agent.deliver_channel | default('telegram')) == 'telegram' and agent.deliver_type == 'dm' and agent.deliver_to | default('') | length > 0 %}
@@ -77,6 +72,13 @@
         CHANGED="yes"
     fi
     {% endif %}
+
+    # DM policy (set after allowFrom to avoid validation error on fresh servers)
+    CURRENT_DM=$(openclaw config get channels.telegram.dmPolicy 2>/dev/null) || CURRENT_DM=""
+    if [ "$CURRENT_DM" != "allowlist" ]; then
+        openclaw config set channels.telegram.dmPolicy "allowlist"
+        CHANGED="yes"
+    fi
 
     # Configure group chats (iterate telegram group-type agents with a deliver_to)
     {% set group_agents = [] %}
