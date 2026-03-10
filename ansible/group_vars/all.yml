@@ -122,11 +122,21 @@ qmd_version: "1.1.6"
 # Base port for qmd HTTP daemons (one per agent, assigned by position in qmd_workspaces).
 # Port N+0 = first agent, N+1 = second, etc. Re-run --tags qmd,plugins if agents change.
 qmd_http_base_port: 8191
-# Additional qmd collections beyond the base 'workspace' collection (which always indexes
-# the entire workspace root). Use these for targeted search (-c <name>) on specific
-# subdirectories. Paths are relative to the workspace root. qmd silently skips missing paths.
-# Override in openclaw.yml with deployment-specific collections.
-qmd_extra_collections: []
+# qmd collections for search. Paths are relative to the workspace root.
+# qmd silently skips missing paths. Override in openclaw.yml for deployment-specific collections.
+qmd_collections:
+  - name: notes
+    path: "notes"
+    pattern: "**/*.{md,txt,csv}"
+  - name: logs
+    path: "logs"
+    pattern: "**/*.md"
+  - name: extracted-content
+    path: ".scripts/extract-cache"
+    pattern: "*.json"
+  - name: beads
+    path: ".beads/qmd-export"
+    pattern: "*.md"
 
 # Agent definitions — single-agent default for new deployments.
 # Override in openclaw.yml for multi-agent setups (see openclaw.yml.example).

@@ -1,8 +1,5 @@
 collections:
-  workspace:
-    path: {{ item.workspace_dir }}
-    pattern: "**/*.{md,txt,csv}"
-{% for col in qmd_extra_collections | default([]) %}
+{% for col in qmd_collections %}
   {{ col.name }}:
     path: {{ item.workspace_dir }}/{{ col.path }}
     pattern: "{{ col.pattern }}"

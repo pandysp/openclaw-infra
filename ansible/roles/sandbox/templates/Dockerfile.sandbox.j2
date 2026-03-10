@@ -61,6 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+ENV QMD_CONFIG_DIR=/workspace/.qmd INDEX_PATH=/workspace/.qmd/index.sqlite
 
 # --- Layer 2: uv + uvx (official Docker method — https://docs.astral.sh/uv/guides/integration/docker/) ---
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
