@@ -11,6 +11,9 @@
 # Enable remote Mac node exec (see docs/SECURITY.md §5 for risks)
 # node_exec_enabled: true
 
+# Allow sandboxed agents to control browser on the host (native browser tool with target="host")
+# openclaw_browser_allow_host_control: true
+
 # --- Heartbeat quiet hours (optional) ---
 # Suppress heartbeats outside a time window (uses openclaw_timezone).
 # Omit entirely to allow heartbeats 24/7.

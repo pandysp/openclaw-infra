@@ -25,9 +25,10 @@ fi
 git fetch origin main 2>/dev/null || true
 if git rev-parse --verify origin/main >/dev/null 2>&1; then
     if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
-        git merge --abort 2>/dev/null || true
-        echo "WARNING: Cannot merge, forcing local state for __AGENT_ID__" >&2
-        git push --force-with-lease origin main
+        echo "WARNING: Merge conflict for __AGENT_ID__, resolving with local-wins strategy" >&2
+        git checkout --ours .
+        git add -A
+        git commit --no-edit
     fi
 fi
 

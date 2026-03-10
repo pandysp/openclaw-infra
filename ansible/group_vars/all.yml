@@ -91,6 +91,7 @@ openclaw_sandbox_workspace_access: "rw"
 openclaw_sandbox_docker_network: "bridge"
 openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
+openclaw_browser_allow_host_control: false  # Allow sandboxed agents to use browser tool with target="host"
 
 # beads (bd) — AI-native issue tracker (https://github.com/steveyegge/beads)
 # Pinned to 0.55.4: last version with embedded Dolt (no external server). v0.56.0+ requires
