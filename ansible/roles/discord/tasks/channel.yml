@@ -52,19 +52,20 @@
             CHANGED="yes"
         fi
 
-        # Guild config: users array + requireMention
-        {% set guild_config = {} %}
+        # Guild config: set entire guilds object (nested guild ID keys not supported)
+        {% set guild_entry = {} %}
         {% if discord_user_id is defined and discord_user_id | length > 0 %}
-        {%   set guild_config = {"users": [discord_user_id], "requireMention": false} %}
+        {%   set guild_entry = {"users": [discord_user_id], "requireMention": false} %}
         {% else %}
-        {%   set guild_config = {"requireMention": false} %}
+        {%   set guild_entry = {"requireMention": false} %}
         {% endif %}
-        DESIRED_GUILD='{{ guild_config | to_json }}'
-        CURRENT_GUILD=$(openclaw config get channels.discord.guilds.{{ discord_guild_id }} 2>/dev/null) || CURRENT_GUILD="{}"
-        CG_NORM=$(echo "$CURRENT_GUILD" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
-        DG_NORM=$(echo "$DESIRED_GUILD" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        {% set guilds_obj = {discord_guild_id: guild_entry} %}
+        DESIRED_GUILDS='{{ guilds_obj | to_json }}'
+        CURRENT_GUILDS=$(openclaw config get channels.discord.guilds 2>/dev/null) || CURRENT_GUILDS="{}"
+        CG_NORM=$(echo "$CURRENT_GUILDS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        DG_NORM=$(echo "$DESIRED_GUILDS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
         if [ "$CG_NORM" = "PARSE_FAIL" ] || [ "$DG_NORM" = "PARSE_FAIL" ] || [ "$CG_NORM" != "$DG_NORM" ]; then
-            openclaw config set channels.discord.guilds.{{ discord_guild_id }} --json "$DESIRED_GUILD"
+            openclaw config set channels.discord.guilds --json "$DESIRED_GUILDS"
             CHANGED="yes"
         fi
         {% else %}

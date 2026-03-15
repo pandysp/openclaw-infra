@@ -16,14 +16,9 @@
         CHANGED="yes"
     fi
 
-    # DM policy: allowlist
-    CURRENT_DM=$(openclaw config get channels.whatsapp.dmPolicy 2>/dev/null) || CURRENT_DM=""
-    if [ "$CURRENT_DM" != "allowlist" ]; then
-        openclaw config set channels.whatsapp.dmPolicy "allowlist"
-        CHANGED="yes"
-    fi
-
     # Build DM allowFrom list from WhatsApp agents with DM deliver_to (string array, not int)
+    # NOTE: allowFrom must be set BEFORE dmPolicy=allowlist, otherwise validation rejects
+    # the intermediate state where dmPolicy=allowlist but allowFrom is empty.
     {% set wa_dm_allow = [] %}
     {% for agent in openclaw_agents %}
     {%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_type == 'dm' and agent.deliver_to | default('') | length > 0 %}
@@ -40,6 +35,13 @@
         CHANGED="yes"
     fi
     {% endif %}
+
+    # DM policy: allowlist (set after allowFrom to pass validation)
+    CURRENT_DM=$(openclaw config get channels.whatsapp.dmPolicy 2>/dev/null) || CURRENT_DM=""
+    if [ "$CURRENT_DM" != "allowlist" ]; then
+        openclaw config set channels.whatsapp.dmPolicy "allowlist"
+        CHANGED="yes"
+    fi
 
     # Configure group chats (iterate WhatsApp group-type agents)
     {% set wa_group_agents = [] %}
