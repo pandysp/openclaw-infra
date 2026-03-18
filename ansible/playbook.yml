@@ -1,13 +1,26 @@
 ---
+# Bootstrap play: pre-create remote tmp dirs so become tasks don't warn.
+# raw bypasses the module subsystem — no tmp dir needed to run it.
+- name: Bootstrap Ansible remote directories
+  hosts: openclaw
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: Wait for SSH connectivity
+      wait_for_connection:
+        timeout: 300
+        delay: 10
+
+    - name: Pre-create remote tmp directories
+      ansible.builtin.raw: mkdir -p /tmp/.ansible-root/tmp && chmod 0700 /tmp/.ansible-root/tmp
+      become: true
+      changed_when: false
+
 - name: Provision OpenClaw gateway
   hosts: openclaw
   gather_facts: true
 
   pre_tasks:
-    - name: Wait for SSH connectivity
-      wait_for_connection:
-        timeout: 300
-        delay: 10
 
     # --- Derived config: auto-generate from openclaw_agents × openclaw_mcp_server_types ---
     # These computed variables (_openclaw_*) replace the manual per-agent lists that were
