@@ -114,20 +114,31 @@
   when: _obsidian_vault_git.stat.exists
   no_log: true
 
+- name: "Check if remote has commits for {{ item.0.name }} ({{ item.1 }})"
+  ansible.builtin.command:
+    cmd: git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }} rev-parse --verify @{u}
+  register: _obsidian_has_upstream
+  failed_when: false
+  changed_when: false
+  when: _obsidian_vault_git.stat.exists
+
 - name: "Pull latest for {{ item.0.name }} ({{ item.1 }})"
   ansible.builtin.command:
     cmd: git -C {{ _obsidian_workspace_dir }}/obsidian/{{ item.0.name }} pull --ff-only
   register: _obsidian_pull
   failed_when: _obsidian_pull.rc > 1
   changed_when: "'Already up to date' not in _obsidian_pull.stdout"
+  when: _obsidian_vault_git.stat.exists and _obsidian_has_upstream.rc == 0
 
 - name: "Warn if pull not fast-forwardable for {{ item.0.name }} ({{ item.1 }})"
   ansible.builtin.debug:
     msg: >-
-      WARNING: git pull --ff-only failed for {{ item.0.name }} ({{ item.1 }}).
+      git pull --ff-only failed for {{ item.0.name }} ({{ item.1 }}).
       rc={{ _obsidian_pull.rc }}, stderr={{ _obsidian_pull.stderr | default('') }}.
       The vault may have diverged — manual merge may be needed.
-  when: _obsidian_pull.rc == 1
+  when:
+    - _obsidian_pull is not skipped
+    - _obsidian_pull.rc == 1
 
 - name: "Set git identity for {{ item.0.name }} ({{ item.1 }})"
   ansible.builtin.shell: |

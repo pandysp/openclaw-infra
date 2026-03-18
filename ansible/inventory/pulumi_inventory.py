@@ -83,8 +83,8 @@ def main():
 
         hostname = get_tailscale_hostname()
         if not hostname and not override:
-            print("Failed to resolve host: pulumi stack output failed and OPENCLAW_SSH_HOST is not set", file=sys.stderr)
-            sys.exit(1)
+            print(json.dumps({"_meta": {"hostvars": {}}}))
+            return
 
         if override:
             ansible_host = override

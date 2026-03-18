@@ -1,7 +1,7 @@
 {
   "name": "openclaw-infra",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "pulumi/index.ts",
   "directories": {
     "doc": "docs"
   },
