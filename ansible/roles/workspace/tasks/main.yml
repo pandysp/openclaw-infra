@@ -127,6 +127,41 @@
   loop_control:
     label: "{{ item.item.agent_id }}"
 
+- name: Restore workspace content from remote on fresh server
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ item.item.workspace_dir }}"
+
+    # Only restore if this is a fresh workspace (no commits yet).
+    # On day-2 runs, the workspace already has commits and local state should be preserved.
+    if git rev-parse HEAD >/dev/null 2>&1; then
+      echo "SKIP"
+      exit 0
+    fi
+
+    # Fetch from remote — if it fails, this is a brand-new repo with nothing to restore
+    if ! git fetch origin main 2>/dev/null; then
+      echo "SKIP"
+      exit 0
+    fi
+
+    # Remote has content — check it out to restore workspace files.
+    # This overwrites onboard's blank templates with the real content from GitHub.
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+      git checkout origin/main -- . 2>/dev/null || true
+      echo "RESTORED"
+    else
+      echo "SKIP"
+    fi
+  args:
+    executable: /bin/bash
+  register: workspace_restore
+  changed_when: "'RESTORED' in workspace_restore.stdout"
+  when: item.stat.exists and item.stat.isdir
+  loop: "{{ workspace_dirs.results }}"
+  loop_control:
+    label: "{{ item.item.agent_id }}"
+
 - name: Create workspace .gitignore files
   ansible.builtin.copy:
     src: gitignore-workspace
@@ -137,25 +172,6 @@
   loop_control:
     label: "{{ item.item.agent_id }}"
 
-- name: Migrate memory/ to logs/ (one-time rename)
-  ansible.builtin.shell: |
-    set -euo pipefail
-    SRC="{{ item.item.workspace_dir }}/memory"
-    DST="{{ item.item.workspace_dir }}/logs"
-    if [ -d "$SRC" ] && [ ! -d "$DST" ]; then
-      mv "$SRC" "$DST"
-      echo "MIGRATED"
-    else
-      echo "OK"
-    fi
-  args:
-    executable: /bin/bash
-  register: memory_migration
-  changed_when: "'MIGRATED' in memory_migration.stdout"
-  when: item.stat.exists and item.stat.isdir
-  loop: "{{ workspace_dirs.results }}"
-  loop_control:
-    label: "{{ item.item.agent_id }}"
 
 - name: Migrate beads workspace from SQLite to embedded Dolt backend
   ansible.builtin.shell: |
@@ -274,7 +290,7 @@
 
       **Always use RELATIVE paths for file operations:**
       - `SOUL.md` not `/workspace/SOUL.md`
-      - `logs/2026-02-11.md` not `/workspace/logs/2026-02-11.md`
+      - `memory/2026-02-11.md` not `/workspace/memory/2026-02-11.md`
       - `subdir/file.txt` not `/home/ubuntu/.openclaw/workspace/subdir/file.txt`
 
       Your working directory is already the workspace root. Relative paths work

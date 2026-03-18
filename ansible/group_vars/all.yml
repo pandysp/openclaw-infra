@@ -58,7 +58,7 @@ openclaw_compaction_reserve_tokens_floor: 50000   # was 24000; 50K gives compact
 openclaw_compaction_memory_flush: true
 openclaw_compaction_memory_flush_threshold: 20000  # was 8000; flush memories 20K tokens before compaction trigger
 openclaw_compaction_memory_flush_prompt: >-
-  Distill important context from this session to logs/YYYY-MM-DD.md (today's date).
+  Distill important context from this session to memory/YYYY-MM-DD.md (today's date).
   Focus on: decisions made, task progress, blockers, lessons learned.
   Skip routine exchanges. If nothing worth storing: NO_FLUSH
 openclaw_compaction_memory_flush_system_prompt: >-
