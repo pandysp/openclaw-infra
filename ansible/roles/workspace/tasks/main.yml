@@ -135,23 +135,23 @@
     # Only restore if this is a fresh workspace (no commits yet).
     # On day-2 runs, the workspace already has commits and local state should be preserved.
     if git rev-parse HEAD >/dev/null 2>&1; then
-      echo "SKIP"
-      exit 0
+        echo "SKIP"
+        exit 0
     fi
 
-    # Fetch from remote — if it fails, this is a brand-new repo with nothing to restore
+    # Fetch from remote. If it fails, this is a brand-new repo with nothing to restore.
     if ! git fetch origin main 2>/dev/null; then
-      echo "SKIP"
-      exit 0
+        echo "SKIP"
+        exit 0
     fi
 
-    # Remote has content — check it out to restore workspace files.
-    # This overwrites onboard's blank templates with the real content from GitHub.
+    # Remote has content: check it out to restore workspace files.
+    # This overwrites onboard blank templates with the real content from GitHub.
     if git rev-parse --verify origin/main >/dev/null 2>&1; then
-      git checkout origin/main -- . 2>/dev/null || true
-      echo "RESTORED"
+        git checkout origin/main -- . 2>/dev/null || true
+        echo "RESTORED"
     else
-      echo "SKIP"
+        echo "SKIP"
     fi
   args:
     executable: /bin/bash
