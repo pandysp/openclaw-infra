@@ -28,12 +28,17 @@
       register: openclaw_binary_version
       changed_when: false
 
+    - name: Extract binary semver
+      ansible.builtin.set_fact:
+        openclaw_binary_semver: >-
+          {{ openclaw_binary_version.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+') | default('') }}
+
     - name: Regenerate daemon service file if version drifted
       ansible.builtin.shell: |
         export XDG_RUNTIME_DIR=/run/user/1000
         openclaw daemon install --force
         systemctl --user daemon-reload
-        echo "REGENERATED: service={{ daemon_service_version.stdout | trim }} binary={{ openclaw_binary_version.stdout | trim }}"
+        echo "REGENERATED: service={{ daemon_service_version.stdout | trim }} binary={{ openclaw_binary_semver }}"
       args:
         executable: /bin/bash
       register: daemon_version_regen
@@ -41,4 +46,4 @@
       notify: restart openclaw-gateway
       when: >-
         daemon_service_version.stdout | trim == "" or
-        daemon_service_version.stdout | trim != openclaw_binary_version.stdout | trim
+        daemon_service_version.stdout | trim != openclaw_binary_semver
