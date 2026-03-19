@@ -201,21 +201,29 @@
         - name: Read pending pairing requests
           ansible.builtin.slurp:
             src: /home/ubuntu/.openclaw/devices/pending.json
-          register: pending_pairings
+          register: pending_pairings_raw
           failed_when: false
 
+        - name: Parse pending pairing requests
+          ansible.builtin.set_fact:
+            pending_devices: >-
+              {{ (pending_pairings_raw.content | default('e30=') | b64decode | from_json | default({})) | dict2items }}
+
         - name: Approve pending pairing requests
-          ansible.builtin.command: >
-            openclaw devices approve {{ item.value.requestId }}
-            --token {{ gateway_token }}
-            --url ws://127.0.0.1:18789
+          ansible.builtin.command:
+            argv:
+              - openclaw
+              - devices
+              - approve
+              - "{{ item.value.requestId }}"
+              - --token
+              - "{{ gateway_token }}"
+              - --url
+              - ws://127.0.0.1:18789
           environment:
             XDG_RUNTIME_DIR: "/run/user/1000"
             PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-          loop: >-
-            {{ (pending_pairings.content | default('' | b64encode) | b64decode | from_json | default({}) | dict2items) }}
+          loop: "{{ pending_devices }}"
           loop_control:
             label: "{{ item.value.displayName | default(item.value.deviceId[:16]) }}"
-          when:
-            - pending_pairings.content is defined
-            - (pending_pairings.content | b64decode | from_json | default({})) | length > 0
+          no_log: true

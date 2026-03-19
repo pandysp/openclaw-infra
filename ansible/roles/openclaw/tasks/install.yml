@@ -25,11 +25,16 @@
     - openclaw_binary.stat.exists
     - openclaw_installed_version.rc | default(0) != 0
 
+- name: Extract installed semver
+  ansible.builtin.set_fact:
+    openclaw_installed_semver: >-
+      {{ openclaw_installed_version.stdout | default('') | regex_search('[0-9]+\.[0-9]+\.[0-9]+') | default('') }}
+
 - name: Set version comparison facts
   ansible.builtin.set_fact:
     openclaw_needs_install: >-
       {{ not openclaw_binary.stat.exists
-         or openclaw_version not in (openclaw_installed_version.stdout | default('') | trim) }}
+         or openclaw_installed_semver != openclaw_version }}
 
 - name: Install or upgrade OpenClaw
   when: openclaw_needs_install | bool
@@ -68,7 +73,7 @@
     - name: Confirm installed version matches target
       ansible.builtin.assert:
         that:
-          - openclaw_version in (openclaw_post_install_version.stdout | trim)
+          - (openclaw_post_install_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') | default('')) == openclaw_version
         fail_msg: >-
           Version mismatch: installed '{{ openclaw_post_install_version.stdout | trim }}',
           expected '{{ openclaw_version }}'
