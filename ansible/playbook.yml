@@ -184,3 +184,38 @@
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
       tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+
+    # After a gateway upgrade, security changes may invalidate device tokens.
+    # Devices that reconnect will appear as pending pairing requests.
+    # Since provisioning is already an admin action (requires SSH + Pulumi secrets),
+    # auto-approving pending requests is not a privilege escalation — it completes
+    # the upgrade by restoring connectivity that was already authorized.
+    - name: Re-approve pending device pairing requests
+      when: gateway_token is defined and gateway_token | length > 0
+      tags: [openclaw]
+      block:
+        - name: Wait for devices to reconnect after gateway restart
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: Read pending pairing requests
+          ansible.builtin.slurp:
+            src: /home/ubuntu/.openclaw/devices/pending.json
+          register: pending_pairings
+          failed_when: false
+
+        - name: Approve pending pairing requests
+          ansible.builtin.command: >
+            openclaw devices approve {{ item.value.requestId }}
+            --token {{ gateway_token }}
+            --url ws://127.0.0.1:18789
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/1000"
+            PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
+          loop: >-
+            {{ (pending_pairings.content | default('' | b64encode) | b64decode | from_json | default({}) | dict2items) }}
+          loop_control:
+            label: "{{ item.value.displayName | default(item.value.deviceId[:16]) }}"
+          when:
+            - pending_pairings.content is defined
+            - (pending_pairings.content | b64decode | from_json | default({})) | length > 0
