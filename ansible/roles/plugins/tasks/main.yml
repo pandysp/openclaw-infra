@@ -1412,8 +1412,8 @@
     # node-exec: Mac shell access via openclaw nodes run (no Docker, no credentials)
     NODE_EXEC_BINARY="{{ (node_exec_mcp_binary.stdout | default('')) | trim }}"
     OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
-    NODE_ID=$(XDG_RUNTIME_DIR=/run/user/1000 openclaw config get tools.exec.node 2>/dev/null || echo "")
-    GW_TOKEN=$(XDG_RUNTIME_DIR=/run/user/1000 openclaw config get gateway.auth.token 2>/dev/null || echo "")
+    NODE_ID=$(jq -r '.tools.exec.node // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "")
+    GW_TOKEN=$(jq -r '.gateway.auth.token // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "")
     if [ -n "$NODE_ID" ] && [ -n "$OPENCLAW_BIN" ] && [ -x "$NODE_EXEC_BINARY" ]; then
     {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'node-exec') %}
         SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
@@ -1464,7 +1464,7 @@
         fi
 
         # Check enabled state
-        ENABLED=$(openclaw config get plugins.entries.openclaw-mcp-adapter.enabled 2>/dev/null) || ENABLED=""
+        ENABLED=$(jq -r '.plugins.entries["openclaw-mcp-adapter"].enabled // false' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || ENABLED=""
         if [ "$ENABLED" != "true" ]; then
             openclaw config set plugins.entries.openclaw-mcp-adapter.enabled true
             CHANGED="yes"
@@ -1482,10 +1482,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        ENABLED=$(openclaw config get plugins.entries.openclaw-mcp-adapter.enabled 2>/dev/null | tail -1) || {
-            echo "ERROR: Failed to read plugin enabled state after config set"
-            exit 1
-        }
+        ENABLED=$(jq -r '.plugins.entries["openclaw-mcp-adapter"].enabled // false' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null)
         if [ "$ENABLED" != "true" ]; then
             echo "ERROR: Plugin enabled state is '$ENABLED', expected 'true'"
             exit 1
@@ -1524,7 +1521,7 @@
 - name: Verify mcp-adapter plugin is loaded
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw plugins list --json 2>/dev/null | grep -v '^\[' | jq -e '.plugins[] | select(.id == "openclaw-mcp-adapter")'
+    openclaw plugins list --json 2>/dev/null | sed '/^\[mcp-adapter\]/d' | jq -e '.plugins[] | select(.id == "openclaw-mcp-adapter")'
   args:
     executable: /bin/bash
   changed_when: false
@@ -1571,8 +1568,7 @@
 
 - name: Get agent list for index resolution
   ansible.builtin.shell: |
-    export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw agents list --json
+    jq -c '.agents.list // []' /home/ubuntu/.openclaw/openclaw.json
   args:
     executable: /bin/bash
   register: agents_list_json
@@ -1595,14 +1591,7 @@
         echo "SKIP: Agent '{{ item.id }}' not found in agents list"
         exit 0
     fi
-    CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.tools.deny" 2>&1) || {
-        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
-            CURRENT="[]"
-        else
-            echo "ERROR reading tools.deny for {{ item.id }}: $CURRENT" >&2
-            exit 1
-        fi
-    }
+    CURRENT=$(jq -c ".agents.list[${AGENT_INDEX}].tools.deny // []" /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || CURRENT="[]"
     DESIRED='{{ deny_list | to_json }}'
     C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
@@ -1643,15 +1632,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    CONFIG=$(openclaw config get plugins.entries.openclaw-mcp-adapter.config 2>&1) || {
-        if echo "$CONFIG" | grep -qi "not set\|not found\|does not exist\|undefined"; then
-            CONFIG='{}'
-        else
-            echo "ERROR reading plugin config: $CONFIG" >&2
-            exit 1
-        fi
-    }
-    QMD_COUNT=$(echo "$CONFIG" | jq '[.servers[]? | select(.name | startswith("qmd"))] | length')
+    QMD_COUNT=$(jq '[.plugins.entries["openclaw-mcp-adapter"].config.servers[]? | select(.name | startswith("qmd"))] | length' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "0")
     echo "$QMD_COUNT"
   args:
     executable: /bin/bash
@@ -1661,12 +1642,8 @@
 - name: Check current memorySearch state
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    RESULT=$(openclaw config get agents.defaults.memorySearch.enabled 2>&1) || true
-    if echo "$RESULT" | grep -q "not found\|not set\|undefined"; then
-      echo "unset"
-    else
-      echo "$RESULT"
-    fi
+    RESULT=$(jq -r '.agents.defaults.memorySearch.enabled // "unset"' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "unset")
+    echo "$RESULT"
   args:
     executable: /bin/bash
   register: memory_search_state
