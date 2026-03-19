@@ -61,14 +61,23 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
-        if [ -z "$AGENT_INDEX" ]; then
-            echo "ERROR: Agent {{ item.id | quote }} not found in agents list after creation step" >&2
-            cat /tmp/ansible_agents_current.json >&2
-            exit 1
-        fi
+        IS_DEFAULT="{{ 'true' if item.is_default | default(false) else 'false' }}"
         DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if item.heartbeat_model is defined %},"model":"{{ item.heartbeat_model }}"{% endif %}}'
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
+
+        # Default agent heartbeat lives at agents.defaults.heartbeat (implicit, not in agents.list).
+        # Non-default agents use agents.list.N.heartbeat.
+        if [ "$IS_DEFAULT" = "true" ]; then
+            CONFIG_PATH="agents.defaults.heartbeat"
+        else
+            AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
+            if [ -z "$AGENT_INDEX" ]; then
+                echo "ERROR: Agent {{ item.id | quote }} not found in agents list after creation step" >&2
+                cat /tmp/ansible_agents_current.json >&2
+                exit 1
+            fi
+            CONFIG_PATH="agents.list.${AGENT_INDEX}.heartbeat"
+        fi
+        CURRENT=$(openclaw config get "$CONFIG_PATH" 2>&1) || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="{}"
             else
@@ -81,7 +90,7 @@
         if [ "$C_NORM" = "$D_NORM" ]; then
             echo "OK"
         else
-            openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
+            openclaw config set "$CONFIG_PATH" --json "$DESIRED"
             echo "UPDATED: {{ item.id }} heartbeat → {{ item.deliver_channel | default('telegram') }}:{{ item.deliver_to }}"
         fi
       args:
@@ -97,17 +106,26 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
-        if [ -z "$AGENT_INDEX" ]; then
-            echo "ERROR: Agent {{ item.id | quote }} not found in agents list" >&2
-            exit 1
-        fi
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.sandbox.mode" 2>/dev/null) || CURRENT=""
+        IS_DEFAULT="{{ 'true' if item.is_default | default(false) else 'false' }}"
         DESIRED="{{ item.sandbox_mode }}"
+
+        # Default agent uses agents.defaults.sandbox.mode (implicit, not in agents.list).
+        # Non-default agents use agents.list.N.sandbox.mode.
+        if [ "$IS_DEFAULT" = "true" ]; then
+            CONFIG_PATH="agents.defaults.sandbox.mode"
+        else
+            AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
+            if [ -z "$AGENT_INDEX" ]; then
+                echo "ERROR: Agent {{ item.id | quote }} not found in agents list" >&2
+                exit 1
+            fi
+            CONFIG_PATH="agents.list.${AGENT_INDEX}.sandbox.mode"
+        fi
+        CURRENT=$(openclaw config get "$CONFIG_PATH" 2>/dev/null) || CURRENT=""
         if [ "$CURRENT" = "$DESIRED" ]; then
             echo "OK"
         else
-            openclaw config set "agents.list.${AGENT_INDEX}.sandbox.mode" "$DESIRED"
+            openclaw config set "$CONFIG_PATH" "$DESIRED"
             echo "UPDATED: {{ item.id }} sandbox.mode → {{ item.sandbox_mode }}"
         fi
       args:

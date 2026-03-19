@@ -1404,6 +1404,7 @@
             --arg url "http://localhost:{{ ws.port }}/mcp" \
             '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 300000}]')
     {% endfor %}
+        :  # no-op when qmd_workspaces is empty (avoids bash syntax error)
     else
         echo "NOTE: qmd binary not found, skipping qmd MCP servers"
     fi

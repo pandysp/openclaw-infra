@@ -103,8 +103,11 @@ else
     done
 fi
 
-# Parse agent IDs into array (handles empty string → empty array)
-agent_ids=()
+# Parse agent IDs into array.
+# Initialize with a single empty-string element so that ${agent_ids[@]}
+# is never unbound under set -u (bash <4.4 treats empty arrays as unset).
+# All loop bodies already guard with [ -z "$id" ] && continue.
+agent_ids=("")
 if [ -n "$agent_ids_str" ]; then
     IFS=',' read -ra agent_ids <<< "$agent_ids_str"
 fi
