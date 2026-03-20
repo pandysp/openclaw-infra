@@ -23,7 +23,7 @@
         echo "$DESIRED_HASH" > "$HASH_DIR/telegram-bot-token"
         CHANGED="yes"
     fi
-    ENABLED=$(openclaw config get channels.telegram.enabled 2>/dev/null) || ENABLED=""
+    ENABLED=$(openclaw config get channels.telegram.enabled 2>/dev/null | sed '/^\[mcp-adapter\]/d') || ENABLED=""
     if [ "$ENABLED" != "true" ]; then
         openclaw config set channels.telegram.enabled true
         CHANGED="yes"
@@ -64,7 +64,7 @@
     {% endfor %}
     {% if dm_allow | length > 0 %}
     DESIRED_ALLOW='{{ dm_allow | to_json }}'
-    CURRENT_ALLOW=$(openclaw config get channels.telegram.allowFrom 2>/dev/null) || CURRENT_ALLOW="[]"
+    CURRENT_ALLOW=$(openclaw config get channels.telegram.allowFrom 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_ALLOW="[]"
     C_NORM=$(echo "$CURRENT_ALLOW" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED_ALLOW" | jq -cS '.')
     if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
@@ -74,7 +74,7 @@
     {% endif %}
 
     # DM policy (set after allowFrom to avoid validation error on fresh servers)
-    CURRENT_DM=$(openclaw config get channels.telegram.dmPolicy 2>/dev/null) || CURRENT_DM=""
+    CURRENT_DM=$(openclaw config get channels.telegram.dmPolicy 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_DM=""
     if [ "$CURRENT_DM" != "allowlist" ]; then
         openclaw config set channels.telegram.dmPolicy "allowlist"
         CHANGED="yes"
@@ -94,7 +94,7 @@
     {%     set _ = group_allow.append(agent.deliver_to | int) %}
     {%   endif %}
     {% endfor %}
-    CURRENT_GP=$(openclaw config get channels.telegram.groupPolicy 2>/dev/null) || CURRENT_GP=""
+    CURRENT_GP=$(openclaw config get channels.telegram.groupPolicy 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_GP=""
     if [ "$CURRENT_GP" != "allowlist" ]; then
         openclaw config set channels.telegram.groupPolicy "allowlist"
         CHANGED="yes"
@@ -104,7 +104,7 @@
     {%   set _ = groups_dict.update({ga.deliver_to: {"allowFrom": group_allow, "requireMention": false}}) %}
     {% endfor %}
     DESIRED_GROUPS='{{ groups_dict | to_json }}'
-    CURRENT_GROUPS=$(openclaw config get channels.telegram.groups 2>/dev/null) || CURRENT_GROUPS="{}"
+    CURRENT_GROUPS=$(openclaw config get channels.telegram.groups 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_GROUPS="{}"
     CG_NORM=$(echo "$CURRENT_GROUPS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     DG_NORM=$(echo "$DESIRED_GROUPS" | jq -cS '.')
     if [ "$CG_NORM" = "PARSE_FAIL" ] || [ "$CG_NORM" != "$DG_NORM" ]; then

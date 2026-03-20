@@ -52,7 +52,7 @@
         export XDG_RUNTIME_DIR=/run/user/1000
 
         # Read the gateway token from config
-        GW_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null) || {
+        GW_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null | sed '/^\[mcp-adapter\]/d') || {
             echo "SKIP: cannot read gateway token" >&2
             exit 1
         }

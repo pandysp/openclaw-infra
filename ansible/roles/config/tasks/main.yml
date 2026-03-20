@@ -56,7 +56,7 @@
         }
 
         # Auth: token mode
-        CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null) || CURRENT_MODE=""
+        CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_MODE=""
         if [ "$CURRENT_MODE" != "token" ]; then
             openclaw config set gateway.auth.mode token
             CHANGED="yes"
@@ -72,13 +72,13 @@
             echo "ERROR: xAI API key template was non-empty but runtime value is empty"
             exit 1
         fi
-        CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null) || CURRENT_PROVIDER=""
+        CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_PROVIDER=""
         if [ "$CURRENT_PROVIDER" != "grok" ]; then
             openclaw config set tools.web.search.provider grok
             CHANGED="yes"
         fi
         check_set_secret tools.web.search.grok.apiKey "$XAI_API_KEY" xai-api-key
-        CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null) || CURRENT_TIMEOUT=""
+        CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_TIMEOUT=""
         if [ "$CURRENT_TIMEOUT" != "60" ]; then
             openclaw config set tools.web.search.timeoutSeconds 60
             CHANGED="yes"
@@ -173,7 +173,7 @@
         check_set() {
             local key="$1" desired="$2"
             local current
-            current=$(openclaw config get "$key" 2>/dev/null) || current=""
+            current=$(openclaw config get "$key" 2>/dev/null | sed '/^\[mcp-adapter\]/d') || current=""
             if [ "$current" != "$desired" ]; then
                 openclaw config set "$key" "$desired"
                 CHANGED="yes"
@@ -184,7 +184,7 @@
         check_set_json() {
             local key="$1" desired="$2"
             local current c_norm d_norm
-            current=$(openclaw config get "$key" 2>/dev/null) || current=""
+            current=$(openclaw config get "$key" 2>/dev/null | sed '/^\[mcp-adapter\]/d') || current=""
             c_norm=$(echo "$current" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
             d_norm=$(echo "$desired" | jq -cS '.')
             if [ "$c_norm" = "PARSE_FAIL" ] || [ "$c_norm" != "$d_norm" ]; then
@@ -371,7 +371,7 @@
 
         # Step 3: Pin or warn — only set if different from current
         if [ -n "$NODE_ID" ]; then
-            CURRENT_NODE=$(openclaw config get tools.exec.node 2>/dev/null) || CURRENT_NODE=""
+            CURRENT_NODE=$(openclaw config get tools.exec.node 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT_NODE=""
             if [ "$CURRENT_NODE" = "$NODE_ID" ]; then
                 echo "Node pin already correct: ${NODE_ID:0:12}..."
             else

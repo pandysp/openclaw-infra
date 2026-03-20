@@ -27,7 +27,7 @@
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
         DESIRED=$(cat /tmp/ansible_bindings.json)
-        CURRENT=$(openclaw config get bindings 2>&1) || {
+        CURRENT=$(openclaw config get bindings 2>&1 | sed '/^\[mcp-adapter\]/d') || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="[]"
             else

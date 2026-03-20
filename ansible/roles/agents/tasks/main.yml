@@ -68,7 +68,7 @@
             exit 1
         fi
         DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if item.heartbeat_model is defined %},"model":"{{ item.heartbeat_model }}"{% endif %}}'
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1) || {
+        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1 | sed '/^\[mcp-adapter\]/d') || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="{}"
             else
@@ -76,9 +76,10 @@
                 exit 1
             fi
         }
-        C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+        # Compare only the fields we set — gateway may enrich with extra fields (e.g. model)
         D_NORM=$(echo "$DESIRED" | jq -cS '.')
-        if [ "$C_NORM" = "$D_NORM" ]; then
+        C_FILTERED=$(echo "$CURRENT" | jq -cS --argjson d "$DESIRED" 'with_entries(select(.key | IN($d | keys[])))' 2>/dev/null || echo "PARSE_FAIL")
+        if [ "$C_FILTERED" = "$D_NORM" ]; then
             echo "OK"
         else
             openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
@@ -102,7 +103,7 @@
             echo "ERROR: Agent {{ item.id | quote }} not found in agents list" >&2
             exit 1
         fi
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.sandbox.mode" 2>/dev/null) || CURRENT=""
+        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.sandbox.mode" 2>/dev/null | sed '/^\[mcp-adapter\]/d') || CURRENT=""
         DESIRED="{{ item.sandbox_mode }}"
         if [ "$CURRENT" = "$DESIRED" ]; then
             echo "OK"
