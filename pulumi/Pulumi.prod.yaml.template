@@ -40,6 +40,6 @@ config:
   # ── Hetzner server settings ───────────────────────────────────────
   # These have sensible defaults in index.ts; override here if needed.
   openclaw-infra:serverName: openclaw-vps        # Tailscale hostname
-  openclaw-infra:serverType: cx33                # x86, 4 vCPU, 8GB RAM (~€5.49/mo)
+  openclaw-infra:serverType: cx43                # x86, 8 vCPU, 16GB RAM (~€9.49/mo)
   openclaw-infra:serverLocation: fsn1            # fsn1=Falkenstein, nbg1=Nuremberg, hel1=Helsinki
   openclaw-infra:serverImage: ubuntu-24.04       # Hetzner OS image

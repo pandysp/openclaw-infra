@@ -229,14 +229,14 @@ After redeploy, old devices appear as `openclaw-vps-N` (offline) in your Tailsca
 
 ## Cost Breakdown
 
-Default server type is **CX33** (4 vCPU, 8 GB RAM). Upgrade to **CX43** (8 vCPU, 16 GB RAM) when qmd semantic search is enabled — `deep_search` loads ~2.1 GB of GGUF models and the reranker needs CPU headroom (~2 min per query across 8 vCPUs). Change with `pulumi config set serverType cx43`.
+Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `pulumi config set serverType <type>`.
 
-| Resource | CX33 (default) | CX43 (recommended for qmd) |
-|----------|---------------|---------------------------|
-| Hetzner VPS | ~€5.49/mo | ~€9.49/mo |
-| Hetzner Backups | ~€1.10/mo | ~€1.90/mo |
-| Tailscale | Free (personal) | Free (personal) |
-| **Total** | **~€6.59/mo** | **~€11.39/mo** |
+| Resource | Cost |
+|----------|------|
+| Hetzner VPS (CX43) | ~€9.49/mo |
+| Hetzner Backups | ~€1.90/mo |
+| Tailscale | Free (personal) |
+| **Total** | **~€11.39/mo** |
 
 ## Secrets Reference
 
@@ -548,7 +548,7 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u qmd
 ssh ubuntu@openclaw-vps 'openclaw config get plugins.entries.openclaw-mcp-adapter.config' | jq '.servers[] | select(.name | startswith("qmd"))'
 ```
 
-**RAM:** `deep_search` loads ~2.1GB GGUF models on-demand. CX43 (16 GB) recommended for multi-agent; CX33 (8 GB) works for single-agent. 2 GB swap configured.
+**RAM:** `deep_search` loads ~2.1GB GGUF models on-demand. CX43 (16 GB) handles multi-agent well. 2 GB swap configured.
 
 ## Troubleshooting
 

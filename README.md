@@ -6,7 +6,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 
 ## Features
 
-- **Cheap**: Hetzner CX33 x86 (4 vCPU, 8 GB) ~€5.49/mo + backups (or CX43 ~€11.39/mo for qmd semantic search)
+- **Cheap**: Hetzner CX43 x86 (8 vCPU, 16 GB) ~€9.49/mo + backups (~€11.39/mo total)
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
 - **Telegram**: Optional scheduled tasks (configurable cron jobs)

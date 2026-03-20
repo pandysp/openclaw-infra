@@ -50,7 +50,7 @@ const tailscaleTags = config.get("tailscaleTags"); // e.g., "tag:server"
 
 // Server configuration (with defaults)
 const serverName = config.get("serverName") || "openclaw-vps";
-const serverType = config.get("serverType") || "cx33"; // Default cx33 (4 vCPU, 8GB); use cx43 (8 vCPU, 16GB) for qmd
+const serverType = config.get("serverType") || "cx43"; // Default cx43 (8 vCPU, 16GB)
 const serverLocation = config.get("serverLocation") || "nbg1"; // Nuremberg (alternatives: fsn1=Falkenstein, hel1=Helsinki)
 const serverImage = config.get("serverImage") || "ubuntu-24.04";
 

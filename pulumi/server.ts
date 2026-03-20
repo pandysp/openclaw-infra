@@ -21,8 +21,7 @@ export interface ServerResult {
  * Creates a Hetzner Cloud server with secure SSH key authentication.
  *
  * Server specs (configurable via `pulumi config set serverType`):
- *   cx33 (default):  4 vCPU, 8 GB RAM,  80 GB NVMe, 20 TB traffic, ~€5.49/mo
- *   cx43 (recommended for qmd): 8 vCPU, 16 GB RAM, 160 GB NVMe, 20 TB traffic, ~€9.49/mo
+ *   cx43 (default): 8 vCPU, 16 GB RAM, 160 GB NVMe, 20 TB traffic, ~€9.49/mo
  *
  * Changing serverType triggers an in-place resize (brief power cycle, all data preserved).
  * Disk upgrades are one-way (can't downgrade to a smaller disk type).
