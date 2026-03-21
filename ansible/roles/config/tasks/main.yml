@@ -45,10 +45,14 @@
         # so we store the hash of what we SET and compare on next run)
         check_set_secret() {
             local key="$1" value="$2" hash_name="$3"
-            local desired_hash current_hash
+            local desired_hash current_hash key_exists
             desired_hash=$(echo -n "$value" | sha256sum | cut -d' ' -f1)
             current_hash=$(cat "$HASH_DIR/$hash_name" 2>/dev/null) || current_hash=""
-            if [ "$desired_hash" != "$current_hash" ]; then
+            # Guard: if the config key was wiped (e.g. by onboard), force re-set
+            # even if hash matches. config get on secrets returns redacted text,
+            # but returns non-zero / "not found" if the key is missing entirely.
+            key_exists=$(openclaw config get "$key" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || key_exists=""
+            if [ "$desired_hash" != "$current_hash" ] || [ -z "$key_exists" ]; then
                 openclaw config set "$key" "$value"
                 echo "$desired_hash" > "$HASH_DIR/$hash_name"
                 CHANGED="yes"
