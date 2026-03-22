@@ -66,3 +66,117 @@
 - name: Show beads status
   ansible.builtin.debug:
     msg: "Beads {{ beads_version }} ready (installed: {{ beads_installed_semver | default('fresh') }})"
+
+# --- Shared Dolt server (single process for all agent workspaces) ---
+# Replaces per-workspace Dolt processes that compete for file locks.
+# Containers connect via TCP through Docker bridge gateway.
+
+- name: Stop stale per-workspace Dolt servers
+  ansible.builtin.shell: |
+    set -euo pipefail
+    PIDS=$(pgrep -f 'dolt sql-server.*\.beads/dolt' -u "$(id -u)" 2>/dev/null || true)
+    if [ -z "$PIDS" ]; then
+      echo "OK"
+      exit 0
+    fi
+    echo "$PIDS" | xargs kill -TERM 2>/dev/null || true
+    sleep 5
+    REMAINING=$(pgrep -f 'dolt sql-server.*\.beads/dolt' -u "$(id -u)" 2>/dev/null || true)
+    if [ -n "$REMAINING" ]; then
+      echo "$REMAINING" | xargs kill -9 2>/dev/null || true
+    fi
+    # Clean up stale PID/lock/port files across all workspaces
+    find /home/ubuntu/.openclaw/workspace*/.beads/dolt/ \
+      -maxdepth 1 \( -name '*.pid' -o -name '*.lock' -o -name '*.port' \) \
+      -delete 2>/dev/null || true
+    echo "STOPPED"
+  args:
+    executable: /bin/bash
+  register: dolt_stop_stale
+  changed_when: "'STOPPED' in dolt_stop_stale.stdout"
+  when: beads_shared_server_enabled | default(false)
+
+- name: Create shared server data directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.beads/shared-server/dolt
+    state: directory
+    mode: "0755"
+  when: beads_shared_server_enabled | default(false)
+
+- name: Initialize shared Dolt data directory
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd /home/ubuntu/.beads/shared-server/dolt
+    if [ ! -d ".dolt" ]; then
+      dolt init
+      echo "INITIALIZED"
+    else
+      echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: dolt_init_shared
+  changed_when: "'INITIALIZED' in dolt_init_shared.stdout"
+  when: beads_shared_server_enabled | default(false)
+
+- name: Grant remote access for container connections
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd /home/ubuntu/.beads/shared-server/dolt
+    # Create wildcard user for TCP connections from Docker containers
+    dolt sql -q 'CREATE USER IF NOT EXISTS "root"@"%" IDENTIFIED BY ""'
+    dolt sql -q 'GRANT ALL PRIVILEGES ON *.* TO "root"@"%"'
+    echo "GRANTED"
+  args:
+    executable: /bin/bash
+  register: dolt_grant
+  changed_when: false
+  when: beads_shared_server_enabled | default(false)
+
+- name: Ensure systemd user directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user
+    state: directory
+    mode: "0755"
+  when: beads_shared_server_enabled | default(false)
+
+- name: Deploy shared Dolt server systemd service
+  ansible.builtin.template:
+    src: dolt-beads-shared.service.j2
+    dest: /home/ubuntu/.config/systemd/user/dolt-beads-shared.service
+    mode: "0644"
+  register: dolt_service_deployed
+  when: beads_shared_server_enabled | default(false)
+  notify:
+    - reload user systemd
+    - restart dolt-beads-shared
+
+- name: Enable and start shared Dolt server
+  ansible.builtin.systemd:
+    name: dolt-beads-shared
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+  register: dolt_service_started
+  when: beads_shared_server_enabled | default(false)
+
+- name: Verify shared Dolt server is listening
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for i in $(seq 1 15); do
+      if dolt sql -h {{ beads_docker_bridge_gateway_ip }} -P {{ beads_shared_server_port }} -u root -q 'SELECT 1' >/dev/null 2>&1; then
+        echo "READY"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "TIMEOUT"
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: >-
+    beads_shared_server_enabled | default(false) and
+    (dolt_service_deployed is changed or dolt_service_started is changed or dolt_init_shared is changed)

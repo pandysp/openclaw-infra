@@ -345,6 +345,14 @@
         check_set_json agents.defaults.sandbox.docker.readOnlyRoot '{{ openclaw_sandbox_read_only_root | to_json }}'
         check_set_json agents.defaults.sandbox.browser.allowHostControl '{{ openclaw_browser_allow_host_control | to_json }}'
 
+        {% if beads_shared_server_enabled | default(false) %}
+        # Beads shared Dolt server: containers connect to host-side dolt sql-server via TCP
+        check_set agents.defaults.sandbox.docker.env.BEADS_DOLT_SERVER_HOST "{{ beads_docker_bridge_gateway_ip }}"
+        check_set agents.defaults.sandbox.docker.env.BEADS_DOLT_SERVER_PORT "{{ beads_shared_server_port }}"
+        check_set agents.defaults.sandbox.docker.env.BEADS_DOLT_AUTO_START "0"
+        check_set agents.defaults.sandbox.docker.env.BEADS_DOLT_SHARED_SERVER "1"
+        {% endif %}
+
         # Voice transcription — enable audio (provider merged into models JSON above; cleanup in secrets task)
         {% if groq_api_key is defined and groq_api_key | length > 0 %}
         check_set tools.media.audio.enabled true

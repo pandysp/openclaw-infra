@@ -6,3 +6,18 @@
     scope: user
   environment:
     XDG_RUNTIME_DIR: "/run/user/1000"
+
+- name: reload user systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+
+- name: restart dolt-beads-shared
+  ansible.builtin.systemd:
+    name: dolt-beads-shared
+    state: restarted
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"

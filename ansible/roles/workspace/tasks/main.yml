@@ -173,6 +173,13 @@
     label: "{{ item.item.agent_id }}"
 
 
+- name: Set beads shared-server environment variables
+  ansible.builtin.set_fact:
+    _beads_shared_env:
+      BEADS_DOLT_SHARED_SERVER: "{{ '1' if beads_shared_server_enabled | default(false) else '' }}"
+      BEADS_DOLT_SERVER_HOST: "{{ beads_docker_bridge_gateway_ip | default('') }}"
+      BEADS_DOLT_SERVER_PORT: "{{ beads_shared_server_port | default('') | string }}"
+
 - name: Migrate beads workspace from SQLite to embedded Dolt backend
   ansible.builtin.shell: |
     set -euo pipefail
@@ -206,11 +213,19 @@
     mv "$BEADS_DIR" "$STASH"
 
     cd "{{ item.item.workspace_dir }}"
+    {% if beads_shared_server_enabled | default(false) %}
+    if [ -n "$OLD_PREFIX" ]; then
+      bd init --force --prefix "$OLD_PREFIX" -q
+    else
+      bd init --force --prefix "{{ item.item.agent_id }}" -q
+    fi
+    {% else %}
     if [ -n "$OLD_PREFIX" ]; then
       bd init --prefix "$OLD_PREFIX" -q
     else
       bd init -q
     fi
+    {% endif %}
     bd config set sync.branch beads-sync
 
     # Re-import existing issues if we had any.
@@ -227,6 +242,7 @@
     echo "MIGRATED"
   args:
     executable: /bin/bash
+  environment: "{{ _beads_shared_env }}"
   register: beads_migrate
   changed_when: "'MIGRATED' in beads_migrate.stdout"
   when: item.stat.exists and item.stat.isdir
@@ -238,19 +254,43 @@
   ansible.builtin.shell: |
     set -euo pipefail
     cd "{{ item.item.workspace_dir }}"
+    AGENT_ID="{{ item.item.agent_id }}"
+
     if [ ! -d ".beads" ]; then
+      {% if beads_shared_server_enabled | default(false) %}
+      bd init --force --prefix "$AGENT_ID" -q
+      {% else %}
       bd init -q
+      {% endif %}
       bd config set sync.branch beads-sync
       echo "INITIALIZED"
     else
+      {% if beads_shared_server_enabled | default(false) %}
+      # Migrate existing workspace to shared server if not already connected
+      CURRENT_SHARED=$(bd config get dolt.shared-server 2>/dev/null || echo "")
+      if [ "$CURRENT_SHARED" != "true" ]; then
+        bd init --force --prefix "$AGENT_ID" -q
+        bd config set dolt.shared-server true
+        echo "MIGRATED"
+      else
+        # Reinstall hooks to keep shims in sync with installed bd version
+        bd hooks install -q 2>/dev/null || true
+        echo "OK"
+      fi
+      # Clean up stale config from previous non-shared setup
+      bd config unset no-db 2>/dev/null || true
+      bd config unset dolt.auto-start 2>/dev/null || true
+      {% else %}
       # Reinstall hooks to keep shims in sync with installed bd version
       bd hooks install -q 2>/dev/null || true
       echo "OK"
+      {% endif %}
     fi
   args:
     executable: /bin/bash
+  environment: "{{ _beads_shared_env }}"
   register: beads_init
-  changed_when: "'INITIALIZED' in beads_init.stdout"
+  changed_when: "'INITIALIZED' in beads_init.stdout or 'MIGRATED' in beads_init.stdout"
   when: item.stat.exists and item.stat.isdir
   loop: "{{ workspace_dirs.results }}"
   loop_control:

@@ -53,7 +53,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        openclaw plugins install "{{ openclaw_mcp_adapter.npm_package }}"
+        openclaw plugins install --pin "{{ openclaw_mcp_adapter.npm_package }}"
       args:
         executable: /bin/bash
 

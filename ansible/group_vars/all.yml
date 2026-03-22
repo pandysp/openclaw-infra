@@ -95,8 +95,12 @@ openclaw_browser_allow_host_control: false  # Allow sandboxed agents to use brow
 
 # beads (bd) — AI-native issue tracker (https://github.com/steveyegge/beads)
 # v0.56.0+ removed embedded Dolt; requires `dolt` binary on PATH.
-# bd auto-starts a per-project Dolt server (PID in .beads/dolt-server.pid).
-beads_version: "0.61.0"
+# Shared-server mode (v0.60.0+): single host-side `dolt sql-server` via systemd,
+# containers connect via TCP through Docker bridge gateway. No per-workspace servers.
+beads_version: "0.62.0"
+beads_shared_server_enabled: true
+beads_shared_server_port: 3308
+beads_shared_server_memory_max: "2G"
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false

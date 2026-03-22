@@ -72,7 +72,7 @@ COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq
 # --- Layer 4: beads (bd) + dolt — AI-native issue tracker ---
 RUN curl -fsSL "https://github.com/steveyegge/beads/releases/download/v{{ beads_version }}/beads_{{ beads_version }}_linux_amd64.tar.gz" \
     | tar -xz -C /usr/local/bin bd
-# dolt required by beads v0.56.0+ (auto-starts per-project server)
+# dolt CLI required by beads; server runs on host (shared-server mode)
 RUN curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
 
 # --- Layer 5: pnpm via corepack (recommended — https://pnpm.io/installation) ---

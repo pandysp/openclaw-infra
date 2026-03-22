@@ -1,0 +1,16 @@
+[Unit]
+Description=Beads shared Dolt server (all agent workspaces)
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dolt sql-server -H {{ beads_docker_bridge_gateway_ip }} -P {{ beads_shared_server_port }}
+WorkingDirectory=%h/.beads/shared-server/dolt
+Restart=on-failure
+RestartSec=5
+MemoryMax={{ beads_shared_server_memory_max }}
+
+[Install]
+WantedBy=default.target

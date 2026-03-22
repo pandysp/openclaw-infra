@@ -101,6 +101,23 @@
         label: "{{ item.agent_id }}"
       tags: [always]
 
+    # Docker bridge gateway IP — needed by ufw (firewall rule), config (sandbox env vars),
+    # openclaw (shared Dolt server bind address), and workspace (beads init).
+    - name: Get Docker bridge gateway IP
+      ansible.builtin.shell: |
+        docker network inspect bridge --format '{{ '{{' }}(index .IPAM.Config 0).Gateway{{ '}}' }}'
+      args:
+        executable: /bin/bash
+      register: docker_bridge_result
+      changed_when: false
+      failed_when: docker_bridge_result.rc != 0 or docker_bridge_result.stdout | trim == ''
+      tags: [always]
+
+    - name: Set Docker bridge gateway IP fact
+      ansible.builtin.set_fact:
+        beads_docker_bridge_gateway_ip: "{{ docker_bridge_result.stdout | trim }}"
+      tags: [always]
+
     # Obsidian GitHub tokens: agent → PAT mapping for HTTPS clones
     - name: Use manually defined Obsidian GitHub tokens (override)
       ansible.builtin.set_fact:

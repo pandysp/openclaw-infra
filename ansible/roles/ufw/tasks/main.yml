@@ -20,6 +20,15 @@
     interface: tailscale0
     direction: in
 
+- name: Allow Docker containers to reach shared Dolt server
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    from_ip: "{{ beads_docker_bridge_gateway_ip | regex_replace('\\.[0-9]+$', '.0/16') }}"
+    to_port: "{{ beads_shared_server_port | string }}"
+    comment: "beads shared Dolt server"
+  when: beads_shared_server_enabled | default(false)
+
 - name: Enable UFW
   community.general.ufw:
     state: enabled

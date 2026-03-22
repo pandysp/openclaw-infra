@@ -512,6 +512,7 @@ Architecture: VPS sandbox → `node-exec-mcp` (OPENCLAW_TOKEN auth, Tailscale Se
 - Two approval layers: gateway (`tools.exec.security/ask`) AND node (`~/.openclaw/exec-approvals.json`, must have `defaults.security: full`) — both must allow the command
 - CWD defaults to `/tmp` — VPS workspace path doesn't exist on Mac; pass `workdir=/Users/<you>` explicitly
 - LaunchAgent plist patched to `/opt/homebrew/bin/openclaw` symlink (survives `brew upgrade`)
+- **Token wipe danger:** Running `openclaw onboard --mode remote` without `--remote-token` wipes `gateway.remote.token` to empty string, silently breaking the node host (it starts but cannot authenticate). `setup-mac-node.sh` guards against this by auto-restoring from Pulumi. If node appears offline: check `~/.openclaw/openclaw.json` → `gateway.remote.token` is non-empty
 
 ```bash
 ./scripts/setup-mac-node.sh                     # one-time Mac setup (installs LaunchAgent, sets approvals)
