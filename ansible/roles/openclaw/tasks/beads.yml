@@ -152,6 +152,9 @@
   register: dolt_service_started
   when: beads_shared_server_enabled | default(false)
 
+- name: Flush handlers to ensure server is in final state before granting access
+  ansible.builtin.meta: flush_handlers
+
 - name: Wait for shared Dolt server to accept connections
   ansible.builtin.shell: |
     set -euo pipefail
@@ -167,9 +170,7 @@
   args:
     executable: /bin/bash
   changed_when: false
-  when: >-
-    beads_shared_server_enabled | default(false) and
-    (dolt_service_deployed is changed or dolt_service_started is changed or dolt_init_shared is changed)
+  when: beads_shared_server_enabled | default(false)
 
 - name: Grant remote access for container connections
   ansible.builtin.shell: |

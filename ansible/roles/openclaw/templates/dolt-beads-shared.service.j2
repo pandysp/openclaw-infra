@@ -6,7 +6,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/dolt sql-server -H {{ beads_docker_bridge_gateway_ip }} -P {{ beads_shared_server_port }}
+ExecStart=/usr/local/bin/dolt sql-server -H {{ beads_docker_bridge_gateway_ip }} -P {{ beads_shared_server_port }} --privilege-file privilege_file.db
 WorkingDirectory=%h/.beads/shared-server/dolt
 Restart=on-failure
 RestartSec=5
