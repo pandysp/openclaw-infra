@@ -190,7 +190,9 @@ jobs:
 
       # ── Deploy ───────────────────────────────────────────────────
       - name: Deploy staging infrastructure
+        shell: bash
         run: |
+          set -o pipefail
           cd pulumi
           if pulumi up --yes --stack staging 2>&1 | tee /tmp/pulumi-up.log; then
             exit 0
