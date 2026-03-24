@@ -162,13 +162,15 @@
     # Global flags (--host/--port/--no-tls) must come BEFORE the sql subcommand.
     # dolt sql -h is --help, not --host.
     for i in $(seq 1 30); do
-      if dolt --host {{ beads_docker_bridge_gateway_ip }} --port {{ beads_shared_server_port }} --no-tls sql -q 'SELECT 1' 2>/dev/null; then
+      RESULT=$(dolt --host {{ beads_docker_bridge_gateway_ip }} --port {{ beads_shared_server_port }} --no-tls sql -q 'SELECT 1' 2>&1) && {
         echo "READY (attempt $i)"
         exit 0
-      fi
+      }
+      [ "$i" -le 3 ] || [ "$((i % 10))" -eq 0 ] && echo "attempt $i: $RESULT" >&2
       sleep 1
     done
-    echo "TIMEOUT"
+    echo "TIMEOUT. Last: $RESULT" >&2
+    XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status dolt-beads-shared --no-pager 2>&1 | head -6 >&2 || true
     exit 1
   args:
     executable: /bin/bash
