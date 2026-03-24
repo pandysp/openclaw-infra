@@ -510,7 +510,7 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 > **Disabled by default.** Node exec runs arbitrary shell commands on your Mac with full user permissions — no sandbox. Enable with `node_exec_enabled: true` in `group_vars/all.yml`. Read [docs/SECURITY.md](./docs/SECURITY.md) section 5 first.
 
-Architecture: VPS sandbox → `node-exec-mcp` (OPENCLAW_TOKEN auth, Tailscale Serve) → LaunchAgent on Mac. Each agent gets a scoped `mac_run` tool (`mac-<id>_run` for non-main agents).
+Architecture: VPS sandbox → `node-exec-mcp` (OPENCLAW_GATEWAY_TOKEN auth, Tailscale Serve) → LaunchAgent on Mac. Each agent gets a scoped `mac_run` tool (`mac-<id>_run` for non-main agents).
 
 **Key gotchas:**
 - Two approval layers: gateway (`tools.exec.security/ask`) AND node (`~/.openclaw/exec-approvals.json`, must have `defaults.security: full`) — both must allow the command

@@ -1364,7 +1364,7 @@
             --arg openclaw_bin "$OPENCLAW_BIN" \
             --arg gw_token "$GW_TOKEN" \
             --arg gw_url "$GW_URL" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000", OPENCLAW_TOKEN: $gw_token, CLAWDBOT_GATEWAY_URL: $gw_url, CLAWDBOT_GATEWAY_TOKEN: $gw_token, OPENCLAW_LOG_LEVEL: "error", DEFAULT_CWD: "/private/tmp"}}]')
+            '. + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000", OPENCLAW_GATEWAY_URL: $gw_url, OPENCLAW_GATEWAY_TOKEN: $gw_token, OPENCLAW_LOG_LEVEL: "error", DEFAULT_CWD: "/private/tmp"}}]')
     {% endfor %}
     else
         echo "NOTE: Skipping node-exec MCP servers (node_id='${NODE_ID}', binary='${NODE_EXEC_BINARY}')" >&2

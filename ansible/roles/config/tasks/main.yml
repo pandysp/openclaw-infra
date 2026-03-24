@@ -249,10 +249,8 @@
         # Plugin loading allowlist — only trusted plugins can load into gateway
         # Includes bundled plugins (device-pair, memory-core, etc.) because
         # plugins.allow blocks ALL plugins not listed, including bundled ones.
+        {# WhatsApp plugin removed in 2026.3.22 (built into core). Do not list in plugins.allow. #}
         {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram"] %}
-        {% if openclaw_agents | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
-        {%   set _ = plugin_allow.append("whatsapp") %}
-        {% endif %}
         {% if openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}

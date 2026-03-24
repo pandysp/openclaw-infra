@@ -9,10 +9,10 @@
     export XDG_RUNTIME_DIR=/run/user/1000
     CHANGED=""
 
-    # Enable WhatsApp plugin (uses plugins.entries path, NOT channels.whatsapp.enabled)
-    CURRENT_ENABLED=$(openclaw config get plugins.entries.whatsapp.enabled 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_ENABLED=""
-    if [ "$CURRENT_ENABLED" != "true" ]; then
-        openclaw config set plugins.entries.whatsapp.enabled true
+    {# WhatsApp is built into core since 2026.3.22 - no plugin to enable. #}
+    {# Clean up stale plugins.entries.whatsapp if left over from pre-2026.3.22. #}
+    if openclaw config get plugins.entries.whatsapp 2>/dev/null | grep -q .; then
+        openclaw config unset plugins.entries.whatsapp
         CHANGED="yes"
     fi
 

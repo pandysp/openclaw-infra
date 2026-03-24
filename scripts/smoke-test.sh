@@ -35,7 +35,7 @@ sleep 5
 # ── 2. Approve pending device ─────────────────────────────────────
 echo "2. Approving pending device..."
 DEVICES=$(ssh $SSH_OPTS "ubuntu@$STAGING_HOST" \
-  "$ENV_PREFIX OPENCLAW_TOKEN=$GATEWAY_TOKEN openclaw devices list" 2>&1) || true
+  "$ENV_PREFIX OPENCLAW_GATEWAY_TOKEN=$GATEWAY_TOKEN openclaw devices list" 2>&1) || true
 echo "$DEVICES" | sed 's/^/   /'
 
 # Extract pending request ID (first column of lines containing "pending")
@@ -44,7 +44,7 @@ REQUEST_ID=$(echo "$DEVICES" | grep -i "pending" | awk '{print $1}' | head -1 ||
 if [ -n "$REQUEST_ID" ] && [ "$REQUEST_ID" != "No" ]; then
   info "Approving request: $REQUEST_ID"
   ssh $SSH_OPTS "ubuntu@$STAGING_HOST" \
-    "$ENV_PREFIX OPENCLAW_TOKEN=$GATEWAY_TOKEN openclaw devices approve $REQUEST_ID" 2>&1 || {
+    "$ENV_PREFIX OPENCLAW_GATEWAY_TOKEN=$GATEWAY_TOKEN openclaw devices approve $REQUEST_ID" 2>&1 || {
     fail "Device approval failed (non-fatal)"
   }
   sleep 3

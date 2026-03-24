@@ -11,7 +11,7 @@ Agents access node exec via the `mac_run` MCP tool (provided by `node-exec-mcp`)
 │  VPS Agent           │     │  MCP Adapter           │     │  Mac (Node Host)     │
 │  (sandbox)           │────▶│  node-exec-mcp (stdio) │────▶│  openclaw node run   │
 │                      │     │                        │     │  (LaunchAgent)       │
-│  calls mac_run tool  │     │  OPENCLAW_TOKEN auth   │     │  tmux, claude        │
+│  calls mac_run tool  │     │  OPENCLAW_GATEWAY_TOKEN│     │  tmux, claude        │
 │  (cwd defaults /tmp) │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
 └──────────────────────┘     └────────────────────────┘     └──────────────────────┘
 ```
@@ -54,7 +54,7 @@ tools.exec.node: <auto>         # Auto-discovered during provisioning; used by n
 Node-side (set by `setup-mac-node.sh`):
 - `~/.openclaw/exec-approvals.json` — `defaults.security: full` (auto-approve all commands)
 
-**How auth works:** The `node-exec-mcp` server receives `OPENCLAW_TOKEN` (the gateway token) as an env var, which `openclaw nodes run` uses to authenticate with the gateway. Without this token, the connection fails with "pairing required".
+**How auth works:** The `node-exec-mcp` server receives `OPENCLAW_GATEWAY_TOKEN` (the gateway token) as an env var, which `openclaw nodes run` uses to authenticate with the gateway. Without this token, the connection fails with "pairing required".
 
 **Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
 
