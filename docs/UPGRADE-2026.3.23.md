@@ -1,6 +1,21 @@
 # OpenClaw 2026.3.13 → 2026.3.23 Upgrade Spec
 
-> Research completed 2026-03-23. All items from the 200+ commit changelog investigated.
+> Research completed 2026-03-23. Upgrade deployed 2026-03-24. All items from the 200+ commit changelog investigated.
+> Final version: 2026.3.23 (hotfix release, supersedes 2026.3.22).
+
+## Issues Discovered During Implementation
+
+These were NOT caught by pre-upgrade research:
+
+1. **WhatsApp plugin removed from core** — `plugins.allow` listing `"whatsapp"` caused fatal config validation error on 2026.3.22. All CLI commands blocked. Fixed by removing from allowlist + cleaning stale `plugins.entries.whatsapp`. The 2026.3.23 hotfix makes this a warning instead of fatal.
+
+2. **Jinja2 comment syntax** — shell comments with em dashes (`—`) inside Ansible shell blocks break Jinja2 template parsing. Must use `{# ... #}` Jinja2 comments instead.
+
+3. **`truncateAfterCompaction` config key doesn't exist** — research agent reported `agents.defaults.compaction.truncateAfterCompaction` as a valid config path, but 2026.3.23 rejects it as "Unrecognized key." Feature may ship in a later version.
+
+4. **`heartbeat.directPolicy` warning** — new 2026.3.23 config that warns if not explicitly set. Pinned to `"allow"` to preserve existing behavior.
+
+5. **Bumped to 2026.3.23** — originally targeted 2026.3.22, but 2026.3.23 hotfix released same day with fixes for issues 1 and 4 above.
 
 ## Implementation Strategy
 
@@ -213,7 +228,7 @@ Additional items from the 200+ commit sweep. All assessed as no-impact for our s
 
 | Feature | Config Path | Notes |
 |---------|------------|-------|
-| Post-compaction JSONL truncation | `agents.defaults.compaction.truncateAfterCompaction: true` | Reduces session files 80-95%. Safe with memoryFlush. No archive option. |
+| Post-compaction JSONL truncation | `agents.defaults.compaction.truncateAfterCompaction: true` | **Config key does not exist in 2026.3.23** — deferred until upstream ships it. Research agent gave incorrect path. |
 | Per-agent reasoning | `agents.list.<i>.thinkingDefault` | Values: off/minimal/low/medium/high/xhigh/adaptive. Index-based — verify agent order first. |
 | Telegram silent errors | `channels.telegram.silentErrorReplies: true` | Suppresses error notification sounds |
 | Health monitor tuning | See full config paths below | Tune stale-event thresholds, per-channel overrides |
