@@ -158,14 +158,19 @@
 - name: Wait for shared Dolt server to accept connections
   ansible.builtin.shell: |
     set -euo pipefail
+    LAST_ERR=""
     for i in $(seq 1 30); do
-      if dolt --host {{ beads_docker_bridge_gateway_ip }} --port {{ beads_shared_server_port }} --no-tls sql -q 'SELECT 1' >/dev/null 2>&1; then
-        echo "READY"
+      if dolt --host {{ beads_docker_bridge_gateway_ip }} --port {{ beads_shared_server_port }} --no-tls sql -q 'SELECT 1' 2>/dev/null; then
+        echo "READY (attempt $i)"
         exit 0
       fi
+      LAST_ERR=$(dolt --host {{ beads_docker_bridge_gateway_ip }} --port {{ beads_shared_server_port }} --no-tls sql -q 'SELECT 1' 2>&1 || true)
       sleep 1
     done
-    echo "TIMEOUT"
+    echo "TIMEOUT after 30 attempts. Last error: $LAST_ERR"
+    # Show server status for diagnosis
+    XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status dolt-beads-shared --no-pager 2>&1 || true
+    XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u dolt-beads-shared --since "2 minutes ago" --no-pager 2>&1 | tail -20 || true
     exit 1
   args:
     executable: /bin/bash
