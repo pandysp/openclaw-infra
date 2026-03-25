@@ -124,7 +124,7 @@
     # See: https://github.com/openclaw/openclaw/issues/48167
     - name: Resolve Tailscale WSS URL for CLI commands
       ansible.builtin.shell: |
-        FQDN=$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//')
+        FQDN=$(tailscale status --self --json 2>/dev/null | grep -o '"DNSName": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//; s/\.$//')
         if [ -n "$FQDN" ] && [ "$FQDN" != "null" ]; then
           echo "wss://$FQDN"
         fi
