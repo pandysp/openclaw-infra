@@ -42,6 +42,11 @@
   failed_when: false
   no_log: true
 
+- name: Debug gateway health result
+  ansible.builtin.debug:
+    msg: "Gateway health rc={{ gateway_health.rc }} stdout={{ gateway_health.stdout_lines | default([]) | last | default('(empty)') }}"
+  when: gateway_health.rc != 0
+
 - name: Auto-pair VPS CLI if gateway health check failed
   when: gateway_health.rc != 0
   block:
@@ -94,6 +99,10 @@
       register: auto_pair_result
       changed_when: "'PAIRED' in auto_pair_result.stdout"
       failed_when: false
+
+    - name: Debug auto-pair result
+      ansible.builtin.debug:
+        msg: "Auto-pair rc={{ auto_pair_result.rc }} stdout={{ auto_pair_result.stdout_lines | default([]) }} stderr={{ auto_pair_result.stderr_lines | default([]) }}"
 
     - name: Re-check gateway health after pairing
       ansible.builtin.shell: |
