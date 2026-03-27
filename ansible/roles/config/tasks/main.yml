@@ -70,18 +70,13 @@
         check_set_secret gateway.auth.token "$GATEWAY_TOKEN" gateway-auth-token
         check_set_secret gateway.remote.token "$GATEWAY_TOKEN" gateway-remote-token
 
-        # Web search (Grok / xAI)
+        # Web search (Grok / xAI) — grok.apiKey set in playbook post_tasks (openclaw#6070)
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
-        if [ -z "$XAI_API_KEY" ]; then
-            echo "ERROR: xAI API key template was non-empty but runtime value is empty"
-            exit 1
-        fi
         CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_PROVIDER=""
         if [ "$CURRENT_PROVIDER" != "grok" ]; then
             openclaw config set tools.web.search.provider grok
             CHANGED="yes"
         fi
-        check_set_secret tools.web.search.grok.apiKey "$XAI_API_KEY" xai-api-key
         CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_TIMEOUT=""
         if [ "$CURRENT_TIMEOUT" != "60" ]; then
             openclaw config set tools.web.search.timeoutSeconds 60

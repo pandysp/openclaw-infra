@@ -202,6 +202,93 @@
       when: _openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list | length > 0
 
   post_tasks:
+    # Workaround for openclaw/openclaw#6070: `openclaw config set` strips nested
+    # sensitive-only objects (e.g., tools.web.search.grok, channels.discord.token)
+    # on subsequent writes. Inject these keys directly into the JSON file AFTER all
+    # roles have finished their `openclaw config set` calls, so nothing can strip them.
+    # Runs before handlers (which restart the gateway).
+    - name: Write sensitive keys to temp file for JSON injection
+      ansible.builtin.copy:
+        content: "{{ _sensitive_keys | to_json }}"
+        dest: /tmp/ansible-sensitive-keys.json
+        mode: "0600"
+      vars:
+        _sensitive_keys:
+          - path: ["tools", "web", "search", "grok", "apiKey"]
+            value: "{{ xai_api_key | default('') }}"
+            hash_name: "xai-api-key"
+          - path: ["channels", "discord", "token"]
+            value: "{{ discord_bot_token | default('') }}"
+            hash_name: "discord-bot-token"
+      no_log: true
+      changed_when: false
+      tags: [config, discord]
+
+    - name: Inject sensitive nested keys into config JSON (openclaw#6070 workaround)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 << 'PYEOF'
+        import json, hashlib, os
+
+        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+        hash_dir = os.path.expanduser("~/.openclaw/.ansible-hashes")
+        keys_path = "/tmp/ansible-sensitive-keys.json"
+        os.makedirs(hash_dir, exist_ok=True)
+
+        d = json.load(open(config_path))
+        keys = json.load(open(keys_path))
+        changed = []
+
+        for entry in keys:
+            value = entry["value"]
+            if not value:
+                continue
+            path_parts = entry["path"]
+            hash_name = entry["hash_name"]
+
+            obj = d
+            for part in path_parts[:-1]:
+                obj = obj.setdefault(part, {})
+            leaf = path_parts[-1]
+
+            desired_hash = hashlib.sha256(value.encode()).hexdigest()
+            hash_path = os.path.join(hash_dir, hash_name)
+            try:
+                current_hash = open(hash_path).read().strip()
+            except FileNotFoundError:
+                current_hash = ""
+
+            if obj.get(leaf, "") == value and desired_hash == current_hash:
+                continue
+
+            obj[leaf] = value
+            with open(hash_path, "w") as f:
+                f.write(desired_hash + "\n")
+            changed.append(".".join(path_parts))
+
+        if changed:
+            with open(config_path, "w") as f:
+                json.dump(d, f, indent=2)
+                f.write("\n")
+            print("INJECTED: " + ", ".join(changed))
+        else:
+            print("OK")
+        PYEOF
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: sensitive_inject
+      changed_when: "'INJECTED' in sensitive_inject.stdout"
+      notify: restart openclaw-gateway
+      tags: [config, discord]
+
+    - name: Clean up sensitive keys temp file
+      ansible.builtin.file:
+        path: /tmp/ansible-sensitive-keys.json
+        state: absent
+      changed_when: false
+      tags: [config, discord]
+
     - name: Ensure openclaw-gateway is started and enabled
       ansible.builtin.systemd:
         name: openclaw-gateway
