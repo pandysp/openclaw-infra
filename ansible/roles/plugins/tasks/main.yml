@@ -1170,6 +1170,15 @@
   changed_when: false
   when: claude_setup_token | default('') | length > 0
 
+- name: Write gog keyring password to temp file
+  ansible.builtin.copy:
+    content: "{{ gog_keyring_password }}"
+    dest: "/tmp/ansible-mcp-gog-keyring-pw"
+    mode: "0600"
+  no_log: true
+  changed_when: false
+  when: gog_keyring_password | default('') | length > 0
+
 - name: Build and write plugin config JSON
   ansible.builtin.shell: |
     set -euo pipefail
@@ -1332,6 +1341,52 @@
     {% endfor %}
     fi
 
+    # gog (Google Workspace) servers — containerized with docker run -i
+    # Security: containers have credentials bind-mounted read-only from host.
+    # GOG_ENABLE_COMMANDS blocks auth manipulation. Container on codex-proxy-net
+    # is unreachable from sandbox containers on the default bridge.
+    GOG_IMAGE="{{ gog_mcp_docker_image }}"
+    GOG_MEM="{{ gog_mcp_memory_limit | default('512m') }}"
+    GOG_CONFIG_DIR="/home/ubuntu/.config/gogcli"
+    {% if gog_account | default('') | length > 0 %}
+    if [ -d "$GOG_CONFIG_DIR" ]; then
+    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'gog') %}
+        GOG_KEYRING_PW=""
+        if [ -f /tmp/ansible-mcp-gog-keyring-pw ]; then
+            GOG_KEYRING_PW=$(cat /tmp/ansible-mcp-gog-keyring-pw)
+        fi
+        DOCKER_ARGS=$(jq -n \
+            --arg img "$GOG_IMAGE" \
+            --arg agent "{{ srv.agent_id }}" \
+            --arg mem "$GOG_MEM" \
+            --arg config_dir "$GOG_CONFIG_DIR" \
+            --arg account "{{ gog_account }}" \
+            --arg keyring_pw "$GOG_KEYRING_PW" \
+            --arg enable_cmds "{{ gog_enable_commands }}" \
+            '["run","--rm","-i","--init","--network=codex-proxy-net",
+              "--cap-drop","ALL",
+              "--security-opt","no-new-privileges",
+              "--read-only",
+              "--tmpfs","/tmp:size=64m",
+              "--tmpfs","/home/node:size=64m,uid=1000,gid=1000",
+              "--pids-limit","50",
+              "--cpus","1",
+              ("--memory=" + $mem),("--memory-swap=" + $mem),
+              "--label","openclaw-role=gog-mcp",
+              "--label",("openclaw-agent=" + $agent),
+              "--mount",("type=bind,source=" + $config_dir + ",target=/home/node/.config/gogcli,readonly"),
+              "-e",("GOG_ACCOUNT=" + $account),
+              "-e","GOG_KEYRING_BACKEND=file",
+              "-e",("GOG_KEYRING_PASSWORD=" + $keyring_pw),
+              "-e",("GOG_ENABLE_COMMANDS=" + $enable_cmds),
+              "-e","GOG_NO_INPUT=1",
+              $img]')
+        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
+    {% endfor %}
+    fi
+    {% endif %}
+
     {% if qmd_workspaces | length > 0 %}
     # qmd servers — HTTP daemon mode (decoupled from gateway lifecycle)
     # Port assignment positional over qmd_workspaces list, must match qmd role.
@@ -1469,6 +1524,12 @@
     - name: Clean up Claude setup token temp file
       ansible.builtin.file:
         path: /tmp/ansible-mcp-claude-setup-token
+        state: absent
+      changed_when: false
+
+    - name: Clean up gog keyring password temp file
+      ansible.builtin.file:
+        path: /tmp/ansible-mcp-gog-keyring-pw
         state: absent
       changed_when: false
 

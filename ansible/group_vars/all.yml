@@ -115,6 +115,17 @@ beads_shared_server_enabled: true
 beads_shared_server_port: 3308
 beads_shared_server_memory_max: "2G"
 
+# gogcli (Google Workspace CLI — Gmail, Calendar, Drive, etc.)
+# Containerized MCP server on codex-proxy-net for credential isolation.
+# Set via: pulumi config set gogAccount "you@gmail.com"
+#          pulumi config set gogKeyringPassword --secret
+#          pulumi config set gogClientSecret --secret  (OAuth client_secret.json content)
+gogcli_version: "0.12.0"
+gog_mcp_docker_image: "gog-mcp:latest"
+gog_mcp_memory_limit: "512m"
+# Allowlist of gog top-level commands (blocks 'auth' manipulation via MCP tool)
+gog_enable_commands: "gmail,calendar,drive,contacts,sheets,docs,slides,forms,tasks,chat,people,classroom,groups,keep,time"
+
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
 
@@ -126,6 +137,9 @@ force_claude_code_rebuild: false
 
 # Force Pi MCP Docker image rebuild (override with -e force_pi_mcp_rebuild=true)
 force_pi_mcp_rebuild: false
+
+# Force gog MCP Docker image rebuild (override with -e force_gog_mcp_rebuild=true)
+force_gog_mcp_rebuild: false
 
 # Force plugin reinstall (override with -e force_plugin_reinstall=true)
 force_plugin_reinstall: false
@@ -231,6 +245,8 @@ openclaw_mcp_server_types:
     name_prefix: "qmd"
   - type: "node-exec"
     name_prefix: "mac"
+  - type: "gog"
+    name_prefix: "gog"
 
 # Claude Code plugins for MCP containers
 claude_code_plugins:

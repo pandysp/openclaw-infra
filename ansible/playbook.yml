@@ -170,7 +170,11 @@
       when: obsidian_headless_enabled | default(false) | bool
     # qmd after obsidian-headless — needs workspace dirs from agents role, before plugins registers MCP servers.
     - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
-    # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
+    # gog after qmd — builds gog-mcp Docker image; plugins role registers the MCP server.
+    - role: gog
+      tags: [gog]
+      when: gog_account is defined and gog_account | length > 0
+    # plugins after gog — qmd/gog binaries must exist for MCP server registration + deny rules need agents.
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
     - role: workspace
@@ -273,19 +277,19 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, gog, whatsapp, discord]
 
     - name: Wait for gateway to stabilize
       ansible.builtin.pause:
         seconds: 5
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, gog, whatsapp, discord]
 
     - name: Verify gateway is active
       ansible.builtin.command: systemctl --user is-active openclaw-gateway
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
       changed_when: false
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, gog, whatsapp, discord]
 
     # After a gateway upgrade, security changes may invalidate device tokens.
     # Devices that reconnect will appear as pending pairing requests.

@@ -70,6 +70,9 @@ else
     export PROVISION_DISCORD_BOT_TOKEN=$(pulumi config get discordBotToken 2>/dev/null || echo "")
     export PROVISION_DISCORD_GUILD_ID=$(pulumi config get discordGuildId 2>/dev/null || echo "")
     export PROVISION_DISCORD_USER_ID=$(pulumi config get discordUserId 2>/dev/null || echo "")
+    export PROVISION_GOG_ACCOUNT=$(pulumi config get gogAccount 2>/dev/null || echo "")
+    export PROVISION_GOG_KEYRING_PASSWORD=$(pulumi config get gogKeyringPassword 2>/dev/null || echo "")
+    export PROVISION_GOG_CLIENT_SECRET=$(pulumi config get gogClientSecret 2>/dev/null || echo "")
 
     # Read deploy keys: try structured export first, fall back to individual exports
     # (individual exports exist until first `pulumi up` after migration)
@@ -161,6 +164,7 @@ echo "  grok_search: $([ -n "$(read_env PROVISION_XAI_API_KEY)" ] && echo "confi
 echo "  groq_voice: $([ -n "$(read_env PROVISION_GROQ_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  gemini_image: $([ -n "$(read_env PROVISION_GEMINI_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  github_mcp (main): $([ -n "$(read_env PROVISION_GITHUB_TOKEN)" ] && echo "configured" || echo "skipped")"
+echo "  gog_gmail: $([ -n "$(read_env PROVISION_GOG_ACCOUNT)" ] && echo "configured" || echo "skipped")"
 echo "  obsidian_headless: $([ -n "$(read_env PROVISION_OBSIDIAN_AUTH_TOKEN)" ] && echo "configured" || echo "skipped")"
 if [ -n "$agent_ids_str" ]; then
     for id in "${agent_ids[@]}"; do
@@ -209,6 +213,9 @@ static = [
     ('discord_bot_token', 'PROVISION_DISCORD_BOT_TOKEN'),
     ('discord_guild_id', 'PROVISION_DISCORD_GUILD_ID'),
     ('discord_user_id', 'PROVISION_DISCORD_USER_ID'),
+    ('gog_account', 'PROVISION_GOG_ACCOUNT'),
+    ('gog_keyring_password', 'PROVISION_GOG_KEYRING_PASSWORD'),
+    ('gog_client_secret', 'PROVISION_GOG_CLIENT_SECRET'),
 ]
 
 with open(sys.argv[1], 'w') as f:
