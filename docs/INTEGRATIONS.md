@@ -203,3 +203,67 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u obs
 ### Token Expiry
 
 The Obsidian auth token may expire if the Obsidian Sync subscription lapses or is renewed. Re-run `ob login` locally, update the Pulumi secret, and re-provision with `--tags obsidian-headless`.
+
+## Gmail / Calendar / Drive (gogcli)
+
+Provides Gmail, Calendar, Drive, and other Google Workspace access via [`gogcli`](https://github.com/steipete/gogcli) running as a containerized MCP server on `codex-proxy-net`. The agent gets a single `gog_run` tool (`gog-<id>_run` for non-default agents) that wraps the `gog` CLI; the agent's CLI knowledge comes from its [`gog` skill](https://github.com/openclaw/openclaw/blob/main/skills/gog/SKILL.md), not from the MCP tool. If the three Pulumi secrets below are not set, deployment skips the role and the MCP servers are not registered.
+
+### Setup
+
+1. **Create the OAuth client** in [Google Cloud Console](https://console.cloud.google.com):
+   - Create a project and enable the APIs you want (Gmail API, Google Calendar API, etc.)
+   - **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+   - Application type: **Desktop app**
+   - Download the `client_secret.json`
+
+   See the [gogcli README](https://github.com/steipete/gogcli) for the canonical walkthrough, including which scopes each service needs.
+
+2. **Set Pulumi secrets:**
+   ```bash
+   cd pulumi
+   pulumi config set gogAccount "you@gmail.com"
+   pulumi config set gogKeyringPassword --secret              # choose a strong password — you'll need it again in step 4
+   pulumi config set gogClientSecret --secret "$(cat /path/to/client_secret.json)"
+   ```
+
+3. **Provision:**
+   ```bash
+   ./scripts/provision.sh --tags gog,plugins
+   ```
+   The `gog` role installs the `gogcli` binary, imports the OAuth client into a file-backed keyring at `~/.config/gogcli`, and builds the hardened `gog-mcp:latest` image. The `plugins` role then registers one MCP server per agent.
+
+4. **Authenticate on the VPS** (one-time, manual — the VPS has no browser):
+   ```bash
+   ssh ubuntu@openclaw-vps.<tailnet>.ts.net
+   export GOG_KEYRING_BACKEND=file
+   export GOG_KEYRING_PASSWORD='<the password from step 2>'
+   gog auth add you@gmail.com --services gmail,calendar --manual
+   ```
+   `gog` prints a Google OAuth URL. Open it in a browser on your laptop, sign in, copy the verification code, paste it back into the terminal. The refresh token is stored in the keyring file. Pass whichever `--services` subset you actually need — services not authorized here will fail at the Google API even if `gog_enable_commands` allows the command.
+
+   If you forgot the keyring password, read it back with `pulumi config get gogKeyringPassword --show-secrets`.
+
+### Verify
+
+```bash
+# Per-agent MCP servers are registered
+openclaw config get plugins.entries.openclaw-mcp-adapter.config \
+  | jq '.servers[] | select(.name | startswith("gog"))'
+
+# gog can talk to Google end-to-end (run on the VPS, outside the container)
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net \
+  "GOG_KEYRING_BACKEND=file GOG_KEYRING_PASSWORD='<the password>' gog gmail labels list --json"
+```
+
+Then ask the agent something like "what's in my inbox today?" and confirm it returns Gmail data, not an error.
+
+### Re-authentication
+
+OAuth refresh tokens generally don't expire, but Google revokes them after password changes, manual revocation, or longer inactivity. To re-issue, repeat step 4 — `gog auth add` overwrites the existing keyring entry. To rotate the keyring password itself, update `gogKeyringPassword` in Pulumi, re-provision, then re-run `gog auth add` (the old keyring file becomes unreadable with the new password and must be replaced).
+
+### Operational Notes
+
+- **Multi-agent**: a second agent (e.g., `bob`) automatically gets its own `gog-bob` MCP server via the `openclaw_mcp_server_types × openclaw_agents` cross-product in `playbook.yml`. All agents share the same host-side keyring and OAuth identity.
+- **Allowlist scope**: `gog_enable_commands` in `ansible/group_vars/all.yml` controls which top-level `gog` commands the container will execute. The default list blocks `auth`, `config`, and other meta-commands so an agent cannot manipulate its own credentials through the MCP tool. Edit and re-provision with `--tags gog,plugins` to change the allowlist.
+- **Rebuild image**: `./scripts/provision.sh --tags gog -e force_gog_mcp_rebuild=true` rebuilds `gog-mcp:latest`, runs the smoke tests, and removes any stale containers labelled `openclaw-role=gog-mcp`.
+- **Security model**: container runs with `--cap-drop ALL`, `--read-only`, `no-new-privileges`, `--pids-limit 50`, 512 MB memory cap. The `~/.config/gogcli` directory is bind-mounted **read-only**. The container lives on `codex-proxy-net`, which sandbox containers on the default bridge cannot reach.

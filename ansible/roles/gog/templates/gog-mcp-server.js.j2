@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+// gog MCP server — exposes a single gog_run tool for Google Workspace CLI.
+// Runs inside a hardened Docker container on codex-proxy-net.
+// Managed by Ansible — do not edit on the server.
+
+'use strict';
+
+const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
+const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+const {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} = require('@modelcontextprotocol/sdk/types.js');
+const { execFileSync } = require('child_process');
+
+const TIMEOUT_MS = 120000; // 2 minutes
+const MAX_OUTPUT = 10 * 1024 * 1024; // 10 MB
+
+const server = new Server(
+  { name: 'gog', version: '1.0.0' },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'run',
+      description:
+        'Run a gog (Google Workspace CLI) command. ' +
+        'Pass the command WITHOUT the leading "gog" prefix. ' +
+        'Examples: "gmail search \'newer_than:7d\' --max 10 --json", ' +
+        '"gmail labels list --json", ' +
+        '"calendar events primary --from 2026-04-01 --to 2026-04-07 --json". ' +
+        'Always use --json for structured output and --no-input to skip prompts.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description:
+              'Arguments to pass to gog (e.g. "gmail search \'newer_than:7d\' --max 10 --json")',
+          },
+        },
+        required: ['command'],
+      },
+    },
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name !== 'run') {
+    return {
+      content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
+      isError: true,
+    };
+  }
+
+  const { command } = request.params.arguments;
+  if (!command || typeof command !== 'string') {
+    return {
+      content: [{ type: 'text', text: 'Missing or invalid "command" argument' }],
+      isError: true,
+    };
+  }
+
+  // Parse command string into args array for execFile (no shell).
+  // Handles simple quoting (single and double quotes).
+  const args = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (ch === ' ' && !inSingle && !inDouble) {
+      if (current.length > 0) {
+        args.push(current);
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0) args.push(current);
+
+  try {
+    const stdout = execFileSync('gog', args, {
+      encoding: 'utf-8',
+      timeout: TIMEOUT_MS,
+      maxBuffer: MAX_OUTPUT,
+      env: { ...process.env, GOG_NO_INPUT: '1' },
+    });
+    return { content: [{ type: 'text', text: stdout }] };
+  } catch (err) {
+    const stderr = err.stderr || '';
+    const stdout = err.stdout || '';
+    const output = stderr || stdout || err.message;
+    return {
+      content: [{ type: 'text', text: `gog error (exit ${err.status || '?'}):\n${output}` }],
+      isError: true,
+    };
+  }
+});
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch((err) => {
+  process.stderr.write(`gog-mcp-server fatal: ${err.message}\n`);
+  process.exit(1);
+});

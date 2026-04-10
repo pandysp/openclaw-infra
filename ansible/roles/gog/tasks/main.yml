@@ -1,0 +1,218 @@
+---
+# Install gogcli binary on VPS host, deploy OAuth credentials, and build
+# the gog-mcp Docker image for containerized MCP access.
+# Skipped entirely when gog_account is not defined (in playbook.yml).
+# Force image rebuild with: -e force_gog_mcp_rebuild=true
+
+# --- Step 1: Install gog binary on host (needed for one-time OAuth setup) ---
+
+- name: Check installed gog version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if command -v gog &>/dev/null; then
+      gog --version 2>&1 | head -1
+    else
+      echo "not installed"
+    fi
+  args:
+    executable: /bin/bash
+  register: gog_version_check
+  changed_when: false
+
+- name: Download and install gog binary
+  when: "gogcli_version not in gog_version_check.stdout"
+  block:
+    - name: Download gogcli release archive
+      ansible.builtin.get_url:
+        url: "https://github.com/steipete/gogcli/releases/download/v{{ gogcli_version }}/gogcli_{{ gogcli_version }}_linux_amd64.tar.gz"
+        dest: /tmp/gogcli.tar.gz
+        mode: "0644"
+
+    - name: Extract gog binary
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tar -xzf /tmp/gogcli.tar.gz -C /tmp gog
+        install -m 0755 /tmp/gog /usr/local/bin/gog
+      args:
+        executable: /bin/bash
+      become: true
+
+    - name: Clean up download
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - /tmp/gogcli.tar.gz
+        - /tmp/gog
+      changed_when: false
+
+    - name: Verify gog binary
+      ansible.builtin.command: gog --version
+      changed_when: false
+
+# --- Step 2: Deploy OAuth credentials and configure keyring ---
+
+- name: Ensure gogcli config directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/gogcli
+    state: directory
+    mode: "0700"
+
+- name: Ensure gogcli keyring directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/gogcli/keyring
+    state: directory
+    mode: "0700"
+
+- name: Configure keyring backend to file
+  ansible.builtin.copy:
+    content: '{"keyring_backend": "file"}'
+    dest: /home/ubuntu/.config/gogcli/config.json
+    mode: "0600"
+  register: gog_config_changed
+
+- name: Import OAuth client credentials via gog auth credentials
+  when: gog_client_secret is defined and gog_client_secret | length > 0
+  block:
+    - name: Write Google client secret to temp file
+      ansible.builtin.copy:
+        content: "{{ gog_client_secret }}"
+        dest: /tmp/ansible-gog-client-secret.json
+        mode: "0600"
+      no_log: true
+      changed_when: false
+
+    - name: Import credentials into gog
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export GOG_KEYRING_BACKEND=file
+        export GOG_KEYRING_PASSWORD="{{ gog_keyring_password }}"
+        gog auth credentials /tmp/ansible-gog-client-secret.json
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: gog_creds_import
+      changed_when: "'stored' in gog_creds_import.stdout or 'updated' in gog_creds_import.stdout"
+
+  always:
+    - name: Clean up client secret temp file
+      ansible.builtin.file:
+        path: /tmp/ansible-gog-client-secret.json
+        state: absent
+      changed_when: false
+
+# --- Step 3: Build gog-mcp Docker image ---
+
+- name: Check if gog-mcp image exists
+  ansible.builtin.command: "docker image inspect {{ gog_mcp_docker_image }}"
+  register: gog_image_check
+  changed_when: false
+  failed_when: false
+
+- name: Create gog-mcp build directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw/gog-mcp-build
+    state: directory
+    mode: "0755"
+
+- name: Copy gog binary to build context
+  ansible.builtin.copy:
+    src: /usr/local/bin/gog
+    dest: /home/ubuntu/.openclaw/gog-mcp-build/gog
+    mode: "0755"
+    remote_src: true
+  register: gog_binary_copied
+
+- name: Template gog-mcp Dockerfile
+  ansible.builtin.template:
+    src: Dockerfile.gog-mcp.j2
+    dest: /home/ubuntu/.openclaw/gog-mcp-build/Dockerfile
+    mode: "0644"
+  register: gog_dockerfile_changed
+
+- name: Template gog-mcp server script
+  ansible.builtin.template:
+    src: gog-mcp-server.js.j2
+    dest: /home/ubuntu/.openclaw/gog-mcp-build/gog-mcp-server.js
+    mode: "0644"
+  register: gog_server_changed
+
+- name: Template gog-mcp package.json
+  ansible.builtin.template:
+    src: package.json.j2
+    dest: /home/ubuntu/.openclaw/gog-mcp-build/package.json
+    mode: "0644"
+  register: gog_package_changed
+
+- name: Build gog-mcp Docker image
+  ansible.builtin.shell: |
+    set -euo pipefail
+    docker build -t "{{ gog_mcp_docker_image }}" /home/ubuntu/.openclaw/gog-mcp-build/
+  args:
+    executable: /bin/bash
+  when: >-
+    gog_image_check.rc != 0 or
+    gog_dockerfile_changed.changed or
+    gog_server_changed.changed or
+    gog_package_changed.changed or
+    gog_binary_copied.changed or
+    (force_gog_mcp_rebuild | bool)
+  register: gog_image_build
+  notify: restart openclaw-gateway
+
+- name: Verify gog-mcp image was built
+  ansible.builtin.command: "docker image inspect {{ gog_mcp_docker_image }}"
+  changed_when: false
+
+- name: Smoke test gog-mcp image (version check)
+  ansible.builtin.shell: |
+    docker run --rm "{{ gog_mcp_docker_image }}" sh -c 'gog --version'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: gog_image_build is changed
+
+- name: Smoke test gog-mcp image with hardened flags
+  ansible.builtin.shell: |
+    set -euo pipefail
+    docker run --rm \
+      --network=codex-proxy-net \
+      --cap-drop ALL \
+      --security-opt no-new-privileges \
+      --read-only \
+      --tmpfs /tmp:size=64m \
+      --tmpfs /home/node:size=64m,uid=1000,gid=1000 \
+      "{{ gog_mcp_docker_image }}" \
+      sh -c 'test -x /usr/local/bin/gog && test -f /opt/gog-mcp/server.js && echo "hardened-ok"'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: gog_image_build is changed
+
+- name: Remove gog-mcp containers after image rebuild
+  ansible.builtin.shell: |
+    set -euo pipefail
+    containers=$(docker ps -aq --filter "label=openclaw-role=gog-mcp")
+    if [ -n "$containers" ]; then
+      echo "$containers" | xargs docker rm -f
+    fi
+  args:
+    executable: /bin/bash
+  register: gog_container_removal
+  changed_when: gog_container_removal.stdout | length > 0
+  when: gog_image_build is changed
+
+- name: Verify no gog-mcp containers remain after cleanup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    count=$(docker ps -aq --filter "label=openclaw-role=gog-mcp" | wc -l)
+    if [ "$count" -ne 0 ]; then
+      echo "ERROR: $count gog-mcp containers still present after removal"
+      docker ps -a --filter "label=openclaw-role=gog-mcp" --format '{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Image{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}'
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: gog_container_removal is changed

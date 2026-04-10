@@ -67,6 +67,7 @@ openclaw-infra/
 │       ├── whatsapp/  # WhatsApp channel config (conditional)
 │       ├── obsidian-headless/  # Obsidian Sync daemon per workspace (conditional)
 │       ├── qmd/       # qmd semantic search: install, per-agent watchers
+│       ├── gog/       # gogcli binary, OAuth keyring, gog-mcp Docker image (conditional)
 │       ├── plugins/   # MCP adapter, Codex/Claude Code/Pi/qmd servers, deny rules
 │       ├── sandbox/   # Pull base image, build custom Docker image
 │       └── workspace/ # Deploy key, git sync timer (conditional)
@@ -106,6 +107,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
 | `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
+| `gog` | gog | Reinstall gogcli, rebuild gog-mcp image, rotate keyring password |
 | `plugins` | plugins | MCP adapter, Codex/Claude Code/Pi containers, GitHub MCP, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |
@@ -259,6 +261,9 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 | Codex auth (`~/.codex/auth.json`) | (Optional) Powers Codex MCP servers for coding assistance | Run `codex login` locally, auto-deployed by provision.sh |
 | Obsidian auth token | (Optional) Authenticates with Obsidian Sync API | `ob login` locally, copy from `~/.obsidian-headless/auth_token` |
 | Obsidian vault password | (Optional) E2EE encryption for Obsidian Sync vaults | User-chosen password |
+| `gogAccount` | (Optional) Google account for `gogcli` MCP server (Gmail/Calendar/Drive) | `pulumi config set gogAccount "you@gmail.com"` |
+| `gogKeyringPassword` | (Optional) Encrypts the file-backed `gogcli` credential keyring | User-chosen password |
+| `gogClientSecret` | (Optional) Google OAuth `client_secret.json` for `gogcli` | console.cloud.google.com → APIs & Services → Credentials |
 
 ## Security DO's and DON'Ts
 
@@ -437,6 +442,20 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status 
 
 **Read [docs/INTEGRATIONS.md#obsidian-headless-sync](./docs/INTEGRATIONS.md#obsidian-headless-sync) in full when:** first-time Obsidian setup or diagnosing token expiry.
 
+## Gmail / Calendar / Drive (Optional)
+
+Containerized [`gogcli`](https://github.com/steipete/gogcli) MCP server giving agents access to Gmail, Calendar, Drive, and other Google Workspace services. Container runs on `codex-proxy-net` with credentials bind-mounted read-only and a `gog auth …` allowlist block. Pulumi secrets: `gogAccount`, `gogKeyringPassword`, `gogClientSecret`. **One-time manual auth on the VPS** is required after provisioning (the VPS has no browser).
+
+```bash
+pulumi config set gogAccount "you@gmail.com"
+pulumi config set gogKeyringPassword --secret
+pulumi config set gogClientSecret --secret "$(cat /path/to/client_secret.json)"
+./scripts/provision.sh --tags gog,plugins
+# Then on the VPS: gog auth add you@gmail.com --services gmail,calendar --manual
+```
+
+**Read [docs/INTEGRATIONS.md#gmail--calendar--drive-gogcli](./docs/INTEGRATIONS.md#gmail--calendar--drive-gogcli) in full when:** first-time Google Workspace setup (OAuth client creation, manual auth flow) or re-authentication after token revocation.
+
 ## Multi-Agent Setup (Optional)
 
 By default, a single `main` agent is configured. To add more agents, define `openclaw_agents` in `openclaw.yml` (see `openclaw.yml.example`).
@@ -469,7 +488,7 @@ MCP servers, workspaces, deny rules, and token mappings are generated automatica
 
 ### Role Ordering
 
-`config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `qmd` -> `plugins` -> `sandbox` -> `workspace`
+`config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `qmd` -> `gog` -> `plugins` -> `sandbox` -> `workspace`
 
 Telegram must run immediately after agents (prevents message misrouting). Plugins after qmd (qmd binary needed for MCP registration).
 
@@ -534,7 +553,7 @@ Each agent has a **qmd** instance providing local hybrid search (BM25 + vector +
 - `memory` — memory directory (`.md` files only)
 - `extracted-content` — text extracted from PDFs, images, `.docx`, `.xlsx`
 
-**Tool count:** `N_agents × Σ(tools_per_server_type)`. Per agent: github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6. Check `openclaw_mcp_server_types` in `group_vars/all.yml`.
+**Tool count:** `N_agents × Σ(tools_per_server_type)`. Per agent: github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6, gog: 1. Check `openclaw_mcp_server_types` in `group_vars/all.yml`.
 
 **Operations:**
 ```bash

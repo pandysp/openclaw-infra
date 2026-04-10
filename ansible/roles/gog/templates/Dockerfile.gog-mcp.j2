@@ -1,0 +1,25 @@
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# MCP server dependencies
+WORKDIR /opt/gog-mcp
+COPY package.json ./
+RUN npm install --omit=dev && npm cache clean --force
+
+# gog binary (static Linux amd64, from build context)
+COPY gog /usr/local/bin/gog
+
+# MCP server script
+COPY gog-mcp-server.js ./server.js
+
+# Harden: strip setuid bits
+RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
+
+# Prepare gogcli config mount point (bind-mounted at runtime)
+RUN mkdir -p /home/node/.config/gogcli && chown node:node /home/node/.config/gogcli
+
+USER node
+ENTRYPOINT ["node", "/opt/gog-mcp/server.js"]

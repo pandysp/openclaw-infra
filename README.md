@@ -10,6 +10,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
 - **Telegram**: Optional scheduled tasks (configurable cron jobs)
+- **Google Workspace**: Optional Gmail/Calendar/Drive access via containerized gogcli MCP server
 - **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
 
 ## Prerequisites
@@ -81,6 +82,12 @@ pulumi config set telegramUserId "YOUR_ID"     # ./scripts/get-telegram-id.sh or
 
 # Optional: hourly workspace backup to a private GitHub repo
 pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
+
+# Optional: Google Workspace access (Gmail/Calendar/Drive) via gogcli
+# Requires a one-time manual auth step on the VPS — see docs/INTEGRATIONS.md
+pulumi config set gogAccount "you@gmail.com"
+pulumi config set gogKeyringPassword --secret
+pulumi config set gogClientSecret --secret "$(cat /path/to/client_secret.json)"
 
 # Deploy
 pulumi up
