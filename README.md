@@ -1,148 +1,222 @@
 # OpenClaw Infrastructure
 
-Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€11.39/month.
+**Your AI assistant shouldn't die when you close your laptop.**
 
-**This is a reference template.** Clone it and adapt for your own deployment — the config values (timezone, model, cron prompts) are working examples you'll customize.
+OpenClaw is an AI agent that runs 24/7 on your own server. It sends you a morning briefing on Telegram. It does research while you sleep. It remembers everything across conversations. It costs less than a Netflix subscription.
 
-## Features
+This repo is everything you need to set that up — from zero to a running AI assistant in about 30 minutes.
 
-- **Cheap**: Hetzner CX43 x86 (8 vCPU, 16 GB) ~€9.49/mo + backups (~€11.39/mo total)
-- **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
-- **Simple**: Pulumi IaC, single command deploy, systemd user service
-- **Telegram**: Optional scheduled tasks (configurable cron jobs)
-- **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
+## Why self-host?
 
-## Prerequisites
+Most AI assistants live inside a browser tab. Close it, and they're gone. They don't remember yesterday. They can't reach out to you. They can't work while you're offline.
 
-- Node.js 18+
+A self-hosted OpenClaw is different:
+
+- **Always on.** It runs on a cheap cloud server. Close your laptop, go hiking — it keeps working.
+- **It messages you.** Morning briefings, research results, task updates — delivered to Telegram, WhatsApp, or Discord. You don't have to check on it.
+- **It remembers.** Persistent memory and workspace across every conversation. Context that builds over weeks, not minutes.
+- **It's private.** Your server, your data, your network. No one else can access it — not even the cloud provider can reach the ports.
+- **It's cheap.** ~$12/month for a server with 8 CPUs and 16 GB RAM. No per-message fees beyond your existing Claude subscription.
+
+## What can it actually do?
+
+**Talk to you where you already are**
+Connect Telegram, WhatsApp, or Discord. Ask it questions, give it tasks, get updates — from your phone, your desktop, wherever.
+
+**Work on a schedule**
+Set up recurring tasks: a daily standup summary, a nightly research shift, a weekly planning session. It runs them automatically and delivers the results.
+
+**Run code safely**
+Every session runs in a sandboxed Docker container with a full dev toolchain (Python, Node.js, git, and more). It can write and execute code without risking your server.
+
+**Search the web and your files**
+Web search via Grok, semantic search across its own workspace. It can research topics, read documents, and synthesize findings.
+
+**Control your Mac remotely** (optional)
+Run shell commands on your local machine from the server — useful for automation workflows. Disabled by default, requires explicit opt-in.
+
+**Run multiple agents**
+Need a research agent and a coding agent? Run them in parallel, each with their own workspace and memory.
+
+## What you'll need
+
+No programming experience required, but you should be comfortable with:
+- Typing commands in a terminal
+- Creating accounts on a few services
+- Editing a configuration file
+
+**Accounts to create** (all have free tiers except the server):
+
+| Service | What it's for | Cost |
+|---------|--------------|------|
+| [Hetzner Cloud](https://www.hetzner.com/cloud) | The server that runs your assistant | ~$12/month |
+| [Tailscale](https://tailscale.com/start) | Private networking — makes the server accessible only to your devices | Free |
+| [Anthropic / Claude](https://claude.ai) | The AI that powers OpenClaw | Your existing subscription |
+| [Pulumi](https://www.pulumi.com) | Manages the server setup (so you can recreate it anytime) | Free |
+
+**Optional** (add anytime):
+
+| Service | What it adds |
+|---------|-------------|
+| Telegram | Chat with your assistant from your phone |
+| WhatsApp | Same, via WhatsApp |
+| Discord | Same, via Discord |
+| [xAI / Grok](https://x.ai/api) | Web search capability |
+
+**Software to install on your computer:**
+- [Node.js](https://nodejs.org/) 18 or newer
 - [Pulumi CLI](https://www.pulumi.com/docs/install/)
 - [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/) (`pip install ansible`)
-- [Tailscale](https://tailscale.com/start) installed and connected on your machine
-- Hetzner Cloud API token ([console.hetzner.cloud](https://console.hetzner.cloud/))
-- Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
-- Tailscale MagicDNS and HTTPS enabled ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)) — required for Tailscale Serve
-- Claude setup token (run `claude setup-token`)
+- [Tailscale](https://tailscale.com/download)
 
-See [CLAUDE.md](./CLAUDE.md#first-time-setup) for detailed setup instructions.
+## Getting started
 
-### First-Time Tailscale Setup
+### 1. Set up Tailscale (5 min)
 
-If you've never used Tailscale before:
+Tailscale creates a private network between your devices. Your server will only be reachable through this network — no public ports, no exposure to the internet.
 
-1. **Create account**: Go to https://tailscale.com/start
-   - Sign up with GitHub (recommended for infra projects), Google, or email
-   - Free tier supports up to 100 devices
-
-2. **Install on your Mac**:
+1. Create an account at [tailscale.com/start](https://tailscale.com/start) (sign up with GitHub, Google, or email)
+2. Install on your computer:
    ```bash
+   # Mac
    brew install --cask tailscale
-   ```
-   - Open Tailscale from Applications
-   - Click "Allow" for System Extension and VPN Configuration prompts
-   - Click menu bar icon → Log in → Authorize in browser
+   # Then open Tailscale from Applications and log in
 
-3. **Generate auth key for server**:
-   - Go to https://login.tailscale.com/admin/settings/keys
-   - Click "Generate auth key"
-   - Enable: **Reusable**, **Ephemeral**
+   # Linux — see https://tailscale.com/download/linux
+   ```
+3. Enable MagicDNS and HTTPS in the [admin console](https://login.tailscale.com/admin/dns)
+4. Generate a server auth key at [admin console > Keys](https://login.tailscale.com/admin/settings/keys):
+   - Enable **Reusable** and **Ephemeral**
    - Copy the key (starts with `tskey-auth-...`)
 
-### Telegram Bot Setup
+### 2. Get your tokens (5 min)
 
-To enable optional Telegram notifications:
+- **Hetzner API token**: Create at [console.hetzner.cloud](https://console.hetzner.cloud/) → your project → API Tokens
+- **Claude setup token**: Run `claude setup-token` in your terminal
 
-1. **Create a bot**: Open Telegram, search for **@BotFather**, send `/newbot`
-   - Choose a display name (e.g., "OpenClaw Assistant")
-   - Choose a username (must end in "bot", e.g., `openclaw_assistant_bot`)
-   - Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-
-2. **Get your user ID** (either method):
-   - Run `./scripts/get-telegram-id.sh` — briefly pauses the gateway, you send a message, it shows your IDs
-   - Or search for **@userinfobot** on Telegram, send `/start`, copy your numeric user ID
-
-3. **Configure**: See [Quick Start](#quick-start) below for the Pulumi commands.
-
-## Quick Start
+### 3. Deploy (10 min)
 
 ```bash
+git clone https://github.com/pandysp/openclaw-infra.git && cd openclaw-infra
 npm install
 cd pulumi
-pulumi login             # Authenticate with Pulumi Cloud
+pulumi login
 pulumi stack init prod
 
-# Required
+# Set your secrets
 pulumi config set hcloud:token --secret       # Hetzner API token
-pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
-pulumi config set claudeSetupToken --secret    # From `claude setup-token`
-
-# Optional: Telegram notifications (daily digests, weekly planning)
-pulumi config set telegramBotToken --secret    # From @BotFather
-pulumi config set telegramUserId "YOUR_ID"     # ./scripts/get-telegram-id.sh or @userinfobot
-
-# Optional: hourly workspace backup to a private GitHub repo
-pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
+pulumi config set tailscaleAuthKey --secret    # Tailscale auth key from step 1
+pulumi config set claudeSetupToken --secret    # Claude setup token from step 2
 
 # Deploy
 pulumi up
+```
 
-# Verify (wait ~5 min for cloud-init)
+Wait about 5 minutes for the server to finish setting up, then verify:
+
+```bash
 cd ..
 ./scripts/verify.sh
 ```
 
-> After verifying, clean up the cloud-init log (contains secrets):
-> `ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"`
+### 4. Connect (2 min)
 
-State and secrets are managed by [Pulumi Cloud](https://app.pulumi.com) — no local passphrase needed.
-
-## Access
-
-Wait ~5 minutes after deployment for cloud-init + Ansible to finish, then open:
+Open the web chat:
 ```
-https://openclaw-vps.<tailnet>.ts.net/chat
+https://openclaw-vps.<your-tailnet>.ts.net/chat
 ```
 
-### First-Time Device Pairing
+On first visit, you'll need to pair your device:
+```bash
+ssh ubuntu@openclaw-vps.<your-tailnet>.ts.net 'openclaw devices list'
+ssh ubuntu@openclaw-vps.<your-tailnet>.ts.net 'openclaw devices approve <request-id>'
+```
 
-OpenClaw requires **device pairing** for all connections — including the server's own CLI. On a fresh install:
+Refresh the browser — you're in.
 
-1. **Use the tokenized URL** to access the web UI without pairing:
+> **Shortcut:** Skip pairing with `cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets`
+
+### 5. Add Telegram (optional, 5 min)
+
+1. Open Telegram, search for **@BotFather**, send `/newbot`, follow the prompts
+2. Get your user ID: run `./scripts/get-telegram-id.sh` or message **@userinfobot** on Telegram
+3. Configure:
    ```bash
-   cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
-   ```
-   Open that URL in your browser. This bypasses pairing for initial setup.
-
-2. **Approve devices** that need pairing. The server's CLI (used by Ansible) may show as pending:
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
-   ```
-
-3. **If Ansible failed during first deploy** (cron setup skipped due to pairing), re-run after approving:
-   ```bash
+   cd pulumi
+   pulumi config set telegramBotToken --secret    # From @BotFather
+   pulumi config set telegramUserId "YOUR_ID"     # Your numeric user ID
+   cd ..
    ./scripts/provision.sh --tags telegram
    ```
 
-> No public SSH port is exposed. SSH works over Tailscale only.
+Your assistant will now send you a daily standup at 09:30 and run a night shift at 23:00 (customizable).
 
-See [CLAUDE.md](./CLAUDE.md#device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
-
-## Architecture
+## How it works
 
 ```
-Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
-                               Hetzner FW: no inbound
-                               UFW: tailscale0 only
-                               Gateway: localhost:18789 (systemd --user)
-                               Tailscale Serve: HTTPS proxy
+Your phone/laptop ──(Tailscale VPN)──> Hetzner cloud server ──> OpenClaw gateway
+                                        No public ports exposed
+                                        Firewall blocks all inbound traffic
+                                        Only your Tailscale devices can connect
 ```
+
+The server runs OpenClaw as a background service. Tailscale provides encrypted networking. A firewall ensures nothing is accessible from the public internet. Your conversations, memory, and workspace live on the server and are optionally backed up to a private GitHub repo.
+
+| Component | What it does |
+|-----------|-------------|
+| **Hetzner VPS** | Runs everything (~$12/month, 8 CPU, 16 GB RAM) |
+| **Tailscale** | Private encrypted network between your devices and the server |
+| **OpenClaw** | The AI gateway — manages sessions, memory, tools, and messaging |
+| **Docker** | Sandboxes every AI session for safety |
+| **Pulumi** | Infrastructure as code — reproducible setup you can recreate anytime |
+| **Ansible** | Configures the server (installs software, sets up services) |
+
+## Day-to-day operations
+
+```bash
+# Check health
+openclaw health
+openclaw doctor
+
+# Update OpenClaw on the server
+./scripts/provision.sh --tags openclaw
+
+# Change settings (model, tools, sandbox config)
+# Edit ansible/group_vars/all.yml, then:
+./scripts/provision.sh --tags config
+
+# Update scheduled tasks
+# Edit ansible/group_vars/openclaw.yml, then:
+./scripts/provision.sh --tags telegram
+
+# Tear everything down
+cd pulumi && pulumi destroy
+```
+
+## Going further
+
+Once you're running, you can:
+
+- **Add WhatsApp or Discord** — see [docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md)
+- **Enable web search** — add an xAI API key (`pulumi config set xaiApiKey --secret`)
+- **Back up the workspace to GitHub** — run `./scripts/setup-workspace.sh`
+- **Run multiple agents** — define them in `ansible/group_vars/openclaw.yml`
+- **Control your Mac remotely** — see [docs/NODE-EXEC.md](./docs/NODE-EXEC.md)
+- **Add semantic search** over the workspace — see the qmd section in [CLAUDE.md](./CLAUDE.md)
+- **Sync with Obsidian** — see [docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md#obsidian-headless-sync)
 
 ## Documentation
 
-- [CLAUDE.md](./CLAUDE.md) — Setup, operations, security, and troubleshooting
-- [docs/SECURITY.md](./docs/SECURITY.md) — Threat model and mitigations
-- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — Common issues
-- [docs/BROWSER-CONTROL-PLANNING.md](./docs/BROWSER-CONTROL-PLANNING.md) — Future browser automation approaches
+| Document | When to read it |
+|----------|----------------|
+| [CLAUDE.md](./CLAUDE.md) | Detailed setup, all config options, operations reference |
+| [docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md) | Telegram, WhatsApp, Discord, Obsidian setup |
+| [docs/SECURITY.md](./docs/SECURITY.md) | Threat model and security architecture |
+| [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Something not working? Start here |
+
+## Contributing
+
+This is a reference implementation — fork it and make it yours. If you find bugs or have improvements, PRs and issues are welcome.
 
 ## License
 
