@@ -9,8 +9,28 @@ You already know what OpenClaw can do. This repo gives you a secure, always-on p
 - **Security first.** Zero public ports. Tailscale zero-trust networking. Firewall blocks all inbound traffic. Only your devices can reach the server.
 - **Always on.** Runs on a VPS that doesn't sleep, travel, or lose WiFi. Your assistant keeps working whether your laptop is open or not.
 - **Your data stays yours.** Conversations, memory, and workspace live on a server you control. Not on someone else's platform.
-- **Reproducible.** Everything is infrastructure as code. Destroy it and recreate it in 30 minutes. Nothing is hand-configured.
+- **Fully automated.** One command creates the server, installs all software, and configures everything. No clicking through dashboards or installing things by hand.
 - **Cheap.** ~€11/month for a dedicated server with 8 CPUs and 16 GB RAM.
+
+## How it works
+
+This repo uses an approach called **Infrastructure as Code**. Instead of manually creating a server through a web interface — choosing the size, the operating system, installing software, configuring services — everything is described in files that a tool reads and executes automatically.
+
+That means:
+
+- **No manual setup.** You don't need to select a server type, configure RAM, set up a firewall, or install any software on the server. It's all defined in the repo and happens automatically.
+- **Reproducible.** If something goes wrong, you can destroy the server and recreate an identical one in 30 minutes. Nothing is lost because nothing was configured by hand.
+- **Versionable.** The entire setup lives in this git repo. Changes are tracked, reversible, and shareable.
+
+The tools that make this work:
+
+| Tool | What it does |
+|------|-------------|
+| **Pulumi** | Creates the cloud server on Hetzner and configures networking. Think of it as a blueprint for your infrastructure. |
+| **Ansible** | Installs and configures everything on the server — Docker, OpenClaw, security settings, integrations. Think of it as a checklist that runs itself. |
+| **Tailscale** | Creates a private encrypted network between your devices and the server. Nothing is exposed to the public internet. |
+
+You don't need to learn any of these tools. The coding agent handles them for you.
 
 ## Before you start
 
