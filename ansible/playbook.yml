@@ -83,6 +83,39 @@
       when: openclaw_workspaces is not defined
       tags: [always]
 
+    # Fail loudly if any agent in `openclaw_agents` is missing its workspace<Agent>RepoUrl
+    # in Pulumi config. Without it, the workspace role silently skips the agent, and
+    # everything they write (daily notes, MEMORY.md, custom AGENTS.md) lives only on the
+    # VPS disk with no GitHub backup. To opt out for a specific agent (rare), add it to
+    # `openclaw_workspace_backup_optouts` in group_vars/openclaw.yml.
+    - name: Assert all agents have GitHub workspace backup configured
+      ansible.builtin.assert:
+        that:
+          - _agents_missing_workspace_backup | length == 0
+        fail_msg: |-
+          The following agent(s) are in `openclaw_agents` but have no `workspace<Agent>RepoUrl`
+          set in Pulumi config: {{ _agents_missing_workspace_backup | join(', ') }}
+
+          Their workspaces will live ONLY on the VPS disk — no GitHub backup. Fix:
+
+            cd {{ playbook_dir }}/..
+          {% for aid in _agents_missing_workspace_backup %}
+            ./scripts/setup-workspace.sh {{ aid }}
+          {% endfor %}
+            ./scripts/provision.sh --tags workspace
+
+          To opt out an agent (rare; data loss on VPS failure), add it to
+          `openclaw_workspace_backup_optouts` in group_vars/openclaw.yml.
+      vars:
+        _optouts: "{{ openclaw_workspace_backup_optouts | default([]) }}"
+        _agents_missing_workspace_backup: >-
+          {{ _openclaw_workspaces
+             | rejectattr('agent_id', 'in', _optouts)
+             | selectattr('repo_url', 'eq', '')
+             | map(attribute='agent_id')
+             | list }}
+      tags: [always]
+
     - name: Initialize qmd_workspaces list
       ansible.builtin.set_fact:
         qmd_workspaces: []
