@@ -11,8 +11,9 @@
 
     {# WhatsApp is built into core since 2026.3.22 - no plugin to enable. #}
     {# Clean up stale plugins.entries.whatsapp if left over from pre-2026.3.22. #}
-    if openclaw config get plugins.entries.whatsapp >/dev/null 2>&1; then
-        openclaw config unset plugins.entries.whatsapp
+    # Best-effort: attempt the unset and tolerate "absent" (openclaw's get/unset
+    # disagree on existence, so drive off the unset's own exit code).
+    if openclaw config unset plugins.entries.whatsapp >/dev/null 2>&1; then
         CHANGED="yes"
     fi
 
