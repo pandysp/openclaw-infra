@@ -271,7 +271,7 @@ resolve_tailscale_ips() {
         return 1
     fi
     local raw
-    raw=$(tailscale status --json 2>&1) || return 1
+    raw=$(tailscale status --json 2>/dev/null) || return 1
     echo "$raw" | python3 -c "
 import json, sys, re
 data = json.load(sys.stdin)
