@@ -2,7 +2,7 @@
 - name: Get existing agents
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw agents list --json 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d'
+    openclaw agents list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
   args:
     executable: /bin/bash
   register: existing_agents
@@ -43,7 +43,7 @@
 - name: Refresh agent list for config targeting
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw agents list --json 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d'
+    openclaw agents list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
   args:
     executable: /bin/bash
   register: agents_current
@@ -55,7 +55,7 @@
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     DESIRED='{"target":"{{ _default_agent.deliver_channel | default('telegram') }}","to":"{{ _default_agent.deliver_to }}","every":"{{ _default_agent.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if _default_agent.heartbeat_model is defined %},"model":"{{ _default_agent.heartbeat_model }}"{% endif %}}'
-    CURRENT=$(openclaw config get "agents.defaults.heartbeat" 2>&1 | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || {
+    CURRENT=$(openclaw config get "agents.defaults.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
         if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
             CURRENT="{}"
         else
@@ -84,7 +84,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    CURRENT=$(openclaw config get "agents.defaults.sandbox.mode" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT=""
+    CURRENT=$(openclaw config get "agents.defaults.sandbox.mode" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT=""
     DESIRED="{{ _default_agent.sandbox_mode }}"
     if [ "$CURRENT" = "$DESIRED" ]; then
         echo "OK"
@@ -121,7 +121,7 @@
             exit 1
         fi
         DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if item.heartbeat_model is defined %},"model":"{{ item.heartbeat_model }}"{% endif %}}'
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1 | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || {
+        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="{}"
             else
@@ -156,7 +156,7 @@
             echo "ERROR: Agent {{ item.id | quote }} not found in agents list" >&2
             exit 1
         fi
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.sandbox.mode" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT=""
+        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.sandbox.mode" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT=""
         DESIRED="{{ item.sandbox_mode }}"
         if [ "$CURRENT" = "$DESIRED" ]; then
             echo "OK"

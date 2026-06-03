@@ -19,7 +19,7 @@
     export XDG_RUNTIME_DIR=/run/user/1000
     CHANGED=""
 
-    ENABLED=$(openclaw config get channels.discord.enabled 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || ENABLED=""
+    ENABLED=$(openclaw config get channels.discord.enabled 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || ENABLED=""
     if [ "$ENABLED" != "true" ]; then
         openclaw config set channels.discord.enabled true
         CHANGED="yes"
@@ -28,7 +28,7 @@
     # Guild config
     {% if discord_guild_id is defined and discord_guild_id | length > 0 %}
     # Group policy: allowlist
-    CURRENT_GP=$(openclaw config get channels.discord.groupPolicy 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_GP=""
+    CURRENT_GP=$(openclaw config get channels.discord.groupPolicy 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_GP=""
     if [ "$CURRENT_GP" != "allowlist" ]; then
         openclaw config set channels.discord.groupPolicy "allowlist"
         CHANGED="yes"
@@ -43,7 +43,7 @@
     {% endif %}
     {% set guilds_obj = {discord_guild_id: guild_entry} %}
     DESIRED_GUILDS='{{ guilds_obj | to_json }}'
-    CURRENT_GUILDS=$(openclaw config get channels.discord.guilds 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_GUILDS="{}"
+    CURRENT_GUILDS=$(openclaw config get channels.discord.guilds 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_GUILDS="{}"
     CG_NORM=$(echo "$CURRENT_GUILDS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     DG_NORM=$(echo "$DESIRED_GUILDS" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     if [ "$CG_NORM" = "PARSE_FAIL" ] || [ "$DG_NORM" = "PARSE_FAIL" ] || [ "$CG_NORM" != "$DG_NORM" ]; then
