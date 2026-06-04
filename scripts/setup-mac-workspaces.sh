@@ -37,20 +37,9 @@ GITHUB_ORG="pandysp"
 GUI_DOMAIN="gui/$(id -u)"
 INITIAL_SYNC_TIMEOUT=120
 
-# Resolve node binary path for LaunchAgents (ob wrapper needs `node` in PATH).
-# asdf shims don't work in LaunchAgent context — use the direct install path.
-if command -v asdf &>/dev/null; then
-    NODE_BIN_DIR="$(asdf where nodejs 2>/dev/null)/bin"
-elif command -v node &>/dev/null; then
-    # Active node (mise/nvm/direct install) — the runtime that obsidian-headless's
-    # native modules (better-sqlite3) were built against. LaunchAgents don't inherit
-    # the shell PATH, so resolve the concrete bin dir now, at setup time.
-    NODE_BIN_DIR="$(dirname "$(command -v node)")"
-elif [ -x "/opt/homebrew/bin/node" ]; then
-    NODE_BIN_DIR="/opt/homebrew/bin"
-else
-    NODE_BIN_DIR="/usr/local/bin"
-fi
+# Resolve node bin dir for LaunchAgents (they don't inherit shell PATH) — see
+# resolve_node_bin_dir in lib/agents.sh (prefers the active mise/nvm node).
+NODE_BIN_DIR="$(resolve_node_bin_dir)"
 LAUNCHAGENT_PATH="${NODE_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # Excluded folders for Obsidian Sync — must match VPS deployment

@@ -329,7 +329,8 @@ echo ""
 log "Step 3: Create LaunchAgents"
 
 QMD_BIN="$(command -v qmd || echo "$HOME/.bun/bin/qmd")"
-QMD_LAUNCHAGENT_PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+QMD_NODE_BIN_DIR="$(resolve_node_bin_dir)"
+QMD_LAUNCHAGENT_PATH="$HOME/.bun/bin:${QMD_NODE_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 for agent_id in "${SELECTED_AGENTS[@]}"; do
     workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"

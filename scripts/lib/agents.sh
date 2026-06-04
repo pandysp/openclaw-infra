@@ -59,3 +59,18 @@ workspace_dir_for() {
         echo "$2/${1}-workspace"
     fi
 }
+
+# Resolve a concrete node bin dir for LaunchAgents (they don't inherit the shell PATH).
+# Prefer the active node (mise/nvm/direct install) — the runtime native modules were
+# built against — then asdf's direct install, then Homebrew, then /usr/local.
+resolve_node_bin_dir() {
+    if command -v asdf &>/dev/null; then
+        echo "$(asdf where nodejs 2>/dev/null)/bin"
+    elif command -v node &>/dev/null; then
+        dirname "$(command -v node)"
+    elif [ -x /opt/homebrew/bin/node ]; then
+        echo /opt/homebrew/bin
+    else
+        echo /usr/local/bin
+    fi
+}

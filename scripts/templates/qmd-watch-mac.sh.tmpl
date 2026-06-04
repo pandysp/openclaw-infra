@@ -14,7 +14,7 @@ EMBED_LOCK="/tmp/qmd-embed-global.lock"
 
 export QMD_CONFIG_DIR="$WORKSPACE/.qmd"
 export INDEX_PATH="$WORKSPACE/.qmd/index.sqlite"
-export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$HOME/.bun/bin:$PATH"  # bun first; inherit LaunchAgent PATH (carries active node)
 
 command -v fswatch &>/dev/null || { echo "Error: fswatch not found. Install with: brew install fswatch" >&2; exit 1; }
 command -v qmd &>/dev/null || { echo "Error: qmd not found" >&2; exit 1; }
