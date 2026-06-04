@@ -7,6 +7,11 @@ Thumbs.db
 *.swp
 *~
 
+# Python bytecode
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Package installs (persistent but not synced to git)
 .venv/
 .packages/
@@ -27,3 +32,8 @@ node_modules/
 
 # Git proxy config (written by plugins role)
 .git-proxy-config
+
+# Audit findings — regenerable observability data written by `audit --auto`.
+# Findings are deterministic from current vault state; each machine regenerates
+# its own. Gitignored to avoid commit-log churn on hourly auto-sync.
+notes/_audits/findings/

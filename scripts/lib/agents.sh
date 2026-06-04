@@ -49,3 +49,13 @@ workspace_repo_name() {
         echo "openclaw-workspace-$1"
     fi
 }
+
+# Local workspace dir: $HOME/main-workspace for the default agent (main),
+# otherwise <WORKSPACES_DIR>/<id>-workspace.  Args: $1=agent_id  $2=WORKSPACES_DIR
+workspace_dir_for() {
+    if is_default_agent "$1"; then
+        echo "$HOME/main-workspace"
+    else
+        echo "$2/${1}-workspace"
+    fi
+}

@@ -27,7 +27,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/agents.sh"
 
-WORKSPACES_DIR="$HOME/projects/workspaces"
+WORKSPACES_DIR="$HOME/code/personal/workspaces"
 GITIGNORE_SRC="$SCRIPT_DIR/../ansible/roles/workspace/files/gitignore-workspace"
 SYNC_TEMPLATE="$SCRIPT_DIR/templates/workspace-git-sync-mac.sh.tmpl"
 SYNC_BIN_DIR="$HOME/.local/bin"
@@ -41,6 +41,11 @@ INITIAL_SYNC_TIMEOUT=120
 # asdf shims don't work in LaunchAgent context — use the direct install path.
 if command -v asdf &>/dev/null; then
     NODE_BIN_DIR="$(asdf where nodejs 2>/dev/null)/bin"
+elif command -v node &>/dev/null; then
+    # Active node (mise/nvm/direct install) — the runtime that obsidian-headless's
+    # native modules (better-sqlite3) were built against. LaunchAgents don't inherit
+    # the shell PATH, so resolve the concrete bin dir now, at setup time.
+    NODE_BIN_DIR="$(dirname "$(command -v node)")"
 elif [ -x "/opt/homebrew/bin/node" ]; then
     NODE_BIN_DIR="/opt/homebrew/bin"
 else
@@ -172,7 +177,7 @@ log "Step 1: Git repository setup"
 
 for agent_id in "${AGENT_IDS[@]}"; do
     repo_name=$(workspace_repo_name "$agent_id")
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
 
     if [ ! -d "$workspace_dir" ]; then
         warn "Workspace directory missing: $workspace_dir — skipping"
@@ -252,7 +257,7 @@ echo ""
 log "Step 2: Git sync scripts + LaunchAgents (hourly at :30)"
 
 for agent_id in "${AGENT_IDS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
 
     if [ ! -d "$workspace_dir/.git" ]; then
         warn "$agent_id has no .git — skipping git sync setup"
@@ -319,7 +324,7 @@ echo ""
 log "Step 3: Obsidian Headless vault linking"
 
 for agent_id in "${AGENT_IDS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
     vault_name="${agent_id}-workspace"
 
     if [ ! -d "$workspace_dir" ]; then
@@ -379,7 +384,7 @@ echo ""
 log "Step 4: Obsidian Headless LaunchAgents (continuous sync)"
 
 for agent_id in "${AGENT_IDS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
 
     if [ ! -d "$workspace_dir" ]; then
         warn "Workspace missing: $workspace_dir — skipping"
