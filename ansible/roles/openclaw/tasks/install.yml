@@ -144,6 +144,35 @@
           npm install -g openclaw@{{ openclaw_version }}
           {% endif %}
 
+# Raw `npm install -g` bypasses openclaw's managed package-update path, which
+# runs `doctor --fix` to apply config-schema migrations before restart
+# (upstream since 2026.4.25). Run it explicitly so migrations (agentRuntime.id,
+# auth-profiles flattening, streaming.preview rename, ...) happen with the NEW
+# CLI against the existing config, before the gateway restarts on the new code.
+# Upgrade-only: on a fresh install there is no config to migrate yet (onboard
+# runs later), and --non-interactive applies safe migrations only.
+# Deliberately OUTSIDE the install block: a migration failure must be visible
+# and must NOT trigger the rescue path (restoring the old binary against an
+# already-migrated, version-stamped config would be a split-brain).
+- name: Run config migrations (doctor --fix)
+  ansible.builtin.command: openclaw doctor --fix --non-interactive
+  register: openclaw_doctor_fix
+  changed_when: false
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+    PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
+  when:
+    - openclaw_needs_install | bool
+    - openclaw_binary.stat.exists
+    - not ansible_check_mode
+
+- name: Show doctor migration output
+  ansible.builtin.debug:
+    msg: "{{ openclaw_doctor_fix.stdout_lines | default(['(skipped)']) }}"
+  when:
+    - openclaw_needs_install | bool
+    - openclaw_binary.stat.exists
+
 - name: Show current version
   ansible.builtin.debug:
     msg: "OpenClaw {{ openclaw_version }} {{ 'already installed' if not (openclaw_needs_install | bool) else 'installed successfully' }}"

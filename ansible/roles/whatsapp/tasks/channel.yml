@@ -9,13 +9,10 @@
     export XDG_RUNTIME_DIR=/run/user/1000
     CHANGED=""
 
-    {# WhatsApp is built into core since 2026.3.22 - no plugin to enable. #}
-    {# Clean up stale plugins.entries.whatsapp if left over from pre-2026.3.22. #}
-    # Best-effort: attempt the unset and tolerate "absent" (openclaw's get/unset
-    # disagree on existence, so drive off the unset's own exit code).
-    if openclaw config unset plugins.entries.whatsapp >/dev/null 2>&1; then
-        CHANGED="yes"
-    fi
+    {# WhatsApp is the @openclaw/whatsapp plugin again since 2026.5.12 (installed   #}
+    {# by plugin.yml) — plugins.entries.whatsapp is now its live config entry.       #}
+    {# Do NOT unset it (the pre-2026.3.22 "stale config" cleanup that used to live  #}
+    {# here would today disable the channel).                                        #}
 
     # Build DM allowFrom list from WhatsApp agents with DM deliver_to (string array, not int)
     # NOTE: allowFrom must be set BEFORE dmPolicy=allowlist, otherwise validation rejects

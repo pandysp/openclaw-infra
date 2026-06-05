@@ -42,7 +42,7 @@
 #     deliver_type: "dm"
 #     deliver_channel: "telegram"      # telegram (default), whatsapp, or discord
 #     heartbeat_every: "15m"
-#     heartbeat_model: "claude-cli/claude-opus-4-6"  # override default Sonnet
+#     heartbeat_model: "anthropic/claude-opus-4-6"  # override default Sonnet
 #     sandbox_mode: "off"  # override default sandbox mode (also sets exec.host=gateway)
 #   - id: "second-agent"
 #     is_default: false

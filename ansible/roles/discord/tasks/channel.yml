@@ -3,7 +3,8 @@
 # Follows the telegram channel.yml pattern: JSON-normalized policy config.
 # Key differences from Telegram:
 #   - Uses channels.discord.token (not botToken) — Discord schema field name
-#   - Uses channels.discord.enabled (built-in channel like Telegram, not a plugin like WhatsApp)
+#   - Uses channels.discord.enabled (the channel runtime ships as the @openclaw/discord
+#     plugin since 2026.5.x — installed by plugin.yml — but channel config stays here)
 #   - Guild config at channels.discord.guilds.<guildId> — uses "users" array (Discord schema,
 #     not "allowFrom" like Telegram/WhatsApp)
 #   - requireMention: false (private server; set true for public servers)

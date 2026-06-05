@@ -5,9 +5,6 @@
 - name: Patch heartbeat group delivery bug
   ansible.builtin.include_tasks: patch-heartbeat-group-fix.yml
 
-- name: Patch CLI backend content triggers
-  ansible.builtin.include_tasks: patch-cli-backend-triggers.yml
-
 - name: Set up Claude CLI auth
   ansible.builtin.include_tasks: claude-cli-auth.yml
 

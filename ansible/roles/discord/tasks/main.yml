@@ -1,3 +1,6 @@
 ---
+- name: Install Discord channel plugin
+  ansible.builtin.include_tasks: plugin.yml
+
 - name: Configure Discord channel
   ansible.builtin.include_tasks: channel.yml

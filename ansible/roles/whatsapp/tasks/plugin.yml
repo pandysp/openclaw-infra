@@ -1,0 +1,56 @@
+---
+# WhatsApp channel plugin (@openclaw/whatsapp).
+#
+# Upstream externalized the WhatsApp channel out of core (2026.5.12): the
+# Baileys runtime now ships as the @openclaw/whatsapp plugin and core keeps
+# only Telegram. Without this plugin installed and allowlisted, the
+# channels.whatsapp.* config survives an upgrade but the channel silently
+# never starts. Pinned in lockstep with openclaw_version — channel plugins
+# are published per core release.
+
+# Version via `plugins inspect` — install paths vary by mechanism
+# (~/.openclaw/extensions/<id> vs ~/.openclaw/npm/projects/...), so never
+# infer from disk layout. Inspect fails/empty when the plugin is absent.
+- name: Read installed WhatsApp plugin version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins inspect whatsapp --json 2>/dev/null \
+      | jq -r '.install.resolvedVersion // .plugin.version // empty' || echo ""
+  args:
+    executable: /bin/bash
+  register: whatsapp_plugin_installed
+  changed_when: false
+
+# --force: replace any existing install record (e.g. an unpinned or
+# version-drifted one left by `doctor --fix` auto-repair).
+- name: "Install WhatsApp channel plugin (@openclaw/whatsapp@{{ openclaw_version }})"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins install --pin --force "@openclaw/whatsapp@{{ openclaw_version }}"
+  args:
+    executable: /bin/bash
+  when: whatsapp_plugin_installed.stdout | trim != openclaw_version
+  notify: restart openclaw-gateway
+
+# plugins.allow is owned declaratively by the config role (single writer —
+# it lists "whatsapp" whenever WhatsApp agents are configured). Here we only
+# ensure the entry flag: the gateway flips plugins.entries.whatsapp.enabled
+# to false while a plugin is blocked, and it stays false after unblocking.
+- name: Ensure WhatsApp plugin is enabled
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    ENABLED=$(openclaw plugins list --json 2>/dev/null | jq -r '.plugins[] | select(.id=="whatsapp") | .enabled')
+    if [ "$ENABLED" != "true" ]; then
+        openclaw plugins enable whatsapp
+        echo "ENABLED"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: whatsapp_plugin_enable
+  changed_when: "'ENABLED' in whatsapp_plugin_enable.stdout"
+  notify: restart openclaw-gateway

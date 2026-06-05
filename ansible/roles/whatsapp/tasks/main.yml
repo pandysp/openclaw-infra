@@ -1,4 +1,7 @@
 ---
+- name: Install WhatsApp channel plugin
+  ansible.builtin.include_tasks: plugin.yml
+
 - name: Configure WhatsApp channel
   ansible.builtin.include_tasks: channel.yml
 
