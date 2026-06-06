@@ -30,7 +30,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/agents.sh"
 
-WORKSPACES_DIR="$HOME/projects/workspaces"
+WORKSPACES_DIR="$HOME/code/personal/workspaces"
 WATCH_TEMPLATE="$SCRIPT_DIR/templates/qmd-watch-mac.sh.tmpl"
 BIN_DIR="$HOME/.local/bin"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -96,7 +96,7 @@ show_status() {
     echo "==================="
     for agent_id in $(get_agent_ids); do
         local agent_port="${PORT_MAP[$agent_id]}"
-        local workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+        local workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
         echo ""
         echo "--- $agent_id (port $agent_port) ---"
 
@@ -223,7 +223,7 @@ echo ""
 log "Step 1: Initialize qmd indexes"
 
 for agent_id in "${SELECTED_AGENTS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
 
     if [ ! -d "$workspace_dir" ]; then
         warn "Workspace missing: $workspace_dir — skipping"
@@ -303,7 +303,7 @@ echo ""
 log "Step 2: Install watcher scripts"
 
 for agent_id in "${SELECTED_AGENTS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
 
     if [ ! -d "$workspace_dir" ]; then
         continue
@@ -329,10 +329,11 @@ echo ""
 log "Step 3: Create LaunchAgents"
 
 QMD_BIN="$(command -v qmd || echo "$HOME/.bun/bin/qmd")"
-QMD_LAUNCHAGENT_PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+QMD_NODE_BIN_DIR="$(resolve_node_bin_dir)"
+QMD_LAUNCHAGENT_PATH="$HOME/.bun/bin:${QMD_NODE_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 for agent_id in "${SELECTED_AGENTS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
     agent_port="${PORT_MAP[$agent_id]}"
 
     if [ ! -d "$workspace_dir" ]; then
@@ -435,7 +436,7 @@ echo ""
 log "Step 4: Loading LaunchAgents"
 
 for agent_id in "${SELECTED_AGENTS[@]}"; do
-    workspace_dir="$WORKSPACES_DIR/${agent_id}-workspace"
+    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
 
     if [ ! -d "$workspace_dir" ]; then
         continue

@@ -64,7 +64,7 @@
             # Guard: if the config key was wiped (e.g. by onboard), force re-set
             # even if hash matches. config get on secrets returns redacted text,
             # but returns non-zero / "not found" if the key is missing entirely.
-            key_exists=$(openclaw config get "$key" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || key_exists=""
+            key_exists=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || key_exists=""
             if [ "$desired_hash" != "$current_hash" ] || [ -z "$key_exists" ]; then
                 openclaw config set "$key" "$value"
                 echo "$desired_hash" > "$HASH_DIR/$hash_name"
@@ -73,7 +73,7 @@
         }
 
         # Auth: token mode
-        CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_MODE=""
+        CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_MODE=""
         if [ "$CURRENT_MODE" != "token" ]; then
             openclaw config set gateway.auth.mode token
             CHANGED="yes"
@@ -88,12 +88,12 @@
         # config validation in 2026.3.24+ (normalizeLegacyWebSearchConfigRecord), and the xai
         # provider lacks getConfiguredCredentialValue to read the migrated value.
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
-        CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_PROVIDER=""
+        CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_PROVIDER=""
         if [ "$CURRENT_PROVIDER" != "grok" ]; then
             openclaw config set tools.web.search.provider grok
             CHANGED="yes"
         fi
-        CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_TIMEOUT=""
+        CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_TIMEOUT=""
         if [ "$CURRENT_TIMEOUT" != "60" ]; then
             openclaw config set tools.web.search.timeoutSeconds 60
             CHANGED="yes"
@@ -208,7 +208,7 @@
         check_set() {
             local key="$1" desired="$2"
             local current
-            current=$(openclaw config get "$key" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || current=""
+            current=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || current=""
             if [ "$current" != "$desired" ]; then
                 openclaw config set "$key" "$desired"
                 CHANGED="yes"
@@ -234,7 +234,7 @@
         check_set_json() {
             local key="$1" desired="$2"
             local current c_norm d_norm
-            current=$(openclaw config get "$key" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || current=""
+            current=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || current=""
             c_norm=$(echo "$current" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
             d_norm=$(echo "$desired" | jq -cS '.')
             if [ "$c_norm" = "PARSE_FAIL" ] || [ "$c_norm" != "$d_norm" ]; then
@@ -271,9 +271,13 @@
         mkdir -p "$HASH_DIR"
         DESIRED_HASH=$(echo "$DESIRED_MODELS" | jq -cS '.' | sha256sum | cut -d' ' -f1)
         CURRENT_HASH=$(cat "$HASH_DIR/custom-models" 2>/dev/null) || CURRENT_HASH=""
-        MODELS_EXISTS=$(openclaw config get models.mode 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || MODELS_EXISTS=""
+        MODELS_EXISTS=$(openclaw config get models.mode 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || MODELS_EXISTS=""
         if [ "$DESIRED_HASH" != "$CURRENT_HASH" ] || [ -z "$MODELS_EXISTS" ]; then
-            openclaw config set models --json "$DESIRED_MODELS"
+            # --replace: since 2026.4.22, models.providers is a protected map path that
+            # rejects replacements removing existing entries (e.g. a gateway-discovered
+            # model or a narrowed model set on day-2). Our declarative tree is
+            # authoritative — a full replace is the intent.
+            openclaw config set models --json "$DESIRED_MODELS" --replace
             echo "$DESIRED_HASH" > "$HASH_DIR/custom-models"
             CHANGED="yes"
         fi
@@ -295,8 +299,11 @@
         # Plugin loading allowlist — only trusted plugins can load into gateway
         # Includes bundled plugins (device-pair, memory-core, etc.) because
         # plugins.allow blocks ALL plugins not listed, including bundled ones.
-        {# WhatsApp plugin removed in 2026.3.22 (built into core). Do not list in plugins.allow. #}
-        {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram"] %}
+        # "anthropic" carries the claude-cli backend (bundled plugin since 2026.6.1)
+        # — without it model turns fail with MissingAgentHarnessError.
+        {# WhatsApp/Discord ship as external channel plugins again since 2026.5.12 #}
+        {# (installed by each channel role in plugin.yml); allowlist when configured. #}
+        {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram","anthropic"] %}
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("xai") %}
         {% endif %}
@@ -305,6 +312,12 @@
         {% endif %}
         {% if openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
+        {% endif %}
+        {% if openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
+        {%   set _ = plugin_allow.append("whatsapp") %}
+        {% endif %}
+        {% if discord_bot_token is defined and discord_bot_token | length > 0 %}
+        {%   set _ = plugin_allow.append("discord") %}
         {% endif %}
         check_set_json plugins.allow '{{ plugin_allow | to_json }}'
 
@@ -347,7 +360,7 @@
 
         # Heartbeat interval
         check_set agents.defaults.heartbeat.every "{{ openclaw_heartbeat_interval }}"
-        check_set agents.defaults.heartbeat.model "claude-cli/claude-sonnet-4-6"
+        check_set agents.defaults.heartbeat.model "anthropic/claude-sonnet-4-6"
         {% if openclaw_heartbeat_active_hours is defined and openclaw_heartbeat_active_hours %}
         check_set_json agents.defaults.heartbeat.activeHours '{{ openclaw_heartbeat_active_hours | to_json }}'
         {% endif %}
@@ -456,7 +469,7 @@
         export XDG_RUNTIME_DIR=/run/user/1000
 
         # Step 1: Get nodes status JSON (fail visibly if gateway is down)
-        NODES_RAW=$(openclaw nodes status --json 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || {
+        NODES_RAW=$(openclaw nodes status --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
             echo "WARNING: 'openclaw nodes status --json' failed (rc=$?): $NODES_RAW"
             echo "  Gateway may not be running. Check: systemctl --user status openclaw-gateway"
             NODES_RAW=""
@@ -474,7 +487,7 @@
 
         # Step 3: Pin or warn — only set if different from current
         if [ -n "$NODE_ID" ]; then
-            CURRENT_NODE=$(openclaw config get tools.exec.node 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || CURRENT_NODE=""
+            CURRENT_NODE=$(openclaw config get tools.exec.node 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_NODE=""
             if [ "$CURRENT_NODE" = "$NODE_ID" ]; then
                 echo "Node pin already correct: ${NODE_ID:0:12}..."
             else
@@ -587,13 +600,56 @@
   changed_when: "'CHANGED:' in auth_profiles_result.stdout"
   notify: restart openclaw-gateway
 
+# agents.defaults.models is the authoritative model allowlist + runtime mapping
+# (agentRuntime.id=claude-cli keeps turns on the claude CLI / Max subscription).
+# Protected map path since 2026.4.22 — --replace declares our tree authoritative,
+# which also clears stale legacy entries (e.g. "claude-cli/<model>" ids).
+- name: Pin agent model allowlist with claude-cli runtime mapping
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    DESIRED='{{ openclaw_agent_models | to_json }}'
+    CURRENT=$(openclaw config get agents.defaults.models 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT="{}"
+    C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED" | jq -cS '.')
+    if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
+        openclaw config set agents.defaults.models --json "$DESIRED" --replace
+        echo "UPDATED"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: agent_models_result
+  changed_when: "'UPDATED' in agent_models_result.stdout"
+  notify: restart openclaw-gateway
+
+# The claude-cli backend ships as the bundled "anthropic" plugin (2026.6.1) and is
+# default-off — enable it explicitly or model turns fail with MissingAgentHarnessError.
+- name: Ensure anthropic plugin (claude-cli backend) is enabled
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    STATUS=$(openclaw plugins list --json 2>/dev/null | jq -r '.plugins[] | select(.id=="anthropic") | .enabled')
+    if [ "$STATUS" != "true" ]; then
+        openclaw plugins enable anthropic
+        echo "ENABLED"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: anthropic_plugin_enable
+  changed_when: "'ENABLED' in anthropic_plugin_enable.stdout"
+  notify: restart openclaw-gateway
+
 - name: Migrate session model provider to match primary model
   ansible.builtin.shell: |
     set -euo pipefail
     python3 << 'PYEOF'
     import json, glob
 
-    # Extract provider prefix from the primary model (e.g., "claude-cli" from "claude-cli/claude-opus-4-6")
+    # Extract provider prefix from the primary model (e.g., "anthropic" from "anthropic/claude-opus-4-6")
     primary = "{{ openclaw_model_primary }}"
     if "/" not in primary:
         raise ValueError(f"openclaw_model_primary must be provider/model format, got: {primary}")

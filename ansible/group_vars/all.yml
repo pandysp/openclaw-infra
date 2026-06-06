@@ -3,9 +3,29 @@
 # Secrets are passed via scripts/provision.sh from Pulumi config.
 
 openclaw_timezone: "Europe/Berlin"
-openclaw_model_primary: "claude-cli/claude-opus-4-6"
+# Canonical form since 2026.6.1: anthropic/<model> + an agentRuntime.id=claude-cli
+# mapping in agents.defaults.models (see openclaw_agent_models below) keeps turns on
+# the claude CLI backend (Max subscription). The legacy "claude-cli/<model>" ids fail
+# strict model validation (no models.providers["claude-cli"] catalog entry exists).
+openclaw_model_primary: "anthropic/claude-opus-4-6"
 openclaw_model_fallbacks: []
 openclaw_thinking_default: "high"
+
+# Model allowlist for agents, with explicit agent-runtime mapping (protected map
+# path — written with --replace, this tree is authoritative). Every model referenced
+# by primary/fallbacks/heartbeat must be listed here; agentRuntime.id=claude-cli
+# routes it through the claude CLI instead of the direct Anthropic API.
+openclaw_agent_models:
+  "anthropic/claude-opus-4-6":
+    alias: "opus"
+    agentRuntime:
+      id: "claude-cli"
+  "anthropic/claude-sonnet-4-6":
+    # alias is auto-derived by the gateway and persisted; declare it so the
+    # idempotency compare converges instead of rewriting every run.
+    alias: "sonnet"
+    agentRuntime:
+      id: "claude-cli"
 
 # CLI backend: OpenClaw shells out to the `claude` CLI binary which manages its own
 # OAuth auth (Claude Max subscription). No direct Anthropic API calls for the primary model.
@@ -31,7 +51,7 @@ openclaw_custom_models:
           contextWindow: 200000
           maxTokens: 128000
 nodejs_major_version: 25
-openclaw_version: "2026.4.15"
+openclaw_version: "2026.6.1"
 openclaw_heartbeat_interval: "30m"
 openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
 openclaw_cooldown_failure_window_hours: 1  # reset cooldown error count after 1h (default: 24)

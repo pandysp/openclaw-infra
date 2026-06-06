@@ -1,10 +1,15 @@
 ---
-# Patch for upstream bug #18573: heartbeat delivery to Telegram groups
+# Patch for an upstream bug: heartbeat delivery to Telegram groups
 # falls back to the default user's DM because resolveHeartbeatSenderId()
 # returns allowList[0] when the group ID doesn't match allowFrom.
 # Fix: prefer candidates[0] (deliveryTo) over allowList fallback.
 # See docs/HEARTBEAT-GROUP-DELIVERY-FIX.md for full details.
-# Remove when upstream #18573 is fixed.
+#
+# NOTE: there is no tracking issue — #18573 (previously referenced here) is a
+# different cron-announce bug, closed not_planned. Removal trigger is a code
+# check, not an issue: remove this patch when
+#   grep -r 'if (allowList.length > 0) return allowList\[0\];' dist/
+# no longer matches (still present and byte-identical as of 2026.6.1).
 
 - name: Find resolveHeartbeatSenderId files to patch
   ansible.builtin.shell: |

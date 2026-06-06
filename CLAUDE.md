@@ -210,7 +210,7 @@ openclaw node restart   # if node exec is enabled
 openclaw security audit --deep
 ```
 
-**Expected output:** `0 critical · 0 warn · 1 info` (after applying permission fixes) — this deployment uses Tailscale identity auth with device pairing, which passes all security checks.
+**Expected output (as of 2026.6.1):** `0 critical · 3 warn · 2 info` — run it **on the VPS via SSH** (running locally audits your Mac instead). The 3 warnings flag deliberate config and are accepted: `dangerouslyAllowExternalBindSources` (sandbox bind mounts), `tools.exec.security=full` (gateway exec gated by `elevated=false` + node-side approvals), and the multi-user heuristic (Telegram/Discord group allowlists — personal deployment, one trusted operator).
 
 ### Destroy Infrastructure
 
@@ -400,7 +400,7 @@ openclaw channels status && openclaw cron list
 
 ## WhatsApp Integration (Optional)
 
-Uses Baileys/WhatsApp Web protocol (not official Business API). **Sessions expire every ~14 days** — a health-check cron alerts via Telegram when re-authentication is needed. Set `deliver_channel: "whatsapp"` in the agent's `openclaw.yml` entry.
+Uses Baileys/WhatsApp Web protocol (not official Business API). Since openclaw 2026.5.12 the channel ships as the external `@openclaw/whatsapp` plugin — the whatsapp role installs it pinned to `openclaw_version` and the config role allowlists it; channel config stays at `channels.whatsapp.*`. **Sessions expire every ~14 days** — a health-check cron alerts via Telegram when re-authentication is needed. Set `deliver_channel: "whatsapp"` in the agent's `openclaw.yml` entry.
 
 ```bash
 pulumi config set whatsappNiciPhone "+491234567890"

@@ -147,7 +147,7 @@
 - name: Get existing cron jobs
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw cron list --json --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d'
+    openclaw cron list --json --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
   args:
     executable: /bin/bash
   register: existing_cron
@@ -317,7 +317,7 @@
       ansible.builtin.shell: |
         export XDG_RUNTIME_DIR=/run/user/1000
         for attempt in 1 2 3; do
-            RESULT=$(openclaw cron list --json --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d')
+            RESULT=$(openclaw cron list --json --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d')
             [ -n "$RESULT" ] && break
             sleep 5
         done

@@ -49,3 +49,28 @@ workspace_repo_name() {
         echo "openclaw-workspace-$1"
     fi
 }
+
+# Local workspace dir: $HOME/main-workspace for the default agent (main),
+# otherwise <WORKSPACES_DIR>/<id>-workspace.  Args: $1=agent_id  $2=WORKSPACES_DIR
+workspace_dir_for() {
+    if is_default_agent "$1"; then
+        echo "$HOME/main-workspace"
+    else
+        echo "$2/${1}-workspace"
+    fi
+}
+
+# Resolve a concrete node bin dir for LaunchAgents (they don't inherit the shell PATH).
+# Prefer the active node (mise/nvm/direct install) — the runtime native modules were
+# built against — then asdf's direct install, then Homebrew, then /usr/local.
+resolve_node_bin_dir() {
+    if command -v asdf &>/dev/null; then
+        echo "$(asdf where nodejs 2>/dev/null)/bin"
+    elif command -v node &>/dev/null; then
+        dirname "$(command -v node)"
+    elif [ -x /opt/homebrew/bin/node ]; then
+        echo /opt/homebrew/bin
+    else
+        echo /usr/local/bin
+    fi
+}

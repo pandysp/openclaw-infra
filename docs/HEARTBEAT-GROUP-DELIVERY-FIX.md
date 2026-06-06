@@ -7,13 +7,13 @@ OpenClaw has a bug where heartbeat delivery to Telegram **groups** silently fall
 **Affected agents:** `tl`, `ph` (any agent with `deliver_type: group`)
 
 **Upstream issues:**
-- [#18573](https://github.com/openclaw/openclaw/issues/18573) — Heartbeat target resolves wrong for non-DM targets (open, no PR)
+- No tracking issue for *this* bug. #18573 (previously referenced here) actually tracks a different symptom — cron announce resolving a literal `@heartbeat` chat ID — and was closed `not_planned` 2026-03-15. The `allowList[0]` fallback bug has no upstream issue; the source check in "When to remove" is authoritative.
 - [#22298](https://github.com/openclaw/openclaw/issues/22298) — Cron announce delivery fails with "pairing required" (PR #22838, not merged)
 - [#22430](https://github.com/openclaw/openclaw/issues/22430) — Broader cron announce delivery failures (open)
 
 ## Root Cause
 
-In `resolveHeartbeatSenderId()` (file: `dist/reply-*.js` and `dist/subagent-registry-*.js`):
+In `resolveHeartbeatSenderId()` (defined once in `dist/targets-*.js` as of 2026.4.15+; earlier versions bundled it into other chunks):
 
 1. The heartbeat delivery target correctly resolves to the group ID (e.g., `-5046803888`)
 2. `resolveHeartbeatSenderId` tries to match this against Telegram's `allowFrom` list
@@ -38,12 +38,7 @@ This makes `candidates[0]` (which is `deliveryTo` — the configured group ID) p
 
 ### Files to patch
 
-The function exists in two bundled files (search by function name since hashes change per version):
-
-1. `dist/reply-*.js` — search for `function resolveHeartbeatSenderId`
-2. `dist/subagent-registry-*.js` — same function, different chunk
-
-Both must be patched.
+The function is defined once, in `dist/targets-*.js` (the chunk hash changes per release — always locate it by grepping for `function resolveHeartbeatSenderId`, never by filename; bundle splitting has changed across versions). Other chunks import it; only the defining file needs the patch. The Ansible task greps the whole `dist/` tree by function name, so it stays correct if upstream re-splits the bundles.
 
 ### After patching
 
@@ -90,4 +85,11 @@ for agent in [\"tl\", \"ph\"]:
 
 ## When to remove
 
-Remove this patch when upstream #18573 is fixed and deployed. Check the [issue](https://github.com/openclaw/openclaw/issues/18573) periodically.
+There is no upstream issue to watch (see "Upstream issues"). Remove this patch when the buggy line disappears from the dist on the target version:
+
+```bash
+grep -r "if (allowList.length > 0) return allowList\[0\];" \
+  ~/.npm-global/lib/node_modules/openclaw/dist/
+```
+
+Re-check on every `openclaw_version` bump (still present and byte-identical as of 2026.6.1). The patch task's own check/verify steps report this state on every provision run.

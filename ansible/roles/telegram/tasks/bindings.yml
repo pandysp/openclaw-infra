@@ -27,7 +27,7 @@
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
         DESIRED=$(cat /tmp/ansible_bindings.json)
-        CURRENT=$(openclaw config get bindings 2>&1 | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d') || {
+        CURRENT=$(openclaw config get bindings 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
             if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
                 CURRENT="[]"
             else
@@ -72,7 +72,7 @@
 - name: Verify bindings
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw agents list --json --bindings 2>/dev/null | sed '/^\[mcp-adapter\]/d; /^\[plugins\]/d'
+    openclaw agents list --json --bindings 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
   args:
     executable: /bin/bash
   register: agents_with_bindings

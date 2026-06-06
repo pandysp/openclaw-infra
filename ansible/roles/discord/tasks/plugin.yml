@@ -1,0 +1,56 @@
+---
+# Discord channel plugin (@openclaw/discord).
+#
+# Upstream externalized the Discord channel out of core (in the 2026.5.x line,
+# same move as WhatsApp): discord.js now ships as the @openclaw/discord plugin
+# and core keeps only Telegram. Without this plugin installed and allowlisted,
+# the channels.discord.* config survives an upgrade but the channel silently
+# never starts. Pinned in lockstep with openclaw_version — channel plugins
+# are published per core release.
+
+# Version via `plugins inspect` — install paths vary by mechanism
+# (~/.openclaw/extensions/<id> vs ~/.openclaw/npm/projects/...), so never
+# infer from disk layout. Inspect fails/empty when the plugin is absent.
+- name: Read installed Discord plugin version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins inspect discord --json 2>/dev/null \
+      | jq -r '.install.resolvedVersion // .plugin.version // empty' || echo ""
+  args:
+    executable: /bin/bash
+  register: discord_plugin_installed
+  changed_when: false
+
+# --force: replace any existing install record (e.g. an unpinned or
+# version-drifted one left by `doctor --fix` auto-repair).
+- name: "Install Discord channel plugin (@openclaw/discord@{{ openclaw_version }})"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins install --pin --force "@openclaw/discord@{{ openclaw_version }}"
+  args:
+    executable: /bin/bash
+  when: discord_plugin_installed.stdout | trim != openclaw_version
+  notify: restart openclaw-gateway
+
+# plugins.allow is owned declaratively by the config role (single writer —
+# it lists "discord" whenever discord_bot_token is set). Here we only ensure
+# the entry flag: the gateway flips plugins.entries.discord.enabled to false
+# while a plugin is blocked, and it stays false after unblocking.
+- name: Ensure Discord plugin is enabled
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    ENABLED=$(openclaw plugins list --json 2>/dev/null | jq -r '.plugins[] | select(.id=="discord") | .enabled')
+    if [ "$ENABLED" != "true" ]; then
+        openclaw plugins enable discord
+        echo "ENABLED"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: discord_plugin_enable
+  changed_when: "'ENABLED' in discord_plugin_enable.stdout"
+  notify: restart openclaw-gateway

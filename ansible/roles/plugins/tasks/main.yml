@@ -415,6 +415,7 @@
     label: "{{ item.agent_id }}"
   when: lookup('vars', item.token_var, default='') | length > 0
   register: github_tokens_changed
+  tags: [github_tokens]
 
 - name: Create codex-proxy-net Docker network
   community.docker.docker_network:
