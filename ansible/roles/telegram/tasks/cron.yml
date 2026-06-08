@@ -65,11 +65,13 @@
         # Read the gateway token from config
         GW_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
 
-        # Use OPENCLAW_TOKEN env var (not --url/--token WSS) because device
-        # pairing operations must work BEFORE the CLI is paired. The WSS route
-        # requires pairing (chicken-and-egg), but OPENCLAW_TOKEN injects the
-        # token at the SDK level, bypassing the WebSocket pairing handshake.
-        DEVICES_OUT=$(OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
+        # Use OPENCLAW_GATEWAY_TOKEN env var (not --url/--token WSS) because
+        # device pairing operations must work BEFORE the CLI is paired. The WSS
+        # route requires pairing (chicken-and-egg); OPENCLAW_GATEWAY_TOKEN
+        # injects the token at the SDK level, bypassing the WebSocket pairing
+        # handshake. (2026.6.1 renamed this from OPENCLAW_TOKEN, which is now
+        # ignored — the old name made approve run unauthenticated and no-op.)
+        DEVICES_OUT=$(OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
             echo "SKIP: devices list failed: $DEVICES_OUT" >&2
             exit 1
         }
@@ -82,8 +84,8 @@
             exit 1
         fi
 
-        # Approve via OPENCLAW_TOKEN (same reason as above)
-        OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
+        # Approve via OPENCLAW_GATEWAY_TOKEN (same reason as above)
+        OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
         echo "PAIRED: approved request $REQUEST_ID"
       args:
         executable: /bin/bash
@@ -246,6 +248,43 @@
             GW_URL="{{ _tailscale_wss_url }}"
             GW_TOKEN="{{ _gw_token.stdout }}"
 
+            # The gateway is restarted immediately before this task (handlers are
+            # flushed) and on a fresh box its WS endpoint can be briefly unready,
+            # so retry transient cron CLI failures instead of aborting the whole
+            # provision on the first hiccup.
+            #
+            # A fresh gateway also requires the CLI device to be paired before WSS
+            # ops (cron add/remove/list) succeed; it returns a pairing-required
+            # error carrying a request id. Retrying alone never clears that, so on
+            # such an error we approve the pending request via
+            # OPENCLAW_GATEWAY_TOKEN (SDK-level token injection that bypasses the
+            # WSS pairing handshake, same as the auto-pair block above) and retry.
+            #
+            # On final failure, persist the error with the gateway token redacted
+            # so it stays diagnosable despite the no_log on this task.
+            CRON_ERR_FILE=/tmp/ansible-cron-error.txt
+            : > "$CRON_ERR_FILE"
+            retry_cron() {
+                local n=0 max=6 out rid
+                while :; do
+                    if out=$("$@" 2>&1); then printf '%s' "$out"; return 0; fi
+                    if printf '%s' "$out" | grep -qiE "pairing required|not approved"; then
+                        rid=$(printf '%s' "$out" | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" | head -1)
+                        if [ -n "$rid" ]; then
+                            OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$rid" >/dev/null 2>&1 || true
+                        else
+                            OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list >/dev/null 2>&1 || true
+                        fi
+                    fi
+                    n=$((n + 1))
+                    if [ "$n" -ge "$max" ]; then
+                        printf '%s\n' "${out//$GW_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
+                        return 1
+                    fi
+                    sleep $((n * 3))
+                done
+            }
+
             # Build desired cron jobs as sorted JSON array (comparable fields only)
             DESIRED=$(jq -n '[]')
             {% for job in active_cron_jobs %}
@@ -287,7 +326,7 @@
                 # Recreate all managed jobs (throttled to avoid overwhelming gateway)
                 {% for job in active_cron_jobs %}
                 MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}")
-                openclaw cron add \
+                retry_cron openclaw cron add \
                     --name "{{ job.name }}" \
                     --cron "{{ job.schedule }}" \
                     --tz "{{ openclaw_timezone }}" \
@@ -295,7 +334,8 @@
                     --agent "{{ job.agent }}" \
                     --message "$MSG" \
                     --deliver --channel {{ agent_channel_map[job.agent] | default('telegram') }} --to "{{ agent_deliver_map[job.agent] }}" \
-                    --url "$GW_URL" --token "$GW_TOKEN"
+                    --url "$GW_URL" --token "$GW_TOKEN" \
+                    || { echo "ERROR: cron add failed for {{ job.name }} after retries" >&2; exit 1; }
                 sleep 1
                 {% endfor %}
 
@@ -306,9 +346,24 @@
           register: cron_sync_result
           changed_when: "'UPDATED' in cron_sync_result.stdout"
           no_log: true
+      rescue:
+        # The sync task is no_log (it embeds the gateway token), so its failure
+        # is censored. Surface the token-redacted error file the retry wrapper
+        # wrote, then re-fail. Safe to display: the token is already redacted.
+        - name: Read redacted cron error
+          ansible.builtin.command: cat /tmp/ansible-cron-error.txt
+          register: cron_err_redacted
+          changed_when: false
+          failed_when: false
+        - name: Show redacted cron error
+          ansible.builtin.debug:
+            msg: "{{ cron_err_redacted.stdout_lines | default(['(no captured error — failure was outside the cron CLI calls)']) }}"
+        - name: Re-fail after surfacing cron error
+          ansible.builtin.fail:
+            msg: "cron sync failed; see redacted gateway error above"
       always:
         - name: Clean up cron temp files
-          ansible.builtin.shell: rm -f /tmp/ansible-cron-list.json /tmp/ansible-cron-msg-*
+          ansible.builtin.shell: rm -f /tmp/ansible-cron-list.json /tmp/ansible-cron-msg-* /tmp/ansible-cron-error.txt
           args:
             executable: /bin/bash
           changed_when: false

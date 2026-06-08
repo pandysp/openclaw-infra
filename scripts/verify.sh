@@ -269,7 +269,12 @@ CHANNELS_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "
 check_channel() {
     local name="$1"
     local line
-    line=$(echo "$CHANNELS_STATUS" | grep -iE "^- $name" | head -1)
+    # `|| true`: an unconfigured channel (no matching line) makes grep exit 1,
+    # which under `set -euo pipefail` would kill the script at the assignment
+    # before the "not configured" branch below can handle it. Only bites when
+    # some channels are absent (staging runs Telegram only; prod has all three,
+    # so every grep matched and it never surfaced there).
+    line=$(echo "$CHANNELS_STATUS" | grep -iE "^- $name" | head -1 || true)
     if [[ -z "$line" ]]; then
         echo "   $name not configured (optional)"
     elif [[ "$line" == *"enabled"* ]]; then

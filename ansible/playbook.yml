@@ -336,7 +336,10 @@
           environment:
             XDG_RUNTIME_DIR: "/run/user/1000"
             PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-            OPENCLAW_TOKEN: "{{ gateway_token }}"
+            # 2026.6.1 honours OPENCLAW_GATEWAY_TOKEN for SDK-level token
+            # injection; the old OPENCLAW_TOKEN is ignored (device approve then
+            # runs unauthenticated and silently no-ops).
+            OPENCLAW_GATEWAY_TOKEN: "{{ gateway_token }}"
           loop: "{{ pending_devices }}"
           loop_control:
             label: "{{ item.value.displayName | default(item.value.deviceId[:16]) }}"
