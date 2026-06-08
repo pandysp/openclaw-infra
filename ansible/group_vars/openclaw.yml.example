@@ -111,6 +111,24 @@
 # # Override excluded folders (default: .git,.venv,node_modules,.cache,.env)
 # obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env,.claude"
 
+# --- Claude Code plugins (optional) ---
+# Plugins installed into the VPS agents' `claude` CLI. This is a per-deployment
+# choice and is NOT defaulted in all.yml — define it here to enable it. Each
+# entry is a plugin name (resolved from any added marketplace) or
+# "<plugin>@<marketplace-owner>" to pin it to a specific marketplace. Keep this
+# in sync with the marketplaces — a plugin that no longer exists in its
+# marketplace fails provisioning.
+#
+# claude_code_plugins:
+#   config_dir: "/home/ubuntu/.openclaw/claude-code-plugins"
+#   marketplaces:
+#     - repo: "anthropics/claude-plugins-official"
+#     - repo: "astral-sh/claude-code-plugins"
+#   plugins:
+#     - "code-review"
+#     - "feature-dev"
+#     - "astral@astral-sh"
+
 # --- Advanced: manual overrides for auto-generated config ---
 # The following variables are normally auto-generated from openclaw_agents.
 # Define them here ONLY if you need non-standard naming or custom server configurations.
