@@ -233,26 +233,15 @@ openclaw_mcp_server_types:
   - type: "node-exec"
     name_prefix: "mac"
 
-# Claude Code plugins for MCP containers
-claude_code_plugins:
-  config_dir: "/home/ubuntu/.openclaw/claude-code-plugins"
-  marketplaces:
-    - repo: "anthropics/claude-plugins-official"
-    - repo: "pandysp/claude-plugins"
-    - repo: "astral-sh/claude-code-plugins"
-  plugins:
-    - "code-review"
-    - "code-simplifier"
-    - "commit-commands"
-    - "feature-dev"
-    - "frontend-design"
-    - "hookify"
-    - "plugin-dev"
-    - "pr-review-toolkit"
-    - "ralph-loop"
-    - "security-guidance"
-    - "astral@astral-sh"
-    - "typescript-lsp@pandysp"
+# Claude Code plugins installed into the VPS agents' `claude` CLI.
+#
+# Intentionally NOT defaulted here: which plugins a deployment wants is a
+# per-deployment choice, and a hardcoded list silently rots when upstream
+# marketplaces change (e.g. a plugin removed from its marketplace breaks
+# provisioning). Define `claude_code_plugins` in group_vars/openclaw.yml to
+# enable it — see openclaw.yml.example for the structure. When it is undefined
+# the plugins role simply skips Claude Code plugin install
+# (`when: claude_code_plugins is defined`).
 
 # Obsidian Headless Sync (obsidian-headless npm package)
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.
