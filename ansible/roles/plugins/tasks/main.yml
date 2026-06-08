@@ -210,6 +210,11 @@
       loop_control:
         label: "{{ item.repo }}"
       register: marketplace_result
+      # git-clones the marketplace repo; retry transient network/git flakes
+      # per item rather than aborting the provision on the first hiccup.
+      until: marketplace_result.rc == 0
+      retries: 3
+      delay: 10
       changed_when: "'Successfully added' in marketplace_result.stdout"
 
     - name: Update plugin marketplaces
@@ -250,6 +255,13 @@
       loop_control:
         label: "{{ item }}"
       register: plugin_result
+      # `claude plugin install` git-clones from a marketplace; on a fresh box
+      # that occasionally flakes (transient network / GitHub hiccup) and would
+      # otherwise abort the whole provision. Retry per item; a genuinely bad
+      # plugin still fails after the attempts and drops into the rescue below.
+      until: plugin_result.rc == 0
+      retries: 3
+      delay: 10
       changed_when: "'OK_EXISTS' not in plugin_result.stdout"
 
     - name: Verify plugins directory exists
