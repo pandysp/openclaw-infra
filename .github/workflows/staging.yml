@@ -233,11 +233,24 @@ jobs:
             | grep -oE "openclaw-staging(-[0-9]+)?" \
             | head -1)
           TAILNET=$(tailscale status --json | jq -r '.MagicDNSSuffix')
-          # Per-agent workspace services (workspace-git-sync-<agent_id>.service)
+          SSH="ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new ubuntu@${HOST}.${TAILNET}"
+          # A freshly-written unit is invisible to the user manager until a
+          # daemon-reload; the role notifies one, but reload before starting so
+          # this trigger never races it. Then list what exists for diagnostics.
+          $SSH "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload"
+          echo "Workspace sync units present on host:"
+          $SSH "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user list-unit-files 'workspace-git-sync-*' --no-legend --no-pager" || true
+          # Kick each per-agent sync. This is an auxiliary trigger — the workspace
+          # role already does the initial commit/push during deploy — so a missing
+          # unit warns loudly but must not sink the phoenix (verify + smoke are the
+          # real gates). A unit that exists but fails to start IS fatal.
           for agent in main test; do
-            ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new \
-              "ubuntu@${HOST}.${TAILNET}" \
-              "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-${agent}.service"
+            unit="workspace-git-sync-${agent}.service"
+            if $SSH "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user cat ${unit} >/dev/null 2>&1"; then
+              $SSH "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start ${unit}"
+            else
+              echo "::warning::${unit} not present on host — skipping its sync trigger (workspace role may not have created it for this agent)"
+            fi
           done
 
       # ── Verify ───────────────────────────────────────────────────
