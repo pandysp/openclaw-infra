@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - uses: actions/checkout@v6
+
       - name: Install hcloud CLI
         run: |
           VERSION=$(curl -s https://api.github.com/repos/hetznercloud/cli/releases/latest | jq -r .tag_name)
@@ -86,3 +88,18 @@ jobs:
               done
             fi
           done
+
+      # Prune leftover openclaw-staging* tailnet devices. Non-ephemeral records
+      # linger after the box is destroyed and collide hostnames (-2, -3, …).
+      # Reuses the OAuth client already used to join the tailnet — no new secret
+      # — as long as that client has the devices:core scope. No-op if absent.
+      - name: Delete stale staging tailnet devices
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          if [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; then
+            echo "TS_OAUTH_* secrets not set — skipping tailnet device cleanup."
+            exit 0
+          fi
+          ./scripts/cleanup-staging-tailnet.sh
