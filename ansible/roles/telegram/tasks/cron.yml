@@ -65,11 +65,13 @@
         # Read the gateway token from config
         GW_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
 
-        # Use OPENCLAW_TOKEN env var (not --url/--token WSS) because device
-        # pairing operations must work BEFORE the CLI is paired. The WSS route
-        # requires pairing (chicken-and-egg), but OPENCLAW_TOKEN injects the
-        # token at the SDK level, bypassing the WebSocket pairing handshake.
-        DEVICES_OUT=$(OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
+        # Use OPENCLAW_GATEWAY_TOKEN env var (not --url/--token WSS) because
+        # device pairing operations must work BEFORE the CLI is paired. The WSS
+        # route requires pairing (chicken-and-egg); OPENCLAW_GATEWAY_TOKEN
+        # injects the token at the SDK level, bypassing the WebSocket pairing
+        # handshake. (2026.6.1 renamed this from OPENCLAW_TOKEN, which is now
+        # ignored — the old name made approve run unauthenticated and no-op.)
+        DEVICES_OUT=$(OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
             echo "SKIP: devices list failed: $DEVICES_OUT" >&2
             exit 1
         }
@@ -82,8 +84,8 @@
             exit 1
         fi
 
-        # Approve via OPENCLAW_TOKEN (same reason as above)
-        OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
+        # Approve via OPENCLAW_GATEWAY_TOKEN (same reason as above)
+        OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
         echo "PAIRED: approved request $REQUEST_ID"
       args:
         executable: /bin/bash
@@ -254,9 +256,9 @@
             # A fresh gateway also requires the CLI device to be paired before WSS
             # ops (cron add/remove/list) succeed; it returns a pairing-required
             # error carrying a request id. Retrying alone never clears that, so on
-            # such an error we approve the pending request via OPENCLAW_TOKEN
-            # (SDK-level token injection, which bypasses the WSS pairing handshake
-            # the same way the auto-pair block above does) and then retry.
+            # such an error we approve the pending request via
+            # OPENCLAW_GATEWAY_TOKEN (SDK-level token injection that bypasses the
+            # WSS pairing handshake, same as the auto-pair block above) and retry.
             #
             # On final failure, persist the error with the gateway token redacted
             # so it stays diagnosable despite the no_log on this task.
@@ -269,9 +271,9 @@
                     if printf '%s' "$out" | grep -qiE "pairing required|not approved"; then
                         rid=$(printf '%s' "$out" | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" | head -1)
                         if [ -n "$rid" ]; then
-                            OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices approve "$rid" >/dev/null 2>&1 || true
+                            OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$rid" >/dev/null 2>&1 || true
                         else
-                            OPENCLAW_TOKEN="$GW_TOKEN" openclaw devices list >/dev/null 2>&1 || true
+                            OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list >/dev/null 2>&1 || true
                         fi
                     fi
                     n=$((n + 1))
