@@ -38,11 +38,27 @@
 - name: Reset SSH connection to pick up new docker group
   ansible.builtin.meta: reset_connection
 
+# On a fresh VPS the user-manager restart above plus the connection reset
+# race against Tailscale SSH accepting a new session — the first reconnect
+# attempt would hard-fail and abort provisioning in the docker role before
+# any later role ran. wait_for_connection actively probes and retries until
+# the session is back instead of failing on the first try. Only fresh
+# installs hit this (the restart is when: changed), so gate it the same way.
+- name: Wait for SSH connection to re-establish after reset
+  ansible.builtin.wait_for_connection:
+    delay: 3
+    timeout: 120
+  when: docker_group_result.changed
+
 - name: Verify docker group membership is active
   ansible.builtin.shell: groups | grep -q docker
   args:
     executable: /bin/bash
   become: false
+  register: docker_group_verify
+  until: docker_group_verify.rc == 0
+  retries: 5
+  delay: 3
   changed_when: false
 
 # Create codex-proxy-net unconditionally for MCP containers (Codex, Claude Code, Pi)

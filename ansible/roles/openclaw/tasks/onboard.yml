@@ -14,6 +14,13 @@
         mode: "0600"
       no_log: true
 
+    # --skip-health: onboarding deliberately uses --skip-daemon (the gateway
+    # service is installed later by daemon.yml). Since 2026.6.1, onboard runs a
+    # post-setup gateway health probe that, with no daemon yet running, fails
+    # with "Gateway did not become reachable" and exits non-zero — even though
+    # the config was written successfully. That error is not "gateway closed",
+    # so the tolerance check below would (wrongly) abort. --skip-health omits
+    # the probe entirely, which is correct for our deferred-daemon flow.
     - name: Run OpenClaw onboarding
       ansible.builtin.shell: |
         set -euo pipefail
@@ -27,7 +34,8 @@
             --gateway-port 18789 \
             --gateway-bind loopback \
             --skip-daemon \
-            --skip-skills 2>&1) || ONBOARD_EXIT=$?
+            --skip-skills \
+            --skip-health 2>&1) || ONBOARD_EXIT=$?
         if [ -n "${ONBOARD_EXIT:-}" ] && [ "$ONBOARD_EXIT" -ne 0 ]; then
             if echo "$ONBOARD_OUTPUT" | grep -q "gateway closed"; then
                 echo "Note: Ignoring expected 'gateway closed' error"
