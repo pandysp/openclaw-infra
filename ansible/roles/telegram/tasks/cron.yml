@@ -254,15 +254,24 @@
             CRON_ERR_FILE=/tmp/ansible-cron-error.txt
             : > "$CRON_ERR_FILE"
             retry_cron() {
-                local n=0 max=5 out
+                local n=0 max=8 out rid
                 while :; do
                     if out=$("$@" 2>&1); then printf '%s' "$out"; return 0; fi
+                    # A fresh CLI device connects over loopback fine but must have
+                    # operator/write scope approved before cron WRITES succeed. The
+                    # gateway returns a pending request id (pairing required, or
+                    # scope upgrade pending approval). Approve it with the loopback
+                    # admin token, then retry — the grant sticks for later writes.
+                    if printf '%s' "$out" | grep -qiE "pairing required|not approved|scope upgrade|more scopes"; then
+                        rid=$(printf '%s' "$out" | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" | head -1)
+                        [ -n "$rid" ] && openclaw devices approve "$rid" >/dev/null 2>&1 || true
+                    fi
                     n=$((n + 1))
                     if [ "$n" -ge "$max" ]; then
                         printf '%s\n' "${out//$OPENCLAW_GATEWAY_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
                         return 1
                     fi
-                    sleep $((n * 3))
+                    sleep $((n * 2))
                 done
             }
 
