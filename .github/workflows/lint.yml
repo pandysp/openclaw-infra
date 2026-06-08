@@ -2,7 +2,11 @@
 #
 # Regression history: PR #15 shipped a YAML comment with an unbalanced
 # apostrophe that Ansible's Jinja2 pre-parser rejected. A bare
-# --syntax-check would have blocked the merge in seconds.
+# --syntax-check would have blocked the merge in seconds — BUT only for
+# statically-reachable tasks. A later apostrophe in cron.yml (pulled in via
+# dynamic `include_tasks`) slipped past `--syntax-check playbook.yml`
+# entirely and only failed at run time. The "Syntax-check included task
+# files" step below closes that gap by statically importing every task file.
 #
 # No secrets, no Pulumi, no Tailscale, no VPS. Should complete in under
 # a minute so it never becomes the bottleneck on a PR.
@@ -35,6 +39,11 @@ jobs:
       - name: Syntax-check playbook
         run: ansible-playbook --syntax-check -i localhost, playbook.yml
         working-directory: ansible
+
+      # Catches unbalanced quotes / Jinja in task files that the playbook pulls
+      # in via dynamic `include_tasks`, which the check above does not parse.
+      - name: Syntax-check included task files
+        run: ./scripts/check-task-syntax.sh
 
   shellcheck:
     runs-on: ubuntu-latest
