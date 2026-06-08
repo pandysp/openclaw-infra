@@ -201,11 +201,21 @@ jobs:
             pulumi cancel --yes --stack staging 2>/dev/null || true
             pulumi refresh --yes --stack staging 2>/dev/null || true
             pulumi config set serverLocation fsn1 --stack staging
-            # The retry may report stale "errored" resources from the first failed attempt
-            # even when Ansible completes successfully. Ignore Pulumi's exit code — the
-            # verification and smoke test steps that follow will catch real failures.
+            # The retry may report stale "errored" resources from the first failed
+            # attempt even when Ansible succeeded, so Pulumi's exit code is not
+            # trustworthy here. But do NOT blindly swallow it — that previously hid a
+            # real Ansible failure (failed=1) behind a green "deploy", which only
+            # surfaced two steps later as a confusing workspace-sync error. Gate on
+            # Ansible's own PLAY RECAP instead: any failed>0 or unreachable>0 is a real
+            # provisioning failure and must fail the step; a non-zero Pulumi exit with a
+            # clean recap is the tolerated stale-resource case.
             set +o pipefail
-            pulumi up --yes --stack staging || true
+            pulumi up --yes --stack staging 2>&1 | tee -a /tmp/pulumi-up.log || true
+            if grep -qE '(failed|unreachable)=[1-9][0-9]*' /tmp/pulumi-up.log; then
+              echo "::error::Ansible reported task failures during provisioning (PLAY RECAP below)"
+              grep -E 'PLAY RECAP|(failed|unreachable)=[1-9]|fatal:' /tmp/pulumi-up.log | tail -30
+              exit 1
+            fi
           else
             exit 1
           fi
