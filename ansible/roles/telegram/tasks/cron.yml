@@ -67,6 +67,95 @@
   no_log: true
   when: gateway_health.rc == 0
 
+# Why: on a fresh box the loopback CLI device (clientId gateway-client) connects
+# as operator but holds no scopes, so the first gateway-mediated write (cron add)
+# is denied with a pending "scope-upgrade" request that normally needs a human to
+# run `devices approve`. Provisioning is already an admin action (SSH + Pulumi
+# secrets), so we complete that one approval non-interactively — but tightly, per
+# the security review:
+#   - idempotent: skips once gateway-client holds operator.write (prod and every
+#     re-provision), so it is a one-time bootstrap, never a retry-loop self-grant;
+#   - pinned: approves ONLY the request id our own trigger write just created
+#     (captured from that command output, all-zero probe id excluded), never an
+#     id scraped from unrelated gateway output;
+#   - fingerprint-verified: re-reads the live gateway pending list and refuses
+#     unless that exact id belongs to clientId gateway-client and requests
+#     operator scopes only;
+#   - least privilege: grants only the requested scopes, not a broad admin set.
+# This is the gateway loopback self-pair path (localBackendSelfPairingOk +
+# operator role), not a bypass. The cron sync itself stays approve-free. The
+# token is read inside the script (not templated in) so it never lands in the
+# rendered task, which keeps this task diagnosable without no_log.
+- name: Bootstrap operator write scope for the loopback CLI device
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    export OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
+    CID="gateway-client"
+    PROBE="00000000-0000-0000-0000-000000000000"
+
+    # True when gateway-client already holds operator.write (live gateway view).
+    has_write() {
+        openclaw devices list --json 2>/dev/null \
+          | jq -e --arg cid "$CID" '[.paired[]? | select(.clientId==$cid) | select(((.scopes // .approvedScopes) // []) | index("operator.write"))] | length > 0' >/dev/null 2>&1
+    }
+
+    if has_write; then
+        echo "SKIP: $CID already holds operator.write"
+        exit 0
+    fi
+
+    # Trigger: a bogus cron remove is a write op the gateway rejects pre-approval,
+    # creating a pending scope-upgrade request and returning its id. Removing a
+    # non-existent id creates no state, so there is nothing to clean up.
+    TRIG=$(openclaw cron remove "$PROBE" 2>&1 || true)
+    RID=$(printf '%s' "$TRIG" \
+        | grep -oiE "requestId:?[[:space:]]*[0-9a-f-]{36}" \
+        | grep -oiE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
+        | grep -v "$PROBE" | head -1 || true)
+
+    if [ -n "$RID" ]; then
+        # Verify the captured id against the live pending list before approving:
+        # it must be OUR loopback device and request operator scopes only.
+        VERDICT=notfound
+        for attempt in 1 2 3; do
+            VERDICT=$(openclaw devices list --json 2>/dev/null | jq -r --arg rid "$RID" --arg cid "$CID" '
+                [ .pending[]? | select(.requestId==$rid) ] as $m
+                | if ($m | length) == 0 then "notfound"
+                  else $m[0] as $r
+                    | if ($r.clientId==$cid
+                          and (($r.requestedScopes // []) | length) > 0
+                          and (($r.requestedScopes // []) | map(startswith("operator.")) | all))
+                      then "ok" else "mismatch" end
+                  end' 2>/dev/null || echo notfound)
+            [ "$VERDICT" = ok ] && break
+            [ "$VERDICT" = mismatch ] && break
+            sleep 2
+        done
+        if [ "$VERDICT" != ok ]; then
+            echo "ERROR: pending request $RID failed fingerprint check ($VERDICT) — refusing to approve" >&2
+            exit 1
+        fi
+        openclaw devices approve "$RID" >/dev/null
+        echo "APPROVED scope-upgrade $RID for $CID"
+    else
+        echo "ERROR: no scope-upgrade request id surfaced from trigger write" >&2
+        exit 1
+    fi
+
+    # Confirm the grant took effect so the bootstrap is never a silent no-op.
+    if has_write; then
+        echo "OK: $CID now holds operator.write"
+    else
+        echo "ERROR: $CID still lacks operator.write after approval" >&2
+        exit 1
+    fi
+  args:
+    executable: /bin/bash
+  register: scope_bootstrap
+  changed_when: "'APPROVED' in scope_bootstrap.stdout"
+  when: gateway_health.rc == 0
+
 - name: Get existing cron jobs
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
