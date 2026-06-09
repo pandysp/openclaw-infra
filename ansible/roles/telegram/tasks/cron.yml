@@ -39,91 +39,15 @@
   failed_when: false
   no_log: true
 
-- name: Auto-pair VPS CLI if gateway health check failed
-  when: gateway_health.rc != 0
-  block:
-    - name: Trigger pairing request via health check
-      ansible.builtin.shell: |
-        export XDG_RUNTIME_DIR=/run/user/1000
-        openclaw health || true
-      args:
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Wait for pairing request to register
-      ansible.builtin.pause:
-        seconds: 3
-
-    - name: Read gateway token and find pending pairing request
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-
-        # Read the gateway token from config
-        GW_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
-
-        # Use OPENCLAW_GATEWAY_TOKEN env var (not --url/--token WSS) because
-        # device pairing operations must work BEFORE the CLI is paired. The WSS
-        # route requires pairing (chicken-and-egg); OPENCLAW_GATEWAY_TOKEN
-        # injects the token at the SDK level, bypassing the WebSocket pairing
-        # handshake. (2026.6.1 renamed this from OPENCLAW_TOKEN, which is now
-        # ignored — the old name made approve run unauthenticated and no-op.)
-        DEVICES_OUT=$(OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
-            echo "SKIP: devices list failed: $DEVICES_OUT" >&2
-            exit 1
-        }
-
-        # UUID-with-dashes regex matches request IDs (not paired device hex IDs)
-        REQUEST_ID=$(echo "$DEVICES_OUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1) || REQUEST_ID=""
-
-        if [ -z "$REQUEST_ID" ]; then
-            echo "SKIP: no pending pairing request found"
-            exit 1
-        fi
-
-        # Approve via OPENCLAW_GATEWAY_TOKEN (same reason as above)
-        OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
-        echo "PAIRED: approved request $REQUEST_ID"
-      args:
-        executable: /bin/bash
-      no_log: true
-      register: auto_pair_result
-      changed_when: "'PAIRED' in auto_pair_result.stdout"
-      failed_when: false
-
-    - name: Re-check gateway health after pairing
-      ansible.builtin.shell: |
-        export XDG_RUNTIME_DIR=/run/user/1000
-        for i in $(seq 1 6); do
-            if openclaw health >/dev/null 2>&1; then
-                echo "Gateway is healthy after auto-pairing"
-                exit 0
-            fi
-            sleep 5
-        done
-        echo "WARNING: Gateway still not healthy after auto-pairing" >&2
-        exit 1
-      args:
-        executable: /bin/bash
-      register: gateway_health_retry
-      changed_when: false
-      failed_when: false
-
-    - name: Update gateway_health fact after auto-pairing
-      ansible.builtin.set_fact:
-        gateway_health: "{{ gateway_health_retry }}"
-      when: gateway_health_retry.rc is defined
-
 - name: Skip cron setup if gateway is not healthy
   when: gateway_health.rc != 0
   block:
     - name: Warn about skipped cron setup
       ansible.builtin.debug:
         msg: >-
-          Skipping cron job setup — gateway health check failed.
-          This is expected on first install (device pairing may be pending).
-          After approving devices, re-run: ./scripts/provision.sh --tags telegram
-          See CLAUDE.md "First-Time Access" for pairing instructions.
+          Skipping cron job setup — the gateway did not become ready for cron
+          operations (loopback cron API) within the stabilize window. Re-run
+          once the gateway is healthy: ./scripts/provision.sh --tags telegram
 
     - name: Flag cron setup as skipped for provision.sh
       delegate_to: localhost
