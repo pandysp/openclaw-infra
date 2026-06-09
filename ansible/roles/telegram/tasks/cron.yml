@@ -67,75 +67,74 @@
   no_log: true
   when: gateway_health.rc == 0
 
-# Why: on a fresh box the loopback CLI lacks operator.write, so the first
-# gateway-mediated write (cron add) is denied with a pending "scope-upgrade"
-# request that normally needs a human to run `devices approve`. Provisioning is
-# already an admin action (SSH + Pulumi secrets, loopback-only, no public
-# access), so we complete that one approval non-interactively. This mirrors the
-# devices-approve primitive already used by scripts/smoke-test.sh and the
-# playbook post_task. It is constrained so it is not a blanket auto-approve:
-#   - idempotent: a write-capability probe gates the whole task, so once writes
-#     work (prod and every re-provision) it is a no-op, never a retry loop;
-#   - provenance-pinned: approves ONLY the request id returned in our OWN bogus
-#     cron-remove command stderr — the gateway direct response to our own
-#     loopback connection, not an id scraped from shared or aggregated output;
-#   - capability-verified: succeeds only if a write actually works afterwards.
-# NOTE: the security review suggested cross-checking the id against the pending
-# list, but the gateway reports the scope-upgrade under a different id-space than
-# `devices list` exposes (verified in a prior run: connect-error id does not
-# equal the pending requestId, and requestedScopes come back null), so that
-# pre-approval lookup is structurally impossible here; provenance + capability
-# verification stand in. The token is read inside the script so it never lands in
-# the rendered task, keeping this task diagnosable without no_log.
-- name: Bootstrap operator write scope for the loopback CLI device
+# Why: cron.add/remove require operator.admin (gateway core-descriptors). On a
+# fresh box the loopback CLI is a "cli"-mode device; an earlier read silently
+# pairs it at operator.read, after which the admin scope-upgrade is locked behind
+# explicit approval (openclaw#74484, the operator.read deadlock). The documented
+# recovery (docs/cli/devices.md) is the local-loopback approve fallback:
+# `openclaw devices approve <requestId>` run ON-HOST with NO token and NO --url
+# approves the pending request directly on the on-disk pairing store with
+# operator.admin -- the gateway treats direct machine access as an explicit admin
+# approval path (devices-cli.runtime.ts resolveLocalPairingFallback, confirmed
+# against openclaw source at tag v2026.6.1). Ansible legitimately has that access:
+# it runs as the gateway-owning user. We approve ONLY our own device, matched by
+# the cryptographic deviceId from identity/device.json AND the operator.admin
+# scope it requested -- never a scraped or client-asserted value. Idempotent:
+# skips once cron writes work (prod and every re-provision). The approve and list
+# deliberately UNSET the gateway token: a token routes through the WS path that
+# the scope-upgrade lock denies, which is why the on-disk fallback is required.
+- name: Grant the local CLI device operator.admin via the on-host pairing fallback
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    export OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
+    TOK=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
+    DEVICE_ID=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/identity/device.json'))['deviceId'])")
     PROBE="00000000-0000-0000-0000-000000000000"
+    BLOCKED="scope upgrade|pairing required|more scopes|not approved|not paired"
 
-    # Probe write capability with a bogus cron remove. A scope-blocked response
-    # (scope upgrade / pairing required / more scopes) means writes are denied;
-    # anything else (not found, success) means writes work. The probe output is
-    # captured in LAST_PROBE for id extraction. Removing a non-existent id
-    # creates no state, so the probe is side-effect-free.
-    LAST_PROBE=""
-    write_blocked() {
-        LAST_PROBE=$(openclaw cron remove "$PROBE" 2>&1 || true)
-        printf '%s' "$LAST_PROBE" | grep -qiE "scope upgrade|pairing required|more scopes"
-    }
-
-    if ! write_blocked; then
-        echo "SKIP: loopback CLI already has write capability"
+    # Probe cron-write capability (and, when blocked, raise the pending admin
+    # scope-upgrade request for our device). A scope/pairing block means the cli
+    # device lacks operator.admin; anything else means writes already work.
+    probe() { OPENCLAW_GATEWAY_TOKEN="$TOK" openclaw cron remove "$PROBE" 2>&1 || true; }
+    if ! probe | grep -qiE "$BLOCKED"; then
+        echo "SKIP: cli device already holds operator.admin (cron writes work)"
         exit 0
     fi
 
-    # Pin the request id from OUR OWN probe stderr (the gateway direct response to
-    # our own loopback connection). This is the id devices approve resolves.
-    RID=$(printf '%s' "$LAST_PROBE" \
-        | grep -oiE "requestId:?[[:space:]]*[0-9a-f-]{36}" \
-        | grep -oiE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
-        | grep -v "$PROBE" | head -1 || true)
+    # Find OUR pending admin request from the on-disk store (no token => local
+    # loopback fallback list; the fallback redacts device tokens). Match by our
+    # cryptographic deviceId AND the operator.admin scope it requested.
+    RID=""
+    for attempt in 1 2 3 4 5; do
+        RID=$(env -u OPENCLAW_GATEWAY_TOKEN openclaw devices list --json 2>/dev/null \
+            | jq -r --arg d "$DEVICE_ID" 'first(.pending[]? | select(.deviceId==$d) | select((.scopes // []) | index("operator.admin")) | .requestId) // empty' 2>/dev/null || true)
+        [ -n "$RID" ] && break
+        sleep 2
+    done
     if [ -z "$RID" ]; then
-        echo "ERROR: write blocked but no scope-upgrade request id surfaced" >&2
-        echo "PROBE_OUT: ${LAST_PROBE//$OPENCLAW_GATEWAY_TOKEN/<REDACTED>}" >&2
+        echo "ERROR: no pending operator.admin request found for our device $DEVICE_ID" >&2
+        echo "DIAG: $(env -u OPENCLAW_GATEWAY_TOKEN openclaw devices list --json 2>/dev/null | jq -c '{pending:[.pending[]?|{requestId,deviceId,clientId,scopes,role}]}' 2>/dev/null | head -c 900)" >&2
         exit 1
     fi
 
-    APPROVE_OUT=$(openclaw devices approve "$RID" 2>&1 || true)
+    # Approve ONLY that request, on-host, via the local-loopback admin fallback.
+    # NO token / NO --url: a token takes the WS path the scope-upgrade lock denies.
+    APPROVE_OUT=$(env -u OPENCLAW_GATEWAY_TOKEN openclaw devices approve "$RID" 2>&1 || true)
 
-    # Verify by capability: a write must now succeed. Retry briefly for the grant
-    # to propagate. If it never unblocks, dump the full device model (no secrets:
-    # paired projection omits the tokens field) so the failure is fully
-    # diagnosable in one run.
-    for attempt in 1 2 3; do write_blocked || break; sleep 2; done
-    if ! write_blocked; then
-        echo "APPROVED $RID; loopback CLI write capability confirmed"
+    # Verify by capability: a cron write must now succeed (the gateway reloads the
+    # pairing store per connection, so no restart is needed). On persistent
+    # failure, dump the device model (fallback list redacts tokens) for diagnosis.
+    OK=""
+    for attempt in 1 2 3; do
+        probe | grep -qiE "$BLOCKED" || { OK=1; break; }
+        sleep 2
+    done
+    if [ -n "$OK" ]; then
+        echo "APPROVED $RID for device $DEVICE_ID; cli device now holds operator.admin"
     else
-        echo "ERROR: write still blocked after approving $RID" >&2
-        echo "APPROVE_OUT: ${APPROVE_OUT//$OPENCLAW_GATEWAY_TOKEN/<REDACTED>}" >&2
-        echo "DIAG_LIST: $(openclaw devices list --json 2>/dev/null | jq -c '{pending: [.pending[]? | {requestId, gatewayRequestId, id, clientId, role, requestedScopes, kind}], paired: [.paired[]? | {clientId, clientMode, role, scopes, approvedScopes}]}' 2>/dev/null | head -c 2200)" >&2
-        echo "DIAG_PENDING_FILE: $(jq -c '[to_entries[]? | .value | {requestId, clientId, requestedScopes, kind}]' /home/ubuntu/.openclaw/devices/pending.json 2>/dev/null | head -c 1500)" >&2
+        echo "ERROR: cron writes still blocked after approving $RID for $DEVICE_ID" >&2
+        echo "APPROVE_OUT: $(printf '%s' "$APPROVE_OUT" | tr '\n' ' ' | cut -c1-400)" >&2
+        echo "DIAG: $(env -u OPENCLAW_GATEWAY_TOKEN openclaw devices list --json 2>/dev/null | jq -c '{pending:[.pending[]?|{requestId,deviceId,clientId,scopes,role}],paired:[.paired[]?|{deviceId,roles,scopes}]}' 2>/dev/null | head -c 1500)" >&2
         exit 1
     fi
   args:
