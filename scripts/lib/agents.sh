@@ -60,18 +60,15 @@ workspace_dir_for() {
     fi
 }
 
-# Resolve a concrete node bin dir for LaunchAgents (they don't inherit the shell PATH).
-# Prefer the active node (mise/nvm/direct install) — the runtime native modules were
-# built against — then asdf's direct install, then Homebrew, then /usr/local.
+# Resolve a concrete node bin dir for LaunchAgents (they don't inherit the shell
+# PATH, and version-manager shims are dead without shell activation). Ask node
+# itself for its real binary via process.execPath: this resolves THROUGH any shim
+# (mise, nvm, asdf, …) to an install dir that works unactivated, so no
+# manager-specific branch is needed. Fall back to Homebrew / /usr/local only if
+# node isn't on PATH at setup time.
 resolve_node_bin_dir() {
-    local asdf_node
-    # asdf first (its real install dir, not the shim, which is dead in LaunchAgent
-    # context) — but only if nodejs is actually managed by asdf; otherwise
-    # `asdf where nodejs` is empty and "${empty}/bin" would resolve to a bogus /bin.
-    if command -v asdf &>/dev/null && asdf_node="$(asdf where nodejs 2>/dev/null)" && [ -n "$asdf_node" ]; then
-        echo "${asdf_node}/bin"
-    elif command -v node &>/dev/null; then
-        dirname "$(command -v node)"
+    if command -v node &>/dev/null; then
+        dirname "$(node -e 'process.stdout.write(process.execPath)')"
     elif [ -x /opt/homebrew/bin/node ]; then
         echo /opt/homebrew/bin
     else
