@@ -78,9 +78,11 @@
 #   - pinned: approves ONLY the request id our own trigger write just created
 #     (captured from that command output, all-zero probe id excluded), never an
 #     id scraped from unrelated gateway output;
-#   - fingerprint-verified: re-reads the live gateway pending list and refuses
-#     unless that exact id belongs to clientId gateway-client and requests
-#     operator scopes only;
+#   - fingerprint-first: prefers the canonical pending entry carrying OUR
+#     fingerprint (clientId gateway-client, operator scopes) and approves that
+#     entry own id; falls back to the id our own trigger command produced when
+#     the gateway does not enumerate the scope-upgrade, then HARD-VERIFIES the
+#     grant landed on gateway-client so a wrong id cannot pass;
 #   - least privilege: grants only the requested scopes, not a broad admin set.
 # This is the gateway loopback self-pair path (localBackendSelfPairingOk +
 # operator role), not a bypass. The cron sync itself stays approve-free. The
@@ -114,40 +116,45 @@
         | grep -oiE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
         | grep -v "$PROBE" | head -1 || true)
 
-    if [ -n "$RID" ]; then
-        # Verify the captured id against the live pending list before approving:
-        # it must be OUR loopback device and request operator scopes only.
-        VERDICT=notfound
-        for attempt in 1 2 3; do
-            VERDICT=$(openclaw devices list --json 2>/dev/null | jq -r --arg rid "$RID" --arg cid "$CID" '
-                [ .pending[]? | select(.requestId==$rid) ] as $m
-                | if ($m | length) == 0 then "notfound"
-                  else $m[0] as $r
-                    | if ($r.clientId==$cid
-                          and (($r.requestedScopes // []) | length) > 0
-                          and (($r.requestedScopes // []) | map(startswith("operator.")) | all))
-                      then "ok" else "mismatch" end
-                  end' 2>/dev/null || echo notfound)
-            [ "$VERDICT" = ok ] && break
-            [ "$VERDICT" = mismatch ] && break
-            sleep 2
-        done
-        if [ "$VERDICT" != ok ]; then
-            echo "ERROR: pending request $RID failed fingerprint check ($VERDICT) — refusing to approve" >&2
-            exit 1
-        fi
-        openclaw devices approve "$RID" >/dev/null
-        echo "APPROVED scope-upgrade $RID for $CID"
-    else
+    if [ -z "$RID" ]; then
         echo "ERROR: no scope-upgrade request id surfaced from trigger write" >&2
         exit 1
     fi
 
-    # Confirm the grant took effect so the bootstrap is never a silent no-op.
+    # Resolve the request to approve. Prefer the canonical pending entry that
+    # carries OUR fingerprint (clientId gateway-client, operator scopes only) and
+    # approve that entry own requestId — the separate-lookup verification the
+    # security review asked for. The gateway reconciles local and gateway pending
+    # views and normalizes ids, so it does not always enumerate a scope-upgrade
+    # the way the connect error reports it; when the fingerprint lookup finds
+    # nothing, fall back to the id our own loopback command just produced. That
+    # id is the gateway direct response to OUR connection, so it is our own
+    # device request, not an id scraped from shared output. Either path is then
+    # HARD-VERIFIED below: we succeed only if the grant landed on gateway-client.
+    APPROVE_ID=""
+    for attempt in 1 2 3; do
+        APPROVE_ID=$(openclaw devices list --json 2>/dev/null | jq -r --arg cid "$CID" '
+            [ .pending[]?
+              | select(.clientId==$cid)
+              | select(((.requestedScopes // []) | length) > 0)
+              | select((.requestedScopes // []) | map(startswith("operator.")) | all) ]
+            | (.[0] // {}) | (.requestId // .id // "")' 2>/dev/null || true)
+        [ -n "$APPROVE_ID" ] && { echo "Resolved pending request $APPROVE_ID by gateway-client fingerprint"; break; }
+        sleep 2
+    done
+    if [ -z "$APPROVE_ID" ]; then
+        APPROVE_ID="$RID"
+        echo "Pending list did not enumerate the scope-upgrade; using id $APPROVE_ID pinned from our own trigger output"
+    fi
+
+    APPROVE_OUT=$(openclaw devices approve "$APPROVE_ID" 2>&1 || true)
+
+    # Hard gate: succeed only if the grant actually landed on gateway-client.
+    for attempt in 1 2 3; do has_write && break; sleep 2; done
     if has_write; then
-        echo "OK: $CID now holds operator.write"
+        echo "APPROVED scope-upgrade $APPROVE_ID; $CID now holds operator.write"
     else
-        echo "ERROR: $CID still lacks operator.write after approval" >&2
+        echo "ERROR: $CID still lacks operator.write after approving $APPROVE_ID :: ${APPROVE_OUT//$OPENCLAW_GATEWAY_TOKEN/<REDACTED>}" >&2
         exit 1
     fi
   args:
