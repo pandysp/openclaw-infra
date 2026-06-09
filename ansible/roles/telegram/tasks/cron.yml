@@ -6,8 +6,14 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    GW_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
-    GW_URL="{{ _tailscale_wss_url }}"
+    # Route cron CLI ops through the LOCAL gateway via SDK token injection
+    # (OPENCLAW_GATEWAY_TOKEN), NOT the Tailscale WSS route. WSS requires device
+    # pairing — a racy chicken-and-egg on fresh boxes that intermittently failed
+    # the cron sync no matter how it was retried/approved. The loopback route
+    # needs no pairing. The 2026.3.13 local-loopback handshake bug (#48167) that
+    # originally forced WSS is fixed in 2026.6.1 (verified: plain
+    # `openclaw cron list` works locally on the VPS).
+    export OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
 
     # Wait for health first (basic process check via HTTP — always works)
     for i in $(seq 1 12); do
@@ -15,19 +21,10 @@
         sleep 5
     done
 
-    # Verify we have a Tailscale WSS URL
-    if [ -z "$GW_URL" ]; then
-        echo "ERROR: Tailscale WSS URL not available — cannot route CLI commands" >&2
-        echo "Ensure config role has run (sets gateway.tailscale.mode=serve)" >&2
-        exit 1
-    fi
-
-    # Wait for WebSocket connectivity through Tailscale Serve
-    # Routes via wss:// to bypass OpenClaw 2026.3.13 local loopback handshake bug
-    # See: https://github.com/openclaw/openclaw/issues/48167
+    # Wait for the gateway to accept cron API calls (loopback, no pairing)
     for i in $(seq 1 24); do
-        if openclaw cron list --json --url "$GW_URL" --token "$GW_TOKEN" >/dev/null 2>&1; then
-            echo "Gateway is healthy and accepting WebSocket connections via Tailscale Serve"
+        if openclaw cron list --json >/dev/null 2>&1; then
+            echo "Gateway is healthy and accepting cron API calls"
             exit 0
         fi
         sleep 10
@@ -42,91 +39,15 @@
   failed_when: false
   no_log: true
 
-- name: Auto-pair VPS CLI if gateway health check failed
-  when: gateway_health.rc != 0
-  block:
-    - name: Trigger pairing request via health check
-      ansible.builtin.shell: |
-        export XDG_RUNTIME_DIR=/run/user/1000
-        openclaw health || true
-      args:
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Wait for pairing request to register
-      ansible.builtin.pause:
-        seconds: 3
-
-    - name: Read gateway token and find pending pairing request
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-
-        # Read the gateway token from config
-        GW_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
-
-        # Use OPENCLAW_GATEWAY_TOKEN env var (not --url/--token WSS) because
-        # device pairing operations must work BEFORE the CLI is paired. The WSS
-        # route requires pairing (chicken-and-egg); OPENCLAW_GATEWAY_TOKEN
-        # injects the token at the SDK level, bypassing the WebSocket pairing
-        # handshake. (2026.6.1 renamed this from OPENCLAW_TOKEN, which is now
-        # ignored — the old name made approve run unauthenticated and no-op.)
-        DEVICES_OUT=$(OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list 2>&1) || {
-            echo "SKIP: devices list failed: $DEVICES_OUT" >&2
-            exit 1
-        }
-
-        # UUID-with-dashes regex matches request IDs (not paired device hex IDs)
-        REQUEST_ID=$(echo "$DEVICES_OUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1) || REQUEST_ID=""
-
-        if [ -z "$REQUEST_ID" ]; then
-            echo "SKIP: no pending pairing request found"
-            exit 1
-        fi
-
-        # Approve via OPENCLAW_GATEWAY_TOKEN (same reason as above)
-        OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$REQUEST_ID"
-        echo "PAIRED: approved request $REQUEST_ID"
-      args:
-        executable: /bin/bash
-      no_log: true
-      register: auto_pair_result
-      changed_when: "'PAIRED' in auto_pair_result.stdout"
-      failed_when: false
-
-    - name: Re-check gateway health after pairing
-      ansible.builtin.shell: |
-        export XDG_RUNTIME_DIR=/run/user/1000
-        for i in $(seq 1 6); do
-            if openclaw health >/dev/null 2>&1; then
-                echo "Gateway is healthy after auto-pairing"
-                exit 0
-            fi
-            sleep 5
-        done
-        echo "WARNING: Gateway still not healthy after auto-pairing" >&2
-        exit 1
-      args:
-        executable: /bin/bash
-      register: gateway_health_retry
-      changed_when: false
-      failed_when: false
-
-    - name: Update gateway_health fact after auto-pairing
-      ansible.builtin.set_fact:
-        gateway_health: "{{ gateway_health_retry }}"
-      when: gateway_health_retry.rc is defined
-
 - name: Skip cron setup if gateway is not healthy
   when: gateway_health.rc != 0
   block:
     - name: Warn about skipped cron setup
       ansible.builtin.debug:
         msg: >-
-          Skipping cron job setup — gateway health check failed.
-          This is expected on first install (device pairing may be pending).
-          After approving devices, re-run: ./scripts/provision.sh --tags telegram
-          See CLAUDE.md "First-Time Access" for pairing instructions.
+          Skipping cron job setup — the gateway did not become ready for cron
+          operations (loopback cron API) within the stabilize window. Re-run
+          once the gateway is healthy: ./scripts/provision.sh --tags telegram
 
     - name: Flag cron setup as skipped for provision.sh
       delegate_to: localhost
@@ -149,7 +70,8 @@
 - name: Get existing cron jobs
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw cron list --json --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
+    export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
+    openclaw cron list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
   args:
     executable: /bin/bash
   register: existing_cron
@@ -175,9 +97,10 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
+        export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
         IDS=$(jq -r --arg n "{{ item }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
         for id in $IDS; do
-          output=$(openclaw cron remove "$id" --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>&1) || {
+          output=$(openclaw cron remove "$id" 2>&1) || {
               if echo "$output" | grep -qi "not found\|does not exist"; then
                   true
               else
@@ -245,40 +168,29 @@
           ansible.builtin.shell: |
             set -euo pipefail
             export XDG_RUNTIME_DIR=/run/user/1000
-            GW_URL="{{ _tailscale_wss_url }}"
-            GW_TOKEN="{{ _gw_token.stdout }}"
-
-            # The gateway is restarted immediately before this task (handlers are
-            # flushed) and on a fresh box its WS endpoint can be briefly unready,
-            # so retry transient cron CLI failures instead of aborting the whole
-            # provision on the first hiccup.
-            #
-            # A fresh gateway also requires the CLI device to be paired before WSS
-            # ops (cron add/remove/list) succeed; it returns a pairing-required
-            # error carrying a request id. Retrying alone never clears that, so on
-            # such an error we approve the pending request via
-            # OPENCLAW_GATEWAY_TOKEN (SDK-level token injection that bypasses the
-            # WSS pairing handshake, same as the auto-pair block above) and retry.
-            #
-            # On final failure, persist the error with the gateway token redacted
-            # so it stays diagnosable despite the no_log on this task.
+            # Route cron ops over the LOCAL gateway (OPENCLAW_GATEWAY_TOKEN), not
+            # the WSS route — no device pairing required (see the stabilize task
+            # above for why). The gateway was just restarted, so still retry
+            # transient cron CLI failures rather than aborting the provision on
+            # the first hiccup; on final failure persist the error with the token
+            # redacted so it stays diagnosable despite the no_log on this task.
+            export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
             CRON_ERR_FILE=/tmp/ansible-cron-error.txt
             : > "$CRON_ERR_FILE"
+            # Retry only transient failures (gateway briefly unready after the
+            # pre-sync restart). Deliberately does NOT auto-approve pending
+            # device/scope requests — approval is an operator authorization step,
+            # not something a provisioning retry loop should grant itself (it
+            # would let any UUID surfaced in gateway output be approved). On a
+            # genuinely unapproved fresh device the pending error is surfaced
+            # (redacted) for a human to authorize.
             retry_cron() {
-                local n=0 max=6 out rid
+                local n=0 max=5 out
                 while :; do
                     if out=$("$@" 2>&1); then printf '%s' "$out"; return 0; fi
-                    if printf '%s' "$out" | grep -qiE "pairing required|not approved"; then
-                        rid=$(printf '%s' "$out" | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" | head -1)
-                        if [ -n "$rid" ]; then
-                            OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices approve "$rid" >/dev/null 2>&1 || true
-                        else
-                            OPENCLAW_GATEWAY_TOKEN="$GW_TOKEN" openclaw devices list >/dev/null 2>&1 || true
-                        fi
-                    fi
                     n=$((n + 1))
                     if [ "$n" -ge "$max" ]; then
-                        printf '%s\n' "${out//$GW_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
+                        printf '%s\n' "${out//$OPENCLAW_GATEWAY_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
                         return 1
                     fi
                     sleep $((n * 3))
@@ -316,7 +228,7 @@
                 {% for job in active_cron_jobs %}
                 IDS=$(jq -r --arg n "{{ job.name }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
                 for id in $IDS; do
-                    output=$(openclaw cron remove "$id" --url "$GW_URL" --token "$GW_TOKEN" 2>&1) || {
+                    output=$(openclaw cron remove "$id" 2>&1) || {
                         echo "$output" | grep -qi "not found\|does not exist" || { echo "ERROR: $output" >&2; exit 1; }
                     }
                     sleep 1
@@ -334,7 +246,6 @@
                     --agent "{{ job.agent }}" \
                     --message "$MSG" \
                     --deliver --channel {{ agent_channel_map[job.agent] | default('telegram') }} --to "{{ agent_deliver_map[job.agent] }}" \
-                    --url "$GW_URL" --token "$GW_TOKEN" \
                     || { echo "ERROR: cron add failed for {{ job.name }} after retries" >&2; exit 1; }
                 sleep 1
                 {% endfor %}
@@ -371,8 +282,9 @@
     - name: Verify cron job count
       ansible.builtin.shell: |
         export XDG_RUNTIME_DIR=/run/user/1000
+        export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
         for attempt in 1 2 3; do
-            RESULT=$(openclaw cron list --json --url "{{ _tailscale_wss_url }}" --token "{{ _gw_token.stdout }}" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d')
+            RESULT=$(openclaw cron list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d')
             [ -n "$RESULT" ] && break
             sleep 5
         done
