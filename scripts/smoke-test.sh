@@ -60,7 +60,10 @@ HEALTH=$(ssh $SSH_OPTS "ubuntu@$STAGING_HOST" "$ENV_PREFIX openclaw health" 2>&1
   exit 1
 }
 pass "Gateway health OK"
-echo "$HEALTH" | head -5 | sed 's/^/   /'
+# sed-range (not `head -5`): under `set -o pipefail`, head closing the pipe after
+# N lines makes the upstream echo SIGPIPE on long output and fails the script.
+# sed -n reads all input, so it never early-closes. (see also the doctor block)
+echo "$HEALTH" | sed -n '1,5s/^/   /p'
 
 # ── 4. Doctor (model connectivity) ────────────────────────────────
 echo "4. Running openclaw doctor..."
@@ -78,7 +81,10 @@ DOCTOR=$(run_doctor) || {
   }
 }
 pass "Doctor checks passed"
-echo "$DOCTOR" | head -10 | sed 's/^/   /'
+# sed-range, not `head -10`: head closing the pipe early SIGPIPEs the upstream
+# echo under pipefail and fails the run — this exact line reddened a staging run
+# when doctor printed a long "legacy keys"/QR block. sed -n reads all input.
+echo "$DOCTOR" | sed -n '1,10s/^/   /p'
 
 echo ""
 echo "══════════════════════════════════════════════════════════════"
