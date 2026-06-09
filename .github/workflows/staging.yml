@@ -210,7 +210,11 @@ jobs:
             # provisioning failure and must fail the step; a non-zero Pulumi exit with a
             # clean recap is the tolerated stale-resource case.
             set +o pipefail
-            pulumi up --yes --stack staging 2>&1 | tee -a /tmp/pulumi-up.log || true
+            # Truncate (not -a): the first attempt's log was only needed for the
+            # resource_unavailable check above. Appending would let a stale
+            # failed=N PLAY RECAP from that aborted attempt trip the gate below
+            # even when this retry's recap is clean.
+            pulumi up --yes --stack staging 2>&1 | tee /tmp/pulumi-up.log || true
             if grep -qE '(failed|unreachable)=[1-9][0-9]*' /tmp/pulumi-up.log; then
               echo "::error::Ansible reported task failures during provisioning (PLAY RECAP below)"
               grep -E 'PLAY RECAP|(failed|unreachable)=[1-9]|fatal:' /tmp/pulumi-up.log | tail -30

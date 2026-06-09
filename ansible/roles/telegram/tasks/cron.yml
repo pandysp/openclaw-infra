@@ -238,7 +238,14 @@
                 IDS=$(jq -r --arg n "{{ job.name }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
                 for id in $IDS; do
                     output=$(openclaw cron remove "$id" 2>&1) || {
-                        echo "$output" | grep -qi "not found\|does not exist" || { echo "ERROR: $output" >&2; exit 1; }
+                        echo "$output" | grep -qi "not found\|does not exist" || {
+                            # This task is no_log, so persist the (token-redacted)
+                            # error to the file the rescue surfaces — otherwise a
+                            # remove failure rescues with "(no captured error)".
+                            printf 'cron remove %s failed: %s\n' "$id" "${output//$OPENCLAW_GATEWAY_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
+                            echo "ERROR: $output" >&2
+                            exit 1
+                        }
                     }
                     sleep 1
                 done

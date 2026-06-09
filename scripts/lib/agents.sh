@@ -64,8 +64,12 @@ workspace_dir_for() {
 # Prefer the active node (mise/nvm/direct install) — the runtime native modules were
 # built against — then asdf's direct install, then Homebrew, then /usr/local.
 resolve_node_bin_dir() {
-    if command -v asdf &>/dev/null; then
-        echo "$(asdf where nodejs 2>/dev/null)/bin"
+    local asdf_node
+    # asdf first (its real install dir, not the shim, which is dead in LaunchAgent
+    # context) — but only if nodejs is actually managed by asdf; otherwise
+    # `asdf where nodejs` is empty and "${empty}/bin" would resolve to a bogus /bin.
+    if command -v asdf &>/dev/null && asdf_node="$(asdf where nodejs 2>/dev/null)" && [ -n "$asdf_node" ]; then
+        echo "${asdf_node}/bin"
     elif command -v node &>/dev/null; then
         dirname "$(command -v node)"
     elif [ -x /opt/homebrew/bin/node ]; then

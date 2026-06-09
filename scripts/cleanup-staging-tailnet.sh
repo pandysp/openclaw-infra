@@ -52,10 +52,14 @@ devices_json=$(curl -fsSL "${AUTH[@]}" "${API}/tailnet/${TAILNET}/devices") || {
 }
 
 # Offline = lastSeen more than 5 minutes ago. Match openclaw-staging or -N.
+# Guard .hostname against null (a single null-hostname device in the tailnet
+# would otherwise make `test()` error and abort the whole filter — leaving
+# targets empty and silently skipping every stale device). Strip any fractional
+# seconds before fromdateiso8601, which only accepts %Y-%m-%dT%H:%M:%SZ.
 mapfile -t targets < <(echo "$devices_json" | jq -r --arg now "$(date -u +%s)" '
     .devices[]
-    | select(.hostname | test("^openclaw-staging(-[0-9]+)?$"))
-    | select(((($now | tonumber) - ((.lastSeen // "1970-01-01T00:00:00Z") | fromdateiso8601)) > 300))
+    | select((.hostname // "") | test("^openclaw-staging(-[0-9]+)?$"))
+    | select(((($now | tonumber) - ((.lastSeen // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+";"") | fromdateiso8601)) > 300))
     | "\(.id)\t\(.hostname)\t\(.lastSeen)"')
 
 if [ "${#targets[@]}" -eq 0 ]; then
