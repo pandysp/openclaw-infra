@@ -27,7 +27,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/agents.sh"
 
-WORKSPACES_DIR="$HOME/code/personal/workspaces"
+WORKSPACES_DIR="$HOME/dev/personal/workspaces"
 GITIGNORE_SRC="$SCRIPT_DIR/../ansible/roles/workspace/files/gitignore-workspace"
 SYNC_TEMPLATE="$SCRIPT_DIR/templates/workspace-git-sync-mac.sh.tmpl"
 SYNC_BIN_DIR="$HOME/.local/bin"

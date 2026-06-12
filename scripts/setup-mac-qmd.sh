@@ -30,7 +30,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/agents.sh"
 
-WORKSPACES_DIR="$HOME/code/personal/workspaces"
+WORKSPACES_DIR="$HOME/dev/personal/workspaces"
 WATCH_TEMPLATE="$SCRIPT_DIR/templates/qmd-watch-mac.sh.tmpl"
 BIN_DIR="$HOME/.local/bin"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
