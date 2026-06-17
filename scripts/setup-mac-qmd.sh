@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Setup local qmd semantic search for Mac workspaces.
+# Build local qmd semantic-search indexes for Mac workspaces. PREP ONLY —
+# installs no services.
 #
-# Mirrors the VPS qmd Ansible role: per-workspace watcher + HTTP daemon.
-# Each workspace gets:
-#   - .qmd/ directory with collections config
-#   - fswatch-based watcher (LaunchAgent) for live index updates
-#   - HTTP daemon (LaunchAgent) serving MCP endpoint
+# Per selected agent, this does the one-time setup the qmd daemons depend on:
+#   - .qmd/ directory with collections config + initial index/embeddings
 #   - Text extraction (PDFs, images, .docx, .xlsx) via .scripts/extract
+#   - Install ~/.local/bin/qmd-watch-<agent>.sh (the helper the watch daemon runs)
+#
+# The qmd-watch + qmd-http daemons are deployed separately by
+# deploy-mac-daemons.sh as login-independent system LaunchDaemons (it also owns
+# the per-account HTTP port assignment). Splitting prep from the service layer
+# means running this for prep can never double-run a daemon on one sqlite index.
 #
 # Agent list is read from ansible/group_vars/openclaw.yml (single source of truth).
-# Port assignment is positional over all agents (matches VPS convention).
 #
 # Prerequisites:
 #   - yq + jq installed (brew install yq jq)
@@ -18,27 +21,25 @@
 #   - fswatch installed (brew install fswatch)
 #
 # Usage:
-#   ./scripts/setup-mac-qmd.sh                    # Full setup (all agents)
-#   ./scripts/setup-mac-qmd.sh main tl             # Specific agents only
-#   ./scripts/setup-mac-qmd.sh --uninstall         # Remove LaunchAgents + scripts
-#   ./scripts/setup-mac-qmd.sh --status            # Show service status
+#   ./scripts/setup-mac-qmd.sh                    # prep all agents
+#   ./scripts/setup-mac-qmd.sh main tl             # prep specific agents
+#   ./scripts/setup-mac-qmd.sh --uninstall         # remove qmd-watch helper scripts
+#   ./scripts/setup-mac-qmd.sh --status            # show index status
 #
 # Re-running is safe (idempotent). Existing indexes are preserved.
+# Deploy/teardown of the daemons themselves: deploy-mac-daemons.sh.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/agents.sh"
 
-WORKSPACES_DIR="$HOME/code/personal/workspaces"
+WORKSPACES_DIR="$HOME/dev/personal/workspaces"
 WATCH_TEMPLATE="$SCRIPT_DIR/templates/qmd-watch-mac.sh.tmpl"
 BIN_DIR="$HOME/.local/bin"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs/openclaw"
 GUI_DOMAIN="gui/$(id -u)"
-
-# Port assignment: positional starting at 8191 (mirrors VPS qmd_http_base_port)
-QMD_HTTP_BASE_PORT=8191
 
 # --- Helpers ---
 
@@ -59,14 +60,6 @@ bootout_if_loaded() {
         launchctl bootout "$GUI_DOMAIN" "$plist" 2>/dev/null || true
     fi
 }
-
-# Build port map (positional over ALL agents, ensures consistency with VPS)
-declare -A PORT_MAP
-_port=$QMD_HTTP_BASE_PORT
-for _id in $(get_agent_ids); do
-    PORT_MAP["$_id"]=$_port
-    _port=$((_port + 1))
-done
 
 # --- Uninstall (scan-based: finds all matching services regardless of current config) ---
 
@@ -92,37 +85,13 @@ uninstall() {
 
 show_status() {
     echo ""
-    echo "qmd Service Status"
-    echo "==================="
+    echo "qmd Index Status (prep artifacts only)"
+    echo "Daemon status lives in: deploy-mac-daemons.sh --status"
+    echo "======================================================="
     for agent_id in $(get_agent_ids); do
-        local agent_port="${PORT_MAP[$agent_id]}"
         local workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
         echo ""
-        echo "--- $agent_id (port $agent_port) ---"
-
-        # Watcher
-        local watch_label
-        watch_label="$(plist_id_watch "$agent_id")"
-        if launchctl list "$watch_label" &>/dev/null; then
-            local pid
-            pid=$(launchctl list "$watch_label" 2>/dev/null | grep '"PID"' | tr -cd '0-9')
-            echo "  Watcher: running${pid:+ (pid: $pid)}"
-        else
-            echo "  Watcher: not running"
-        fi
-
-        # HTTP daemon
-        local http_label
-        http_label="$(plist_id_http "$agent_id")"
-        if launchctl list "$http_label" &>/dev/null; then
-            if curl -sf "http://localhost:$agent_port/health" &>/dev/null; then
-                echo "  HTTP:    running (http://localhost:$agent_port/mcp)"
-            else
-                echo "  HTTP:    loaded but not responding"
-            fi
-        else
-            echo "  HTTP:    not running"
-        fi
+        echo "--- $agent_id ---"
 
         # Index stats
         if [ -f "$workspace_dir/.qmd/index.sqlite" ]; then
@@ -136,6 +105,13 @@ show_status() {
             )
         else
             echo "  Index:   not created"
+        fi
+
+        # Watch helper script
+        if [ -f "$(watch_script_path "$agent_id")" ]; then
+            echo "  Watcher helper: installed"
+        else
+            echo "  Watcher helper: not installed"
         fi
     done
     echo ""
@@ -323,189 +299,18 @@ done
 echo ""
 
 # ============================================================
-# STEP 3: Create LaunchAgent plists
+# Summary
 # ============================================================
 
-log "Step 3: Create LaunchAgents"
-
-QMD_BIN="$(command -v qmd || echo "$HOME/.bun/bin/qmd")"
-QMD_NODE_BIN_DIR="$(resolve_node_bin_dir)"
-QMD_LAUNCHAGENT_PATH="$HOME/.bun/bin:${QMD_NODE_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-
-for agent_id in "${SELECTED_AGENTS[@]}"; do
-    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
-    agent_port="${PORT_MAP[$agent_id]}"
-
-    if [ ! -d "$workspace_dir" ]; then
-        continue
-    fi
-
-    echo "  --- $agent_id (port $agent_port) ---"
-
-    # Watcher LaunchAgent
-    plist_watch="$(plist_path_watch "$agent_id")"
-    label_watch="$(plist_id_watch "$agent_id")"
-    script_path="$(watch_script_path "$agent_id")"
-
-    cat > "$plist_watch" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${label_watch}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>${script_path}</string>
-    </array>
-    <key>KeepAlive</key>
-    <true/>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>${QMD_LAUNCHAGENT_PATH}</string>
-        <key>HOME</key>
-        <string>${HOME}</string>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>${LOG_DIR}/qmd-watch-${agent_id}.log</string>
-    <key>StandardErrorPath</key>
-    <string>${LOG_DIR}/qmd-watch-${agent_id}.log</string>
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
-</dict>
-</plist>
-EOF
-    echo "  Installed: $plist_watch"
-
-    # HTTP daemon LaunchAgent
-    plist_http="$(plist_path_http "$agent_id")"
-    label_http="$(plist_id_http "$agent_id")"
-
-    cat > "$plist_http" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${label_http}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${QMD_BIN}</string>
-        <string>mcp</string>
-        <string>--http</string>
-        <string>--port</string>
-        <string>${agent_port}</string>
-    </array>
-    <key>KeepAlive</key>
-    <true/>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>${QMD_LAUNCHAGENT_PATH}</string>
-        <key>HOME</key>
-        <string>${HOME}</string>
-        <key>QMD_CONFIG_DIR</key>
-        <string>${workspace_dir}/.qmd</string>
-        <key>INDEX_PATH</key>
-        <string>${workspace_dir}/.qmd/index.sqlite</string>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>${LOG_DIR}/qmd-http-${agent_id}.log</string>
-    <key>StandardErrorPath</key>
-    <string>${LOG_DIR}/qmd-http-${agent_id}.log</string>
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
-</dict>
-</plist>
-EOF
-    echo "  Installed: $plist_http"
-done
-
-echo ""
-
-# ============================================================
-# STEP 4: Load LaunchAgents
-# ============================================================
-
-log "Step 4: Loading LaunchAgents"
-
-for agent_id in "${SELECTED_AGENTS[@]}"; do
-    workspace_dir="$(workspace_dir_for "$agent_id" "$WORKSPACES_DIR")"
-
-    if [ ! -d "$workspace_dir" ]; then
-        continue
-    fi
-
-    # Watcher
-    plist_watch="$(plist_path_watch "$agent_id")"
-    if [ -f "$plist_watch" ]; then
-        bootout_if_loaded "$plist_watch"
-        launchctl bootstrap "$GUI_DOMAIN" "$plist_watch"
-        echo "  Loaded: $(plist_id_watch "$agent_id")"
-    fi
-
-    # HTTP daemon
-    plist_http="$(plist_path_http "$agent_id")"
-    if [ -f "$plist_http" ]; then
-        bootout_if_loaded "$plist_http"
-        launchctl bootstrap "$GUI_DOMAIN" "$plist_http"
-        echo "  Loaded: $(plist_id_http "$agent_id")"
-    fi
-done
-
-echo ""
-
-# ============================================================
-# STEP 5: Verify
-# ============================================================
-
-log "Step 5: Verify"
-
-sleep 2  # give daemons a moment to start
-
-ALL_OK=true
-for agent_id in "${SELECTED_AGENTS[@]}"; do
-    agent_port="${PORT_MAP[$agent_id]}"
-
-    echo "  --- $agent_id ---"
-
-    # Check watcher
-    if launchctl list "$(plist_id_watch "$agent_id")" &>/dev/null; then
-        echo "  Watcher: OK"
-    else
-        warn "  Watcher: FAILED to start"
-        ALL_OK=false
-    fi
-
-    # Check HTTP daemon
-    if curl -sf "http://localhost:$agent_port/health" &>/dev/null; then
-        echo "  HTTP:    OK (http://localhost:$agent_port/mcp)"
-    else
-        echo "  HTTP:    starting... (may take a few seconds for first model load)"
-    fi
-done
-
-echo ""
 echo "=========================================="
-echo "  Setup complete!"
+echo "  qmd prep complete! (${#SELECTED_AGENTS[@]} agents)"
 echo "=========================================="
 echo ""
-echo "Ports:"
-for agent_id in "${SELECTED_AGENTS[@]}"; do
-    echo "  ${agent_id}: http://localhost:${PORT_MAP[$agent_id]}/mcp"
-done
+echo "This installed no services. Deploy the qmd daemons (and their per-account"
+echo "HTTP ports) with:"
+echo "  ./scripts/deploy-mac-daemons.sh ${SELECTED_AGENTS[*]}"
 echo ""
-echo "Status:   $0 --status"
-echo "Logs:     $LOG_DIR/qmd-{watch,http}-*.log"
+echo "Status:    $0 --status                       # index status (this script)"
+echo "           ./scripts/deploy-mac-daemons.sh --status   # daemon status"
+echo "Logs:      $LOG_DIR/qmd-{watch,http}-*.log"
 echo "Uninstall: $0 --uninstall"
-echo ""
-if ! $ALL_OK; then
-    echo "Some services failed to start. Check logs for details."
-    exit 1
-fi
