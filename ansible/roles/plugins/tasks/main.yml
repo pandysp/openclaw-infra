@@ -189,6 +189,28 @@
         state: directory
         mode: "0755"
 
+    # `claude plugin install`/`marketplace add` git-clone the plugin source repos.
+    # For a `source:"github"` plugin, claude's wPY() builds a `git@github.com:` (SSH)
+    # URL unless CLAUDE_CODE_REMOTE is set — and this box has no key for bare
+    # git@github.com (workspace deploy keys are host-alias-scoped), so SSH clones
+    # 401 with no fallback. We force HTTPS (CLAUDE_CODE_REMOTE=1 on the clone tasks)
+    # and authenticate it with the read-only GitHub PAT via the git credential store,
+    # so both public reference plugins and private-marketplace plugins clone cleanly.
+    - name: Configure git credential for GitHub plugin clones (PAT over HTTPS)
+      when: github_token | default('') | length > 0
+      block:
+        - name: Write ~/.git-credentials with the plugin-clone PAT
+          ansible.builtin.copy:
+            content: "https://x-access-token:{{ github_token }}@github.com\n"
+            dest: /home/ubuntu/.git-credentials
+            mode: "0600"
+          no_log: true
+
+        - name: Enable git credential store helper
+          ansible.builtin.command:
+            argv: [git, config, --global, credential.helper, store]
+          changed_when: false
+
     - name: Add plugin marketplaces
       ansible.builtin.shell: |
         set -euo pipefail
@@ -205,6 +227,7 @@
         executable: /bin/bash
       environment:
         CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
+        CLAUDE_CODE_REMOTE: "1"  # force https:// clone URLs (not git@github SSH) — see credential note above
         PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
       loop: "{{ claude_code_plugins.marketplaces }}"
       loop_control:
@@ -225,6 +248,7 @@
         executable: /bin/bash
       environment:
         CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
+        CLAUDE_CODE_REMOTE: "1"  # force https:// clone URLs (not git@github SSH) — see credential note above
         PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
       register: marketplace_update_result
       changed_when: false
@@ -250,6 +274,7 @@
         executable: /bin/bash
       environment:
         CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
+        CLAUDE_CODE_REMOTE: "1"  # force https:// clone URLs (not git@github SSH) — see credential note above
         PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
       loop: "{{ claude_code_plugins.plugins }}"
       loop_control:
