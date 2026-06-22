@@ -7,7 +7,7 @@ openclaw_timezone: "Europe/Berlin"
 # mapping in agents.defaults.models (see openclaw_agent_models below) keeps turns on
 # the claude CLI backend (Max subscription). The legacy "claude-cli/<model>" ids fail
 # strict model validation (no models.providers["claude-cli"] catalog entry exists).
-openclaw_model_primary: "anthropic/claude-opus-4-6"
+openclaw_model_primary: "anthropic/claude-opus-4-8"
 openclaw_model_fallbacks: []
 openclaw_thinking_default: "high"
 
@@ -16,7 +16,7 @@ openclaw_thinking_default: "high"
 # by primary/fallbacks/heartbeat must be listed here; agentRuntime.id=claude-cli
 # routes it through the claude CLI instead of the direct Anthropic API.
 openclaw_agent_models:
-  "anthropic/claude-opus-4-6":
+  "anthropic/claude-opus-4-8":
     alias: "opus"
     agentRuntime:
       id: "claude-cli"
@@ -51,7 +51,7 @@ openclaw_custom_models:
           contextWindow: 200000
           maxTokens: 128000
 nodejs_major_version: 25
-openclaw_version: "2026.6.1"
+openclaw_version: "2026.6.6"
 openclaw_heartbeat_interval: "30m"
 openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
 openclaw_cooldown_failure_window_hours: 1  # reset cooldown error count after 1h (default: 24)
