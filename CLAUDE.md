@@ -285,7 +285,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 
 ### Key Rotation
 
-Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude token: `claudeSetupToken` + `openclaw auth login` on server. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
+Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude token: update `claudeSetupToken`, then `./scripts/provision.sh --tags openclaw,plugins` — the `openclaw` role rewrites `~/.claude/.credentials.json` (the claude-cli backend's only auth surface) and `plugins` refreshes the credential-proxy token; there is no `openclaw auth login`. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
 
 ## First-Time Setup
 

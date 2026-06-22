@@ -80,6 +80,41 @@
   changed_when: "'UPDATED' in (default_heartbeat_result.stdout | default(''))"
   notify: restart openclaw-gateway
 
+# The default agent's heartbeat is owned by agents.defaults.heartbeat (above). But the
+# gateway merges a per-agent list entry OVER defaults ({...defaults, ...entry}), so a
+# stale agents.list.<default>.heartbeat (legacy drift) silently shadows it — pinning an
+# outdated model/cadence and, worse, a model no longer in the allowlist. Remove it so
+# agents.defaults.heartbeat stays authoritative for the default agent.
+- name: Drop shadowing heartbeat from default agent's list entry
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    IDX=$(openclaw agents list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d' \
+          | jq -r --arg id {{ _default_agent.id | quote }} 'to_entries[] | select(.value.id == $id) | .key') || IDX=""
+    if [ -z "$IDX" ]; then
+        echo "OK: default agent not in agents.list"
+        exit 0
+    fi
+    # `config get` exits non-zero when the key is unset (the steady, no-shadow state);
+    # under `set -euo pipefail` an unguarded assignment would abort the task there,
+    # before the grep. `|| HB="not set"` lets the unset case fall through to the
+    # "no shadowing heartbeat" branch (mirrors the sibling config-get guards).
+    HB=$(openclaw config get "agents.list.${IDX}.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || HB="not set"
+    if echo "$HB" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+        echo "OK: no shadowing heartbeat"
+    else
+        openclaw config unset "agents.list.${IDX}.heartbeat"
+        echo "UPDATED: removed shadowing list heartbeat for {{ _default_agent.id }} (defaults now authoritative)"
+    fi
+  args:
+    executable: /bin/bash
+  vars:
+    _default_agent: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+  when: (_default_agent.deliver_to | default('')) != ''
+  register: default_list_hb_cleanup
+  changed_when: "'UPDATED' in (default_list_hb_cleanup.stdout | default(''))"
+  notify: restart openclaw-gateway
+
 - name: Set default agent sandbox mode
   ansible.builtin.shell: |
     set -euo pipefail

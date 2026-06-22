@@ -4,10 +4,18 @@
 # The claude CLI (@anthropic-ai/claude-code) is installed as a global npm
 # dependency of OpenClaw. This task ensures:
 #   1. The binary is accessible via /usr/local/bin/claude
-#   2. OAuth credentials are written to ~/.claude/.credentials.json
+#   2. Anthropic credentials are written to ~/.claude/.credentials.json
 #
-# Credentials (access + refresh tokens) are passed from Pulumi via provision.sh.
-# The claude CLI auto-refreshes the access token using the refresh token.
+# The claude-cli backend authenticates ONLY from ~/.claude/.credentials.json.
+# Verified 2026-06-21: it ignores both the openclaw auth_profile_store (per-agent
+# SQLite) and the CLAUDE_CODE_OAUTH_TOKEN env var — so this file is the single
+# rotation surface for every agent.
+#
+# Two credential sources, in priority order:
+#   1. claude_oauth_credentials — a full OAuth blob (access+refresh) exported
+#      from a `claude` login (e.g. Mac keychain). Optional override; written verbatim.
+#   2. claude_setup_token — a long-lived setup token (`claude setup-token`,
+#      sk-ant-oat01-…). Default path: we synthesise the credentials file from it.
 
 - name: Check if claude CLI is available
   ansible.builtin.stat:
@@ -48,12 +56,50 @@
   when: claude_oauth_credentials | default('') | length > 0
   notify: restart openclaw-gateway
 
+# Default path: synthesise the credentials file from the long-lived setup token.
+# A setup token has no refresh token, so expiresAt is pinned far in the future —
+# the CLI then uses the token directly and never attempts an (impossible) refresh.
+# The token's real server-side expiry (~1y) surfaces only as live 401s, caught by
+# the claude-auth health-check cron, not locally. Idempotent: to_nice_json output is
+# stable, so the file (and the gateway restart) only changes when the token changes.
+- name: Write Claude CLI credentials from setup token
+  ansible.builtin.copy:
+    content: "{{ _claude_cli_credentials | to_nice_json }}\n"
+    dest: /home/ubuntu/.claude/.credentials.json
+    mode: "0600"
+  vars:
+    _claude_cli_credentials:
+      claudeAiOauth:
+        accessToken: "{{ claude_setup_token }}"
+        refreshToken: ""
+        expiresAt: 1813499823032  # ~2027-06; far-future placeholder
+        scopes:
+          - user:file_upload
+          - user:inference
+          - user:mcp_servers
+          - user:profile
+          - user:sessions:claude_code
+        subscriptionType: max
+  no_log: true
+  when:
+    - claude_oauth_credentials | default('') | length == 0
+    - claude_setup_token | default('') | length > 0
+  notify: restart openclaw-gateway
+
 - name: Verify Claude CLI auth status
   ansible.builtin.command: claude auth status
   check_mode: false
   register: claude_auth_check
   changed_when: false
-  failed_when: "'loggedIn\": false' in claude_auth_check.stdout"
+  # Substring alone misses non-JSON/error states (the command-default rc check is
+  # suppressed once failed_when is set), so re-add rc. NB: on the VPS `claude auth
+  # status` is a local check that reports loggedIn:true even for a server-expired
+  # token — real expiry is caught live by the claude-auth health-check, not here.
+  failed_when: >-
+    ('loggedIn": false' in claude_auth_check.stdout)
+    or (claude_auth_check.rc != 0)
   environment:
     PATH: "/usr/local/bin:/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-  when: claude_oauth_credentials | default('') | length > 0
+  when: >-
+    (claude_oauth_credentials | default('') | length > 0)
+    or (claude_setup_token | default('') | length > 0)
