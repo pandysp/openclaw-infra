@@ -316,46 +316,53 @@ for agent_id in "${AGENT_IDS[@]}"; do
 
     echo "  --- $agent_id ---"
 
-    # Check if already linked
+    # First-time link only: link the vault to its remote.
+    linked_now=false
     if ob_run sync-status --path "$workspace_dir" &>/dev/null; then
         echo "  Already linked to Obsidian Sync"
-        continue
+    else
+        # Find vault ID by name
+        vault_id=$(ob_run sync-list-remote 2>&1 | grep "$vault_name" | awk '{print $1}' || true)
+        if [ -z "$vault_id" ]; then
+            warn "Remote vault '$vault_name' not found — skipping. Create it on VPS first."
+            continue
+        fi
+        echo "  Linking vault $vault_name (ID: $vault_id)..."
+        ob_run sync-setup \
+            --vault "$vault_id" \
+            --path "$workspace_dir" \
+            --password "$VAULT_PASSWORD" \
+            --device-name "mac-${agent_id}"
+        linked_now=true
     fi
 
-    # Find vault ID by name
-    vault_id=$(ob_run sync-list-remote 2>&1 | grep "$vault_name" | awk '{print $1}' || true)
-    if [ -z "$vault_id" ]; then
-        warn "Remote vault '$vault_name' not found — skipping. Create it on VPS first."
-        continue
-    fi
-
-    echo "  Linking vault $vault_name (ID: $vault_id)..."
-
-    ob_run sync-setup \
-        --vault "$vault_id" \
-        --path "$workspace_dir" \
-        --password "$VAULT_PASSWORD" \
-        --device-name "mac-${agent_id}"
-
+    # Every run: enforce sync config so config changes (e.g. enabling
+    # community-plugin sync) reach already-linked vaults too — mirrors the VPS
+    # obsidian-headless role. This script is prep-only; the daemon re-reads the
+    # config on its next restart, which deploy-mac-daemons.sh always performs.
     echo "  Configuring sync (exclusions + config categories)..."
     ob_run sync-config \
         --path "$workspace_dir" \
         --excluded-folders "$OBSIDIAN_EXCLUDED_FOLDERS" \
         --configs "$OBSIDIAN_CONFIGS"
 
-    echo "  Running initial sync (timeout: ${INITIAL_SYNC_TIMEOUT}s)..."
-    # macOS has no `timeout` command — use background + sleep + kill
-    ob_run sync --path "$workspace_dir" &
-    OB_PID=$!
-    (
-        sleep "$INITIAL_SYNC_TIMEOUT"
-        kill "$OB_PID" 2>/dev/null || true
-    ) &
-    TIMER_PID=$!
-    wait "$OB_PID" 2>/dev/null || true
-    kill "$TIMER_PID" 2>/dev/null || true
-    wait "$TIMER_PID" 2>/dev/null || true
-    echo "  Initial sync done (or timed out — daemon will continue)"
+    # First-time link only: a blocking initial sync so the vault is populated
+    # before the daemon starts.
+    if [ "$linked_now" = true ]; then
+        echo "  Running initial sync (timeout: ${INITIAL_SYNC_TIMEOUT}s)..."
+        # macOS has no `timeout` command — use background + sleep + kill
+        ob_run sync --path "$workspace_dir" &
+        OB_PID=$!
+        (
+            sleep "$INITIAL_SYNC_TIMEOUT"
+            kill "$OB_PID" 2>/dev/null || true
+        ) &
+        TIMER_PID=$!
+        wait "$OB_PID" 2>/dev/null || true
+        kill "$TIMER_PID" 2>/dev/null || true
+        wait "$TIMER_PID" 2>/dev/null || true
+        echo "  Initial sync done (or timed out — daemon will continue)"
+    fi
 done
 
 echo ""
