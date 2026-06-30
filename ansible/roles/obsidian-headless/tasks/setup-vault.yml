@@ -1,6 +1,9 @@
 ---
 # Per-workspace Obsidian Sync setup (included from main.yml loop).
-# Idempotent: skips all setup if the workspace is already linked.
+# Creating + linking the remote vault is first-time-only (gated on the vault not
+# yet being linked). Sync config is enforced on EVERY run so config changes
+# (e.g. enabling community-plugin sync) propagate to already-linked vaults — the
+# daemon is restarted when the effective config actually changes so it re-reads it.
 #
 # Receives `item` from the loop with keys: agent_id, workspace_dir
 
@@ -18,8 +21,8 @@
   failed_when: sync_status.rc not in [0, 3]
   no_log: true
 
-# Full setup block — only runs if workspace is not yet linked to Obsidian Sync
-- name: "Setup Obsidian Sync for {{ item.agent_id }}"
+# First-time link only: create the remote vault and link this workspace to it.
+- name: "Link {{ item.agent_id }} workspace to Obsidian Sync (first-time)"
   when: sync_status.rc == 3
   environment:
     PATH: "/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
@@ -68,16 +71,36 @@
         executable: /bin/bash
       no_log: true
 
-    - name: "Configure exclusions for {{ item.agent_id }}"
-      ansible.builtin.shell: |
-        set -euo pipefail
-        ob sync-config \
-          --path "{{ item.workspace_dir }}" \
-          --excluded-folders "{{ obsidian_headless_excluded_folders }}"
-      args:
-        executable: /bin/bash
+# Every run: enforce sync config (exclusions + config categories) so changes
+# reach already-linked vaults. sync-config/sync-status are local-only (no auth
+# token, so errors stay visible). Restart the daemon only when the effective
+# config actually changes, so it re-reads it.
+- name: "Enforce Obsidian Sync config for {{ item.agent_id }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    before=$(ob sync-status --path "{{ item.workspace_dir }}" 2>/dev/null | grep -iE 'Configs:' || true)
+    ob sync-config --path "{{ item.workspace_dir }}" \
+      --excluded-folders "{{ obsidian_headless_excluded_folders }}" \
+      --configs "{{ obsidian_headless_configs }}" >/dev/null
+    after=$(ob sync-status --path "{{ item.workspace_dir }}" 2>/dev/null | grep -iE 'Configs:' || true)
+    [ "$before" = "$after" ] && echo "config:same" || echo "config:changed"
+  args:
+    executable: /bin/bash
+  environment:
+    PATH: "/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+  register: obsidian_sync_config
+  changed_when: "'config:changed' in obsidian_sync_config.stdout"
+  notify: enable obsidian-headless services
 
-    - name: "Initial sync for {{ item.agent_id }}"
+# First-time link only: a blocking initial sync so the vault is populated
+# before the continuous daemon starts.
+- name: "Initial sync (first-time) for {{ item.agent_id }}"
+  when: sync_status.rc == 3
+  environment:
+    PATH: "/home/ubuntu/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+    OBSIDIAN_AUTH_TOKEN: "{{ obsidian_auth_token }}"
+  block:
+    - name: "Run initial sync for {{ item.agent_id }}"
       ansible.builtin.shell: |
         set -euo pipefail
         timeout {{ obsidian_headless_initial_sync_timeout }} \

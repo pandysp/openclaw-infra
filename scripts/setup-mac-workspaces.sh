@@ -51,6 +51,10 @@ INITIAL_SYNC_TIMEOUT=120
 # Excluded folders for Obsidian Sync — must match VPS deployment
 OBSIDIAN_EXCLUDED_FOLDERS=".git,.venv,.packages,.npm-packages,.bin,.cache,.local,.npm,.qmd,.scripts,.claude,.ralph,.env,.beads,.config,.dev,.dolt,.openclaw,.pi,.repos,.state,node_modules,repos,claude-code-mcp,reranker-bench,obsidian,migration"
 
+# Obsidian config categories to sync — must match VPS (obsidian_headless_configs).
+# community-plugin[-data] is what carries community plugins to mobile. Empty disables.
+OBSIDIAN_CONFIGS="community-plugin,community-plugin-data"
+
 # --- Helpers ---
 
 log() { echo "==> $*"; }
@@ -333,10 +337,11 @@ for agent_id in "${AGENT_IDS[@]}"; do
         --password "$VAULT_PASSWORD" \
         --device-name "mac-${agent_id}"
 
-    echo "  Configuring exclusions..."
+    echo "  Configuring sync (exclusions + config categories)..."
     ob_run sync-config \
         --path "$workspace_dir" \
-        --excluded-folders "$OBSIDIAN_EXCLUDED_FOLDERS"
+        --excluded-folders "$OBSIDIAN_EXCLUDED_FOLDERS" \
+        --configs "$OBSIDIAN_CONFIGS"
 
     echo "  Running initial sync (timeout: ${INITIAL_SYNC_TIMEOUT}s)..."
     # macOS has no `timeout` command — use background + sleep + kill

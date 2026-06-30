@@ -247,13 +247,18 @@ openclaw_mcp_server_types:
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.
 # Override in openclaw.yml to enable and configure per-deployment.
 obsidian_headless_enabled: false
-obsidian_headless_version: "0.0.7"
+obsidian_headless_version: "0.0.12"
 obsidian_headless_memory_max: "256M"
 obsidian_headless_agents: []
 obsidian_headless_initial_sync_timeout: 300
 # Common non-vault directories to exclude from Obsidian Sync.
 # Override in openclaw.yml to add workspace-specific exclusions.
 obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env"
+# Obsidian config categories to sync. community-plugin[-data] is what carries
+# community plugins to mobile (they ride git between machines, but only Obsidian
+# Sync reaches the phone). Empty string disables config syncing entirely.
+# Must match setup-mac-workspaces.sh OBSIDIAN_CONFIGS.
+obsidian_headless_configs: "community-plugin,community-plugin-data"
 
 # Note: openclaw_workspaces is auto-generated in playbook.yml pre_tasks from
 # openclaw_agents. Override by defining openclaw_workspaces in openclaw.yml.

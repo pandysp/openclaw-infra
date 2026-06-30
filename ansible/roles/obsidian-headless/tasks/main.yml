@@ -37,6 +37,7 @@
     executable: /bin/bash
   register: npm_install
   changed_when: "'INSTALLED' in npm_install.stdout"
+  notify: enable obsidian-headless services
 
 - name: Write obsidian-headless auth token env file
   ansible.builtin.copy:
