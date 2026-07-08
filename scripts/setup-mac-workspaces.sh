@@ -40,7 +40,14 @@ GITIGNORE_SRC="$SCRIPT_DIR/../ansible/roles/workspace/files/gitignore-workspace"
 SYNC_TEMPLATE="$SCRIPT_DIR/templates/workspace-git-sync-mac.sh.tmpl"
 SYNC_BIN_DIR="$HOME/.local/bin"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-OB_BIN="$HOME/Library/pnpm/ob"
+# Resolve ob: validated path (no /bin/) and spec path (/bin/) differ per machine
+# (Studio: bin/ob; Air: pnpm/ob). Running ob via a symlink breaks its module
+# resolution, so we must point at the REAL binary. Mirrors deploy resolve_ob_bin.
+OB_BIN=""
+for _ob in "$HOME/Library/pnpm/bin/ob" "$HOME/Library/pnpm/ob"; do
+    [ -x "$_ob" ] && { OB_BIN="$_ob"; break; }
+done
+[ -n "$OB_BIN" ] || OB_BIN="$(command -v ob || true)"
 # ob's native better-sqlite3 (12.6.2) is ABI-locked to Node 23.11.0; pin it so ob
 # works regardless of the default node (which may be 26). Mirrors deploy-mac-daemons.sh.
 OB_NODE_BIN="$HOME/.local/share/mise/installs/node/23.11.0/bin"
