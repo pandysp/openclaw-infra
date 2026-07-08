@@ -14,6 +14,11 @@ fi
 # Suppress errors when there are no tracked-but-ignored files (the common case).
 git ls-files -ci --exclude-standard -z | xargs -0 git rm --cached 2>/dev/null || true
 
+# Pin a non-account identity so backup commits never land on a human's GitHub
+# contribution graph (mirrors the VPS ansible; @localhost is unroutable = UNLINKED).
+git config --local user.name  "OpenClaw Agent (__AGENT_ID__)"
+git config --local user.email "openclaw-__AGENT_ID__@localhost"
+
 # Commit any local changes first (so they're never lost)
 git add -A
 if ! git diff --cached --quiet; then
