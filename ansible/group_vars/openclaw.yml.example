@@ -111,6 +111,30 @@
 # # Override excluded folders (default: .git,.venv,node_modules,.cache,.env)
 # obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env,.claude"
 
+# --- Mac local daemons (scripts/deploy-mac-daemons.sh) ---
+# Applies ONLY to the macOS LaunchDaemon deployer + prep scripts (scripts/*mac*.sh),
+# not the Linux/systemd VPS. Path & toolchain tunables live in scripts/lib/mac-config.sh
+# (env-overridable defaults); these two keys are the per-deployment POLICY.
+#
+# mac_daemons — which of the four per-agent services to run. A service is enabled
+# unless set false (omit a service, or the whole block, to keep it enabled). The
+# deployer reconciles: a service set false is booted out + removed on the next run.
+# mac_daemons:
+#   git-sync: true
+#   obsidian-headless: true
+#   qmd-watch: true
+#   qmd-http: false          # e.g. disable the qmd MCP HTTP server if nothing consumes it
+#
+# mac_accounts — account order for qmd-http port bases. Effective port =
+# QMD_HTTP_BASE_PORT + (index in this list)*100 + agentPosition. List every macOS
+# account that runs these daemons so ports never collide across accounts. Only
+# relevant when qmd-http is enabled on more than one account; OPENCLAW_ACCOUNT_INDEX
+# overrides per run, and an unlisted account falls back to index 0.
+# mac_accounts:
+#   - spannagel
+#   - tl
+#   - andreasspannagel
+
 # --- Claude Code plugins (optional) ---
 # Plugins installed into the VPS agents' `claude` CLI. This is a per-deployment
 # choice and is NOT defaulted in all.yml — define it here to enable it. Each

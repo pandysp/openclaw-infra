@@ -54,6 +54,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/agents.sh
 source "$SCRIPT_DIR/lib/agents.sh"
+# shellcheck source=scripts/lib/mac-config.sh
+source "$SCRIPT_DIR/lib/mac-config.sh"
 
 # --- Account + identity ------------------------------------------------------
 
@@ -61,15 +63,12 @@ ACCOUNT="$(id -un)"
 ACCOUNT_UID="$(id -u)"
 HOME_DIR="$HOME"
 
-WORKSPACES_DIR="$HOME_DIR/dev/personal/workspaces"
-BIN_DIR="$HOME_DIR/.local/bin"
-LOG_DIR="$HOME_DIR/Library/Logs/openclaw"
+# WORKSPACES_DIR, BIN_DIR, LOG_DIR, QMD_HTTP_BASE_PORT, QMD_BIN, OB_NODE_BIN, and
+# resolve_ob_bin come from lib/mac-config.sh (the forker tuning surface). Only
+# launchd-specific, non-tunable dirs stay here.
 USER_LAUNCH_AGENTS_DIR="$HOME_DIR/Library/LaunchAgents"
 SYSTEM_DAEMONS_DIR="/Library/LaunchDaemons"
 GUI_DOMAIN="gui/$ACCOUNT_UID"
-
-# qmd HTTP port base; +100 per account, +1 per agent (positional, full list).
-QMD_HTTP_BASE_PORT=8191
 
 log()  { echo "==> $*"; }
 warn() { echo "WARNING: $*" >&2; }
@@ -80,6 +79,7 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 # password and this uses `sudo -A`. Falls back to an interactive prompt when a
 # real terminal is present. Once primed, later plain `sudo` calls use the cache.
 sudo_prime() {
+    [ "${DRY_RUN:-0}" = 1 ] && return 0
     sudo -n -v 2>/dev/null && return 0
     [ -n "${SUDO_ASKPASS:-}" ] && sudo -A -v 2>/dev/null && return 0
     sudo -v 2>/dev/null && return 0
@@ -87,25 +87,11 @@ sudo_prime() {
 }
 
 # --- Account index -> port-base offset ---------------------------------------
-# OPENCLAW_ACCOUNT_INDEX wins; else map known accounts; else hard-fail. We never
-# default an unknown account to 0 — that would silently collide port bases with
-# spannagel across machines.
-resolve_account_index() {
-    if [ -n "${OPENCLAW_ACCOUNT_INDEX:-}" ]; then
-        case "$OPENCLAW_ACCOUNT_INDEX" in
-            ''|*[!0-9]*) die "OPENCLAW_ACCOUNT_INDEX must be a non-negative integer (got: '$OPENCLAW_ACCOUNT_INDEX')" ;;
-        esac
-        echo "$OPENCLAW_ACCOUNT_INDEX"
-        return
-    fi
-    case "$ACCOUNT" in
-        spannagel)        echo 0 ;;
-        tl)               echo 1 ;;
-        andreasspannagel) echo 2 ;;
-        *) die "Unknown account '$ACCOUNT' — no port-base index mapping. Set OPENCLAW_ACCOUNT_INDEX=<n> explicitly." ;;
-    esac
-}
-ACCOUNT_INDEX="$(resolve_account_index)"
+# Derived from the mac_accounts order in openclaw.yml (position = index),
+# overridable with OPENCLAW_ACCOUNT_INDEX. See lib/mac-config.sh mac_account_index.
+# Only used to space qmd-http ports across accounts (irrelevant when qmd-http is
+# disabled). No hardcoded usernames — a fork configures its own accounts.
+ACCOUNT_INDEX="$(mac_account_index "$ACCOUNT")"
 
 # --- Daemon labels (new, per-account) ----------------------------------------
 # com.openclaw.<svc>.<account>.<agent>
@@ -129,30 +115,17 @@ old_launchagent_plists() {
 # --- Per-service PATHs (three distinct ones — do NOT collapse) ----------------
 # git-sync: no node needed (the sync script only shells out to git).
 GIT_SYNC_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-# obsidian-headless: HARD-PIN Node 23.11.0. ob's better-sqlite3 12.6.2 has no
-# Node-26 prebuilt and won't compile on Node 26; resolve_node_bin_dir() would
-# hand back the default Node 26 here, so we must construct the path explicitly.
-OBSIDIAN_NODE_BIN="$HOME_DIR/.local/share/mise/installs/node/23.11.0/bin"
-OBSIDIAN_PATH="${OBSIDIAN_NODE_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# obsidian-headless: pin Node via OB_NODE_BIN (lib/mac-config.sh). ob's native
+# better-sqlite3 is ABI-locked to that Node major, so the default Node (which may
+# be 26) would break it; resolve_node_bin_dir() would hand back the wrong one.
+OBSIDIAN_PATH="${OB_NODE_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 # qmd-watch + qmd-http: bun first, then mise shims (default Node 26 is fine for
 # qmd — its better-sqlite3 12.10.0 has a Node-26 prebuilt).
 QMD_PATH="$HOME_DIR/.bun/bin:$HOME_DIR/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # --- Programs ----------------------------------------------------------------
-# OB_BIN: the daemon spec says ~/Library/pnpm/bin/ob, but the validated existing
-# setup uses ~/Library/pnpm/ob (no /bin/) — and on this machine only the latter
-# exists. Try the spec path, fall back to the validated path, then PATH; use the
-# first executable. (Discrepancy surfaced in the deploy summary.)
-resolve_ob_bin() {
-    local cand
-    for cand in "$HOME_DIR/Library/pnpm/bin/ob" "$HOME_DIR/Library/pnpm/ob"; do
-        [ -x "$cand" ] && { echo "$cand"; return 0; }
-    done
-    cand="$(command -v ob 2>/dev/null || true)"
-    [ -n "$cand" ] && { echo "$cand"; return 0; }
-    return 1
-}
-QMD_BIN="$HOME_DIR/.bun/bin/qmd"   # PATH already leads with .bun/bin; pin per spec.
+# resolve_ob_bin() (the real-binary resolver) and QMD_BIN both come from
+# lib/mac-config.sh so all three Mac scripts resolve ob/qmd identically.
 
 # --- Port map: positional over the FULL agent list, then we look up selected --
 # Computing the index within the selected subset would mis-assign ports on a
@@ -345,6 +318,11 @@ EOF
 # =============================================================================
 install_daemon() {
     local label="$1" tmp="$2" dest
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        cp "$tmp" "$DRYRUN_OUT/${label}.plist"
+        echo "  [dry-run] would install: ${label}"
+        return 0
+    fi
     dest="$SYSTEM_DAEMONS_DIR/${label}.plist"
     sudo install -o root -g wheel -m 644 "$tmp" "$dest"
     sudo launchctl bootout "system/${label}" 2>/dev/null || true
@@ -362,12 +340,35 @@ install_daemon() {
     return 0
 }
 
+# Reconcile a config-disabled service: if a daemon for this agent is installed or
+# loaded, bootout + rm it so `deploy` converges runtime to config. Only an
+# explicit mac_daemons.<svc>=false reaches here (mac_service_enabled treats
+# absent/empty/missing as enabled), so a missing config never triggers removal.
+reconcile_remove() {
+    local svc="$1" agent="$2" label plist
+    label="$(daemon_label "$svc" "$agent")"
+    plist="$(daemon_plist "$svc" "$agent")"
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        [ -f "$plist" ] && echo "  [dry-run] reconcile: would remove disabled ${label}"
+        return 0
+    fi
+    if [ -f "$plist" ] || sudo launchctl print "system/${label}" &>/dev/null; then
+        sudo launchctl bootout "system/${label}" 2>/dev/null || true
+        sudo rm -f "$plist"
+        echo "  reconciled (disabled in config): removed ${label}"
+    fi
+}
+
 # Best-effort teardown of one old LaunchAgent: bootout from the GUI domain (which
 # may not exist over SSH — hence 2>/dev/null), then rm. The rm is load-bearing:
 # it stops the LaunchAgent from double-running on the next GUI login.
 teardown_old_launchagent() {
     local plist="$1"
     [ -f "$plist" ] || return 0
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        echo "  [dry-run] would remove old LaunchAgent: $(basename "$plist")"
+        return 0
+    fi
     launchctl bootout "$GUI_DOMAIN" "$plist" 2>/dev/null || true
     rm -f "$plist"
     echo "  removed old LaunchAgent: $(basename "$plist")"
@@ -377,6 +378,7 @@ teardown_old_launchagent() {
 # on '^AGENT_LOCK=' so re-runs are stable (matching the literal old value would
 # double-namespace: spannagel-spannagel-<agent> on the second pass).
 namespace_qmd_watch_lock() {
+    [ "${DRY_RUN:-0}" = 1 ] && return 0
     local script="$1" agent="$2"
     sed -i '' -E "s|^AGENT_LOCK=.*|AGENT_LOCK=\"/tmp/qmd-watch-${ACCOUNT}-${agent}.lock\"|" "$script"
 }
@@ -397,7 +399,9 @@ show_status() {
         echo "--- ${agent} (qmd-http port ${port}) ---"
         for svc in git-sync obsidian-headless qmd-watch qmd-http; do
             label="$(daemon_label "$svc" "$agent")"
-            if sudo launchctl print "system/${label}" &>/dev/null; then
+            if ! mac_service_enabled "$svc"; then
+                printf "  %-18s disabled (config)\n" "$svc:"
+            elif sudo launchctl print "system/${label}" &>/dev/null; then
                 printf "  %-18s loaded\n" "$svc:"
             elif [ -f "$(daemon_plist "$svc" "$agent")" ]; then
                 printf "  %-18s installed, not loaded\n" "$svc:"
@@ -405,7 +409,7 @@ show_status() {
                 printf "  %-18s not deployed\n" "$svc:"
             fi
         done
-        if [ -f "$workspace/.qmd/index.sqlite" ]; then
+        if mac_service_enabled qmd-http && [ -f "$workspace/.qmd/index.sqlite" ]; then
             if curl -sf "http://localhost:${port}/health" &>/dev/null; then
                 echo "  qmd-http health:   responding"
             else
@@ -445,6 +449,18 @@ uninstall() {
 # =============================================================================
 # Arg parsing
 # =============================================================================
+# --dry-run is a modifier, not a mode: strip it and set DRY_RUN, then parse the
+# rest (mode flags + agent filter) as before.
+DRY_RUN=0
+_args=()
+for _a in "$@"; do
+    case "$_a" in
+        --dry-run) DRY_RUN=1 ;;
+        *) _args+=("$_a") ;;
+    esac
+done
+set -- "${_args[@]+"${_args[@]}"}"
+
 case "${1:-}" in
     --status)    show_status ;;
     --uninstall) uninstall ;;
@@ -455,7 +471,7 @@ SELECTED_AGENTS=()
 if [ $# -gt 0 ]; then
     for arg in "$@"; do
         case "$arg" in
-            --*) die "Unknown flag '$arg'. Valid: --status, --uninstall" ;;
+            --*) die "Unknown flag '$arg'. Valid: --status, --uninstall, --dry-run" ;;
         esac
         found=false
         for id in "${ALL_AGENT_IDS[@]}"; do
@@ -473,13 +489,22 @@ fi
 OB_BIN="$(resolve_ob_bin || true)"   # may be empty -> obsidian service skipped
 
 # launchd does not create the parent of StandardOutPath; without this the
-# daemons silently fail to spawn.
-mkdir -p "$LOG_DIR"
+# daemons silently fail to spawn. (Skipped in dry-run — keep it side-effect-free.)
+[ "$DRY_RUN" = 1 ] || mkdir -p "$LOG_DIR"
 
 # Temp dir for generated plists (installed into /Library via `sudo install`).
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-daemons.XXXXXX")"
 cleanup_tmp() { rm -rf "$TMP_DIR"; }
 trap cleanup_tmp EXIT
+
+# Dry-run: install_daemon copies each emitted plist here instead of installing to
+# /Library. Kept outside TMP_DIR so it survives the cleanup trap for inspection
+# and byte-diffing against a prior run. Override the location with DRYRUN_OUT=<dir>.
+if [ "$DRY_RUN" = 1 ]; then
+    DRYRUN_OUT="${DRYRUN_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/openclaw-dryrun.XXXXXX")}"
+    mkdir -p "$DRYRUN_OUT"
+    log "DRY-RUN — emitting plists to: $DRYRUN_OUT (no sudo, install, launchctl, or file mutation)"
+fi
 
 echo ""
 echo "=========================================="
@@ -508,57 +533,73 @@ for agent in "${SELECTED_AGENTS[@]}"; do
     fi
 
     # --- git-sync ------------------------------------------------------------
-    git_script="$(git_sync_script "$agent")"
-    if [ -x "$git_script" ] || [ -f "$git_script" ]; then
-        tmp="$TMP_DIR/$(daemon_label git-sync "$agent").plist"
-        emit_git_sync_plist "$agent" > "$tmp"
-        install_daemon "$(daemon_label git-sync "$agent")" "$tmp"
+    if mac_service_enabled git-sync; then
+        git_script="$(git_sync_script "$agent")"
+        if [ -x "$git_script" ] || [ -f "$git_script" ]; then
+            tmp="$TMP_DIR/$(daemon_label git-sync "$agent").plist"
+            emit_git_sync_plist "$agent" > "$tmp"
+            install_daemon "$(daemon_label git-sync "$agent")" "$tmp"
+        else
+            warn "git-sync skipped for '${agent}': helper missing — $git_script (run setup-mac-workspaces.sh first)"
+        fi
     else
-        warn "git-sync skipped for '${agent}': helper missing — $git_script (run setup-mac-workspaces.sh first)"
+        reconcile_remove git-sync "$agent"
     fi
 
     # --- obsidian-headless ---------------------------------------------------
     # Gate on three prereqs — a missing one must skip cleanly, not deploy a
-    # crash-looping daemon: (1) ob binary present, (2) Node 23.11.0 installed
-    # (better-sqlite3 12.6.2 has no Node-26 build), (3) the vault is actually
-    # linked for this workspace (else `ob sync --continuous` errors forever).
-    if [ -z "${OB_BIN:-}" ]; then
-        warn "obsidian-headless skipped for '${agent}': ob binary not found (install @nicekiwi/obsidian-headless)"
-    elif [ ! -d "$OBSIDIAN_NODE_BIN" ]; then
-        warn "obsidian-headless skipped for '${agent}': Node 23.11.0 not installed ($OBSIDIAN_NODE_BIN)"
-    elif ! PATH="$OBSIDIAN_PATH" "$OB_BIN" sync-status --path "$workspace" &>/dev/null; then
-        warn "obsidian-headless skipped for '${agent}': vault not linked for $workspace (run setup-mac-workspaces.sh first)"
+    # crash-looping daemon: (1) ob binary present, (2) the pinned Node installed
+    # (ob's better-sqlite3 is ABI-locked to it), (3) the vault is actually linked
+    # for this workspace (else `ob sync --continuous` errors forever).
+    if mac_service_enabled obsidian-headless; then
+        if [ -z "${OB_BIN:-}" ]; then
+            warn "obsidian-headless skipped for '${agent}': ob binary not found (install @nicekiwi/obsidian-headless)"
+        elif [ ! -d "$OB_NODE_BIN" ]; then
+            warn "obsidian-headless skipped for '${agent}': pinned Node (${OB_NODE_VERSION}) not installed at $OB_NODE_BIN"
+        elif ! PATH="$OBSIDIAN_PATH" "$OB_BIN" sync-status --path "$workspace" &>/dev/null; then
+            warn "obsidian-headless skipped for '${agent}': vault not linked for $workspace (run setup-mac-workspaces.sh first)"
+        else
+            tmp="$TMP_DIR/$(daemon_label obsidian-headless "$agent").plist"
+            emit_obsidian_plist "$agent" "$OB_BIN" "$workspace" > "$tmp"
+            install_daemon "$(daemon_label obsidian-headless "$agent")" "$tmp"
+        fi
     else
-        tmp="$TMP_DIR/$(daemon_label obsidian-headless "$agent").plist"
-        emit_obsidian_plist "$agent" "$OB_BIN" "$workspace" > "$tmp"
-        install_daemon "$(daemon_label obsidian-headless "$agent")" "$tmp"
+        reconcile_remove obsidian-headless "$agent"
     fi
 
     # --- qmd-watch -----------------------------------------------------------
     # Prereqs: the installed watch script AND a .qmd index dir. We also rewrite
     # the script's agent lock to the per-account form (idempotent).
-    watch_script="$(qmd_watch_script "$agent")"
-    if [ ! -f "$watch_script" ]; then
-        warn "qmd-watch skipped for '${agent}': helper missing — $watch_script (run setup-mac-qmd.sh first)"
-    elif [ ! -d "$workspace/.qmd" ]; then
-        warn "qmd-watch skipped for '${agent}': no index dir — $workspace/.qmd (run setup-mac-qmd.sh first)"
+    if mac_service_enabled qmd-watch; then
+        watch_script="$(qmd_watch_script "$agent")"
+        if [ ! -f "$watch_script" ]; then
+            warn "qmd-watch skipped for '${agent}': helper missing — $watch_script (run setup-mac-qmd.sh first)"
+        elif [ ! -d "$workspace/.qmd" ]; then
+            warn "qmd-watch skipped for '${agent}': no index dir — $workspace/.qmd (run setup-mac-qmd.sh first)"
+        else
+            namespace_qmd_watch_lock "$watch_script" "$agent"
+            tmp="$TMP_DIR/$(daemon_label qmd-watch "$agent").plist"
+            emit_qmd_watch_plist "$agent" "$watch_script" > "$tmp"
+            install_daemon "$(daemon_label qmd-watch "$agent")" "$tmp"
+        fi
     else
-        namespace_qmd_watch_lock "$watch_script" "$agent"
-        tmp="$TMP_DIR/$(daemon_label qmd-watch "$agent").plist"
-        emit_qmd_watch_plist "$agent" "$watch_script" > "$tmp"
-        install_daemon "$(daemon_label qmd-watch "$agent")" "$tmp"
+        reconcile_remove qmd-watch "$agent"
     fi
 
     # --- qmd-http ------------------------------------------------------------
-    # Prereq: a built index. The qmd binary itself is pinned to ~/.bun/bin/qmd.
-    if [ ! -f "$workspace/.qmd/index.sqlite" ]; then
-        warn "qmd-http skipped for '${agent}': no index — $workspace/.qmd/index.sqlite (run setup-mac-qmd.sh first)"
-    elif [ ! -x "$QMD_BIN" ]; then
-        warn "qmd-http skipped for '${agent}': qmd binary not found at $QMD_BIN (bun install -g @tobilu/qmd)"
+    # Prereq: a built index. The qmd binary itself is pinned via QMD_BIN.
+    if mac_service_enabled qmd-http; then
+        if [ ! -f "$workspace/.qmd/index.sqlite" ]; then
+            warn "qmd-http skipped for '${agent}': no index — $workspace/.qmd/index.sqlite (run setup-mac-qmd.sh first)"
+        elif [ ! -x "$QMD_BIN" ]; then
+            warn "qmd-http skipped for '${agent}': qmd binary not found at $QMD_BIN (bun install -g @tobilu/qmd)"
+        else
+            tmp="$TMP_DIR/$(daemon_label qmd-http "$agent").plist"
+            emit_qmd_http_plist "$agent" "$port" "$workspace" > "$tmp"
+            install_daemon "$(daemon_label qmd-http "$agent")" "$tmp"
+        fi
     else
-        tmp="$TMP_DIR/$(daemon_label qmd-http "$agent").plist"
-        emit_qmd_http_plist "$agent" "$port" "$workspace" > "$tmp"
-        install_daemon "$(daemon_label qmd-http "$agent")" "$tmp"
+        reconcile_remove qmd-http "$agent"
     fi
 
     # --- tear down the superseded per-user LaunchAgents ----------------------
