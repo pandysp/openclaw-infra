@@ -16,6 +16,14 @@ export QMD_CONFIG_DIR="$WORKSPACE/.qmd"
 export INDEX_PATH="$WORKSPACE/.qmd/index.sqlite"
 export PATH="$HOME/.bun/bin:$PATH"  # bun first; inherit LaunchAgent PATH (carries active node)
 
+# Re-exec once under background QoS (darwinbg): the watcher and every child
+# it spawns (fswatch, extract, qmd/node) runs on efficiency cores with low
+# I/O priority, so sync bursts never compete with the interactive UI.
+if [ -z "${QMD_WATCH_BG:-}" ]; then
+    export QMD_WATCH_BG=1
+    exec /usr/sbin/taskpolicy -b /bin/bash "$0" "$@"
+fi
+
 command -v fswatch &>/dev/null || { echo "Error: fswatch not found. Install with: brew install fswatch" >&2; exit 1; }
 command -v qmd &>/dev/null || { echo "Error: qmd not found" >&2; exit 1; }
 
@@ -106,5 +114,6 @@ done < <(fswatch \
     -e '/\.git/' \
     -e '/\.qmd/' \
     -e '/\.scripts/extract-cache/' \
+    -e '/\.obsidian(/|$)' \
     -0 \
     "$WORKSPACE")

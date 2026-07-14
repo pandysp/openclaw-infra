@@ -76,7 +76,7 @@ do_sync || echo "WARNING: initial sync failed, will retry on next file change" >
 while true; do
     inotifywait -r -q \
         --event modify,create,delete,move \
-        --exclude '(\.qmd|\.git|extract-cache)' \
+        --exclude '(\.qmd|\.git|extract-cache|\.obsidian)' \
         "$WORKSPACE"
     rc=$?
     if [ $rc -ne 0 ]; then
