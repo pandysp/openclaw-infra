@@ -1,5 +1,16 @@
 # Mac Daemon Audit — Prioritized Remediation Plan
 
+> **Update (2026-07-14): `qmd-http` decommissioned fleet-wide.** The qmd MCP HTTP
+> server was found unused (no consumer process, zero query traffic in its logs) and
+> removed from all three accounts. The workspace daemon set is now **three** services —
+> git-sync, obsidian-headless, qmd-watch. Which services run is now a per-deployment
+> `mac_daemons` toggle in the gitignored `openclaw.yml` (see `openclaw.yml.example`);
+> `deploy-mac-daemons.sh` reconciles a disabled service (bootout + rm) on its next run.
+> The "identical set of **four** daemons" goal below and the `qmd-http` port/PoC
+> references throughout this plan are **historical** — they describe the migration as it
+> was executed, not the current state. The port-base machinery (`mac_accounts`,
+> `QMD_HTTP_BASE_PORT`) is retained but dormant while qmd-http stays disabled.
+
 **Goal:** every macOS account on every machine (spannagel + tl on the Mac Studio, andreasspannagel on the MacBook Air) runs an **identical** set of workspace daemons — git-sync, obsidian-headless, qmd-watch, qmd-http for all agents — all **ACTIVE**, login-independent, with full redundancy. Identical beats minimal: the Air runs system daemons for *uniformity*, not because it needs them.
 
 **Synthesized from three dimension audits:** Homebrew multi-user hazard, Node-major / native-module fragility, and daemon-architecture migration. All live readings below are verified on the Air (`andreasspannagel`, node 26.3.0, ABI 147, umask 022) and cross-referenced against the Studio readings in the dimension reports.
