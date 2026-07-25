@@ -119,8 +119,9 @@ old_launchagent_plists() {
 # git-sync: no node needed (the sync script only shells out to git).
 GIT_SYNC_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 # obsidian-headless: pin Node via OB_NODE_BIN (lib/mac-config.sh). ob's native
-# better-sqlite3 is ABI-locked to that Node major, so the default Node (which may
-# be 26) would break it; resolve_node_bin_dir() would hand back the wrong one.
+# better-sqlite3 is ABI-locked to one Node major, and WHICH major depends on the
+# ob version — so the machine default is wrong in both directions, not just when
+# it is too new. lib/mac-config.sh owns the mapping; keep them in step.
 OBSIDIAN_PATH="${OB_NODE_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 # qmd-watch + qmd-http: bun first, then mise shims (default Node 26 is fine for
 # qmd — its better-sqlite3 12.10.0 has a Node-26 prebuilt).
