@@ -32,25 +32,36 @@
 # Daemon stdout/stderr logs.
 : "${LOG_DIR:=$HOME/Library/Logs/openclaw}"
 
-# obsidian-headless's native better-sqlite3 is ABI-locked to a Node major, so ob
-# runs under a pinned Node regardless of the machine default. OB_NODE_BIN derives
-# from the version via the mise install path; set OB_NODE_BIN directly if you
-# don't use mise. deploy-mac-daemons.sh SKIPS obsidian-headless when this
-# directory is missing — better a missing service than a crash-looping one.
+# --- ob runtime project (preferred) ------------------------------------------
+# ob's better-sqlite3 is a native addon locked to one Node major, and WHICH major
+# depends on the ob version — the lock moved with 0.0.13 and will move again:
+#   <= 0.0.12  better-sqlite3 12.6.2   -> Node 23 only
+#   >= 0.0.13  better-sqlite3 12.11.1  -> Node 26 only
+# A bare `pnpm add -g obsidian-headless` gives you no say in that: the version is
+# whatever the package pins, so the deployment has to chase it with a Node pin,
+# and gets it wrong in one direction or the other on every bump.
 #
-# The pin tracks obsidian-headless's better-sqlite3, and moved with 0.0.13:
-#   <= 0.0.12  better-sqlite3 12.6.2   -> Node 23 (no Node-26 prebuild)
-#   >= 0.0.13  better-sqlite3 12.11.1  -> Node 26 (no Node-23 prebuild)
-# The two are mutually exclusive, so upgrading ob and bumping this must happen
-# together. Still on <= 0.0.12? Set OB_NODE_VERSION=23.11.0.
+# The runtime project fixes the axis. setup-mac-workspaces.sh creates a tiny
+# private project whose lockfile pins the addon and whose pnpm-workspace.yaml
+# allows its build, then the daemons run its node_modules/.bin/ob. The pin lives
+# with the dependency instead of in this file, and there is no Node knob to keep
+# in sync.
+: "${OB_RUNTIME_DIR:=$HOME/.local/opt/obsidian-headless}"
+# Version installed into that project. "latest" tracks upstream on each setup run.
+: "${OB_VERSION:=latest}"
+
+# --- Legacy: bare global ob (fallback) ---------------------------------------
+# Only consulted when OB_RUNTIME_DIR has no built ob — i.e. an install predating
+# the runtime project. Kept so existing forks keep working unchanged: with no
+# runtime project the emitted plists are byte-identical to before.
 #
-# GOTCHA when installing ob with pnpm 10+: build scripts are blocked by default,
-# so better-sqlite3 ships NO compiled binary and ob dies at require() with
-# MODULE_NOT_FOUND for every ABI. There is no prebuild for Node 26 either — it is
-# compiled locally — so the build must actually run:
+# GOTCHA if you do install globally with pnpm 10+: build scripts are blocked by
+# default, so better-sqlite3 lands with NO compiled binary and ob dies at
+# require() with MODULE_NOT_FOUND for every ABI — which looks like a version
+# mismatch but is not. There is no Node-26 prebuild either; it compiles locally:
 #   pnpm add -g --allow-build=better-sqlite3 obsidian-headless@<version>
-# (`pnpm approve-builds` does not work for global installs.) Verify with
-# `ob --version` plus a real sync; a bare `--version` does not load the addon.
+# (`pnpm approve-builds` is rejected for global installs.) `ob --version` does
+# NOT load the addon, so it is not a valid check — exercise a real sync.
 : "${OB_NODE_VERSION:=26.3.0}"
 : "${OB_NODE_BIN:=$HOME/.local/share/mise/installs/node/${OB_NODE_VERSION}/bin}"
 
@@ -66,11 +77,17 @@
 
 # --- Shared helpers ----------------------------------------------------------
 
+# Path to the runtime project's ob, and whether it is actually built.
+ob_runtime_bin() { echo "$OB_RUNTIME_DIR/node_modules/.bin/ob"; }
+ob_runtime_present() { [ -x "$(ob_runtime_bin)" ]; }
+
 # Resolve the real ob binary — never a symlink, which breaks its native-module
-# resolution. Tries the spec path, the validated path, then PATH. Echoes the
-# path (returns 0), or returns 1 if none found.
+# resolution. Prefers the runtime project, then the historical global installs,
+# then PATH. Echoes the path (returns 0), or returns 1 if none found.
 resolve_ob_bin() {
     local cand
+    cand="$(ob_runtime_bin)"
+    [ -x "$cand" ] && { echo "$cand"; return 0; }
     for cand in "$HOME/Library/pnpm/bin/ob" "$HOME/Library/pnpm/ob"; do
         [ -x "$cand" ] && { echo "$cand"; return 0; }
     done
