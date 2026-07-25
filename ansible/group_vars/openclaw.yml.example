@@ -112,28 +112,57 @@
 # obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env,.claude"
 
 # --- Mac local daemons (scripts/deploy-mac-daemons.sh) ---
-# Applies ONLY to the macOS LaunchDaemon deployer + prep scripts (scripts/*mac*.sh),
-# not the Linux/systemd VPS. Path & toolchain tunables live in scripts/lib/mac-config.sh
-# (env-overridable defaults); these two keys are the per-deployment POLICY.
+# NOT ON A MAC? SKIP THIS WHOLE BLOCK. It configures the macOS LaunchDaemon
+# deployer + prep scripts (scripts/*mac*.sh) and nothing else — the Linux/systemd
+# VPS never reads it. Everything Mac-shaped is nested under the single `mac:` key
+# so it stays one skippable block no matter how many knobs get added later.
 #
-# mac_daemons — which of the four per-agent services to run. A service is enabled
-# unless set false (omit a service, or the whole block, to keep it enabled). The
-# deployer reconciles: a service set false is booted out + removed on the next run.
-# mac_daemons:
-#   git-sync: true
-#   obsidian-headless: true
-#   qmd-watch: true
-#   qmd-http: false          # e.g. disable the qmd MCP HTTP server if nothing consumes it
+# Path & toolchain tunables (workspace dir, Node pin, GitHub org, qmd binary) are
+# NOT here — they live in scripts/lib/mac-config.sh as env-overridable defaults.
+# This block is per-deployment POLICY only.
 #
-# mac_accounts — account order for qmd-http port bases. Effective port =
-# QMD_HTTP_BASE_PORT + (index in this list)*100 + agentPosition. List every macOS
-# account that runs these daemons so ports never collide across accounts. Only
-# relevant when qmd-http is enabled on more than one account; OPENCLAW_ACCOUNT_INDEX
-# overrides per run, and an unlisted account falls back to index 0.
-# mac_accounts:
-#   - spannagel
-#   - tl
-#   - andreasspannagel
+# All three sub-keys are optional and fail permissive: omit one, or the whole
+# `mac:` block, and nothing is restricted. A broken or empty config can never
+# silently tear the fleet down.
+#
+# mac:
+#   # agents — which agents get daemons ON THIS MAC. Absent or empty ⇒ every
+#   # agent in openclaw_agents. Use it when the VPS runs the full roster but the
+#   # Mac should only carry a few (each agent costs ~3 resident processes per
+#   # account). Agents dropped from this list are booted out + removed on the
+#   # next full deploy; an explicit `deploy-mac-daemons.sh <agent>` still
+#   # overrides it for a one-off run and reconciles nothing.
+#   #
+#   # NOTE the deliberate asymmetry with obsidian_headless_agents above, which
+#   # means "nobody" when empty: that key opts INTO an optional feature, whereas
+#   # this one RESTRICTS an already-running set, so the safe default is inverted.
+#   agents:
+#     - main
+#     - tl
+#
+#   # daemons — which of the four per-agent services to run. A service is enabled
+#   # unless set false (omit a service, or the block, to keep it enabled). The
+#   # deployer reconciles: a service set false is booted out + removed next run.
+#   daemons:
+#     git-sync: true
+#     obsidian-headless: true
+#     qmd-watch: true
+#     qmd-http: false        # e.g. disable the qmd MCP HTTP server if nothing consumes it
+#
+#   # accounts — account order for qmd-http port bases. Effective port =
+#   # QMD_HTTP_BASE_PORT + (index in this list)*100 + agentPosition. List every
+#   # macOS account running these daemons so ports never collide. Only relevant
+#   # when qmd-http is enabled on more than one account; OPENCLAW_ACCOUNT_INDEX
+#   # overrides per run, and an unlisted account falls back to index 0.
+#   accounts:
+#     - spannagel
+#     - tl
+#     - andreasspannagel
+#
+# DEPRECATED: the pre-nesting flat keys `mac_daemons:` and `mac_accounts:` are
+# still honoured (they map to mac.daemons / mac.accounts) so existing forks keep
+# working, but the deployer prints a migration note. There is no flat equivalent
+# of mac.agents — nest the block to use it.
 
 # --- Claude Code plugins (optional) ---
 # Plugins installed into the VPS agents' `claude` CLI. This is a per-deployment

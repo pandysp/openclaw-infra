@@ -10,10 +10,12 @@
 #      — or change the defaults here. Defaults match the upstream author's macOS
 #      fleet, so an unconfigured run reproduces that setup out of the box.
 #
-#   2. Per-deployment POLICY — which daemons run, and account order for qmd-http
-#      port bases — lives in ansible/group_vars/openclaw.yml (mac_daemons /
-#      mac_accounts; see openclaw.yml.example). That file is gitignored, so your
-#      choices never propagate to the shared script.
+#   2. Per-deployment POLICY — which agents get daemons, which daemons run, and
+#      account order for qmd-http port bases — lives in the single `mac:` block
+#      of ansible/group_vars/openclaw.yml (see openclaw.yml.example). That file
+#      is gitignored, so your choices never propagate to the shared script.
+#      If you are not on a Mac, that block is the only thing in the shared SoT
+#      you can ignore wholesale.
 #
 # Sourced, not executed. The openclaw.yml readers require yq + jq (already
 # required by lib/agents.sh, which every caller also sources).
@@ -67,17 +69,66 @@ resolve_ob_bin() {
 _MAC_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _MAC_OPENCLAW_YML="$_MAC_CFG_DIR/../../ansible/group_vars/openclaw.yml"
 
-# Disabled-service set, parsed ONCE at source time (a per-call yq|jq would fork
-# 36+ times across a deploy). Only keys explicitly set to false land here, so
-# absent key / null / empty / missing file ⇒ enabled — fail-safe: a broken or
-# empty config can never silently tear the fleet down. Selecting `== false`
-# explicitly also sidesteps jq's `//`, which treats a literal false as empty.
-declare -A _MAC_SVC_DISABLED=()
+# All Mac policy is read ONCE at source time into a single JSON blob (a per-call
+# yq|jq would fork 36+ times across a deploy). One yq invocation resolves the
+# nested `mac:` block and falls back to the pre-nesting flat keys, so an existing
+# fork that set mac_daemons/mac_accounts keeps working untouched.
+#
+# The default blob (no config file) is the permissive one: no services disabled,
+# no agent gate, no account order. Every read below therefore degrades to
+# "everything enabled" — fail-safe: a broken, empty, or missing config can never
+# silently tear the fleet down.
+_MAC_POLICY_DEFAULT='{"agents":null,"daemons":{},"accounts":[],"legacy":false}'
+_MAC_POLICY_JSON="$_MAC_POLICY_DEFAULT"
 if [ -f "$_MAC_OPENCLAW_YML" ]; then
-    while IFS= read -r _svc; do
-        [ -n "$_svc" ] && _MAC_SVC_DISABLED["$_svc"]=1
-    done < <(yq -o json '.mac_daemons // {}' "$_MAC_OPENCLAW_YML" 2>/dev/null \
-        | jq -r 'to_entries[] | select(.value == false) | .key' 2>/dev/null || true)
+    # `legacy` is true only when the flat keys are what is actually supplying
+    # policy (no `mac:` block present) — that is the one case worth warning about.
+    #
+    # ORDER IS LOAD-BEARING: `legacy` MUST come first. Traversing `.mac.agents`
+    # auto-vivifies `.mac` in mikefarah yq (v4), so any later `has("mac")` or
+    # `.mac == null` sees a node the traversal itself created and the flat-key
+    # warning silently never fires. Verified on yq v4.53.3.
+    _MAC_POLICY_JSON="$(yq -o json -I 0 '{
+        "legacy":   ((has("mac") | not) and (has("mac_daemons") or has("mac_accounts"))),
+        "agents":   (.mac.agents   // null),
+        "daemons":  (.mac.daemons  // .mac_daemons  // {}),
+        "accounts": (.mac.accounts // .mac_accounts // [])
+    }' "$_MAC_OPENCLAW_YML" 2>/dev/null || echo "$_MAC_POLICY_DEFAULT")"
+    [ -n "$_MAC_POLICY_JSON" ] || _MAC_POLICY_JSON="$_MAC_POLICY_DEFAULT"
+fi
+
+# Disabled-service set. Only keys explicitly set to false land here, so absent /
+# null / empty ⇒ enabled. Selecting `== false` explicitly also sidesteps jq's
+# `//`, which treats a literal false as empty.
+declare -A _MAC_SVC_DISABLED=()
+while IFS= read -r _svc; do
+    [ -n "$_svc" ] && _MAC_SVC_DISABLED["$_svc"]=1
+done < <(printf '%s' "$_MAC_POLICY_JSON" \
+    | jq -r '.daemons | to_entries[] | select(.value == false) | .key' 2>/dev/null || true)
+
+# Per-agent gate. `_MAC_AGENTS_CONFIGURED` flips only when at least one agent is
+# listed, so both an absent `mac.agents` and an explicitly empty one mean "every
+# agent" — the same fail-safe as the service gate, and deliberately unlike the
+# VPS-side `obsidian_headless_agents: []` (which means "nobody"). The asymmetry
+# is intentional: that key opts INTO an optional feature, whereas this one
+# RESTRICTS an already-running set, so the safe default is the permissive one.
+#
+# The `type == "array"` guard makes a mis-shaped key (a map, a bare scalar) fail
+# OPEN rather than gate on whatever jq's `.[]` happens to yield — iterating a map
+# walks its VALUES, so `agents: {a: main}` would otherwise silently restrict to
+# `main`. Contents are deliberately NOT filtered: a real list holding wrong values
+# still reaches the roster check, which refuses loudly instead of ignoring it.
+declare -A _MAC_AGENT_ALLOWED=()
+_MAC_AGENTS_CONFIGURED=0
+while IFS= read -r _agent; do
+    [ -n "$_agent" ] || continue
+    _MAC_AGENT_ALLOWED["$_agent"]=1
+    _MAC_AGENTS_CONFIGURED=1
+done < <(printf '%s' "$_MAC_POLICY_JSON" \
+    | jq -r 'if (.agents | type) == "array" then .agents[] else empty end' 2>/dev/null || true)
+
+if [ "$(printf '%s' "$_MAC_POLICY_JSON" | jq -r '.legacy' 2>/dev/null)" = "true" ]; then
+    echo "NOTE: openclaw.yml still uses the flat mac_daemons/mac_accounts keys. Nest them under a single 'mac:' block (mac.daemons / mac.accounts / mac.agents) — see openclaw.yml.example. The flat keys still work." >&2
 fi
 
 # Is a Mac daemon service enabled for deployment? Pure lookup — no subprocess.
@@ -86,8 +137,27 @@ mac_service_enabled() {
     [ -z "${_MAC_SVC_DISABLED[$1]:-}" ]
 }
 
+# Is the per-agent gate configured at all? The deployer consults this before
+# reconciling gated-out agents, so an unconfigured run never removes anything.
+mac_agents_configured() {
+    [ "$_MAC_AGENTS_CONFIGURED" = 1 ]
+}
+
+# Does this agent get Mac daemons? Unconfigured ⇒ every agent. $1 = agent id.
+mac_agent_enabled() {
+    mac_agents_configured || return 0
+    [ -n "${_MAC_AGENT_ALLOWED[$1]:-}" ]
+}
+
+# Agent ids listed in mac.agents, one per line — lets callers that know the real
+# roster flag a typo'd entry that would otherwise gate an agent out in silence.
+mac_agents_listed() {
+    mac_agents_configured || return 0
+    printf '%s\n' "${!_MAC_AGENT_ALLOWED[@]}"
+}
+
 # Port-base index for an account. Precedence: OPENCLAW_ACCOUNT_INDEX env >
-# position in mac_accounts > 0 (with a warning). Never hard-fails, so a
+# position in mac.accounts > 0 (with a warning). Never hard-fails, so a
 # single-account fork works with no config. $1 = account name.
 mac_account_index() {
     local account="$1" idx
@@ -99,13 +169,11 @@ mac_account_index() {
             *) echo "$OPENCLAW_ACCOUNT_INDEX"; return ;;
         esac
     fi
-    if [ -f "$_MAC_OPENCLAW_YML" ]; then
-        idx="$(yq -o json '.mac_accounts // []' "$_MAC_OPENCLAW_YML" 2>/dev/null \
-            | jq -r --arg a "$account" 'index($a) // ""' 2>/dev/null || echo "")"
-        if [ -n "$idx" ] && [ "$idx" != "null" ]; then
-            echo "$idx"; return
-        fi
+    idx="$(printf '%s' "$_MAC_POLICY_JSON" \
+        | jq -r --arg a "$account" '.accounts | index($a) // ""' 2>/dev/null || echo "")"
+    if [ -n "$idx" ] && [ "$idx" != "null" ]; then
+        echo "$idx"; return
     fi
-    echo "WARNING: account '$account' not found in mac_accounts (openclaw.yml) and OPENCLAW_ACCOUNT_INDEX unset — using port-base index 0. Set OPENCLAW_ACCOUNT_INDEX to avoid cross-account qmd-http port collisions." >&2
+    echo "WARNING: account '$account' not found in mac.accounts (openclaw.yml) and OPENCLAW_ACCOUNT_INDEX unset — using port-base index 0. Set OPENCLAW_ACCOUNT_INDEX to avoid cross-account qmd-http port collisions." >&2
     echo 0
 }
