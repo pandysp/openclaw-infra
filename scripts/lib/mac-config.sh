@@ -32,11 +32,26 @@
 # Daemon stdout/stderr logs.
 : "${LOG_DIR:=$HOME/Library/Logs/openclaw}"
 
-# obsidian-headless's native better-sqlite3 is ABI-locked to a Node major (the
-# 12.6.2 build has no Node-26 prebuild and won't compile on 26), so ob must run
-# under a pinned Node regardless of the default. OB_NODE_BIN derives from the
-# version via the mise install path; set OB_NODE_BIN directly if you don't use mise.
-: "${OB_NODE_VERSION:=23.11.0}"
+# obsidian-headless's native better-sqlite3 is ABI-locked to a Node major, so ob
+# runs under a pinned Node regardless of the machine default. OB_NODE_BIN derives
+# from the version via the mise install path; set OB_NODE_BIN directly if you
+# don't use mise. deploy-mac-daemons.sh SKIPS obsidian-headless when this
+# directory is missing — better a missing service than a crash-looping one.
+#
+# The pin tracks obsidian-headless's better-sqlite3, and moved with 0.0.13:
+#   <= 0.0.12  better-sqlite3 12.6.2   -> Node 23 (no Node-26 prebuild)
+#   >= 0.0.13  better-sqlite3 12.11.1  -> Node 26 (no Node-23 prebuild)
+# The two are mutually exclusive, so upgrading ob and bumping this must happen
+# together. Still on <= 0.0.12? Set OB_NODE_VERSION=23.11.0.
+#
+# GOTCHA when installing ob with pnpm 10+: build scripts are blocked by default,
+# so better-sqlite3 ships NO compiled binary and ob dies at require() with
+# MODULE_NOT_FOUND for every ABI. There is no prebuild for Node 26 either — it is
+# compiled locally — so the build must actually run:
+#   pnpm add -g --allow-build=better-sqlite3 obsidian-headless@<version>
+# (`pnpm approve-builds` does not work for global installs.) Verify with
+# `ob --version` plus a real sync; a bare `--version` does not load the addon.
+: "${OB_NODE_VERSION:=26.3.0}"
 : "${OB_NODE_BIN:=$HOME/.local/share/mise/installs/node/${OB_NODE_VERSION}/bin}"
 
 # GitHub org owning the openclaw-workspace[-<id>] repos (setup-mac-workspaces.sh).
