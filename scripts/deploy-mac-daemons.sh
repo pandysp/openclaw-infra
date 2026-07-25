@@ -525,7 +525,15 @@ else
     # An all-typo mac.agents would otherwise select nothing and reconcile every
     # agent away — the exact "broken config tears the fleet down" failure the
     # gates are built to prevent. Refuse instead.
-    [ ${#SELECTED_AGENTS[@]} -gt 0 ] || die "mac.agents (openclaw.yml) matches no agent in openclaw_agents (${ALL_AGENT_IDS[*]}) — refusing to deploy nothing and reconcile everything away. Fix the list, or remove the key to deploy every agent."
+    #
+    # Guarded on mac_agents_configured so it fires ONLY for a real gate that
+    # matched nothing. Without the guard an empty openclaw_agents roster (no
+    # mac.agents anywhere) also lands here and dies blaming a key the user never
+    # set — and needlessly, since an unconfigured run gates nothing out and so
+    # has nothing to reconcile. An empty roster stays a no-op deploy, as before.
+    if mac_agents_configured && [ ${#SELECTED_AGENTS[@]} -eq 0 ]; then
+        die "mac.agents (openclaw.yml) matches no agent in openclaw_agents (${ALL_AGENT_IDS[*]}) — refusing to deploy nothing and reconcile everything away. Fix the list, or remove the key to deploy every agent."
+    fi
 fi
 
 # =============================================================================

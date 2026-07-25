@@ -112,13 +112,20 @@ done < <(printf '%s' "$_MAC_POLICY_JSON" \
 # VPS-side `obsidian_headless_agents: []` (which means "nobody"). The asymmetry
 # is intentional: that key opts INTO an optional feature, whereas this one
 # RESTRICTS an already-running set, so the safe default is the permissive one.
+#
+# The `type == "array"` guard makes a mis-shaped key (a map, a bare scalar) fail
+# OPEN rather than gate on whatever jq's `.[]` happens to yield — iterating a map
+# walks its VALUES, so `agents: {a: main}` would otherwise silently restrict to
+# `main`. Contents are deliberately NOT filtered: a real list holding wrong values
+# still reaches the roster check, which refuses loudly instead of ignoring it.
 declare -A _MAC_AGENT_ALLOWED=()
 _MAC_AGENTS_CONFIGURED=0
 while IFS= read -r _agent; do
     [ -n "$_agent" ] || continue
     _MAC_AGENT_ALLOWED["$_agent"]=1
     _MAC_AGENTS_CONFIGURED=1
-done < <(printf '%s' "$_MAC_POLICY_JSON" | jq -r '(.agents // [])[]' 2>/dev/null || true)
+done < <(printf '%s' "$_MAC_POLICY_JSON" \
+    | jq -r 'if (.agents | type) == "array" then .agents[] else empty end' 2>/dev/null || true)
 
 if [ "$(printf '%s' "$_MAC_POLICY_JSON" | jq -r '.legacy' 2>/dev/null)" = "true" ]; then
     echo "NOTE: openclaw.yml still uses the flat mac_daemons/mac_accounts keys. Nest them under a single 'mac:' block (mac.daemons / mac.accounts / mac.agents) — see openclaw.yml.example. The flat keys still work." >&2
