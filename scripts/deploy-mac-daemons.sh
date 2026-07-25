@@ -36,8 +36,11 @@
 # `launchctl ... system` calls). Idempotent and re-runnable.
 #
 # Usage:
-#   ./scripts/deploy-mac-daemons.sh                 # all agents, current account
-#   ./scripts/deploy-mac-daemons.sh main tl          # only these agents
+#   ./scripts/deploy-mac-daemons.sh                 # every agent mac.agents allows,
+#                                                   # current account; agents it
+#                                                   # excludes are reconciled away
+#   ./scripts/deploy-mac-daemons.sh main tl          # only these agents; overrides
+#                                                   # mac.agents and reconciles nothing
 #   ./scripts/deploy-mac-daemons.sh --status         # show daemon status
 #   ./scripts/deploy-mac-daemons.sh --uninstall      # remove this account's daemons
 #
@@ -87,7 +90,7 @@ sudo_prime() {
 }
 
 # --- Account index -> port-base offset ---------------------------------------
-# Derived from the mac_accounts order in openclaw.yml (position = index),
+# Derived from the mac.accounts order in openclaw.yml (position = index),
 # overridable with OPENCLAW_ACCOUNT_INDEX. See lib/mac-config.sh mac_account_index.
 # Only used to space qmd-http ports across accounts (irrelevant when qmd-http is
 # disabled). No hardcoded usernames — a fork configures its own accounts.
@@ -342,20 +345,22 @@ install_daemon() {
 
 # Reconcile a config-disabled service: if a daemon for this agent is installed or
 # loaded, bootout + rm it so `deploy` converges runtime to config. Only an
-# explicit mac_daemons.<svc>=false reaches here (mac_service_enabled treats
-# absent/empty/missing as enabled), so a missing config never triggers removal.
+# explicit mac.daemons.<svc>=false or an agent absent from a configured
+# mac.agents reaches here (both gates treat absent/empty/missing as enabled), so
+# a missing config never triggers removal.
+# $1 = svc  $2 = agent  $3 = reason shown in the log (default: disabled in config)
 reconcile_remove() {
-    local svc="$1" agent="$2" label plist
+    local svc="$1" agent="$2" reason="${3:-disabled in config}" label plist
     label="$(daemon_label "$svc" "$agent")"
     plist="$(daemon_plist "$svc" "$agent")"
     if [ "${DRY_RUN:-0}" = 1 ]; then
-        [ -f "$plist" ] && echo "  [dry-run] reconcile: would remove disabled ${label}"
+        [ -f "$plist" ] && echo "  [dry-run] reconcile: would remove ${label} (${reason})"
         return 0
     fi
     if [ -f "$plist" ] || sudo launchctl print "system/${label}" &>/dev/null; then
         sudo launchctl bootout "system/${label}" 2>/dev/null || true
         sudo rm -f "$plist"
-        echo "  reconciled (disabled in config): removed ${label}"
+        echo "  reconciled (${reason}): removed ${label}"
     fi
 }
 
@@ -396,10 +401,22 @@ show_status() {
         workspace="$(workspace_dir_for "$agent" "$WORKSPACES_DIR")"
         port="${PORT_MAP[$agent]}"
         echo ""
-        echo "--- ${agent} (qmd-http port ${port}) ---"
+        if mac_agent_enabled "$agent"; then
+            echo "--- ${agent} (qmd-http port ${port}) ---"
+        else
+            echo "--- ${agent} — gated out (not in mac.agents) ---"
+        fi
         for svc in git-sync obsidian-headless qmd-watch qmd-http; do
             label="$(daemon_label "$svc" "$agent")"
-            if ! mac_service_enabled "$svc"; then
+            if ! mac_agent_enabled "$agent"; then
+                # Surface drift: a gated-out agent that still has a daemon on
+                # disk means config and runtime disagree until a full deploy.
+                if [ -f "$(daemon_plist "$svc" "$agent")" ]; then
+                    printf "  %-18s installed — gated out, run a full deploy to reconcile\n" "$svc:"
+                else
+                    printf "  %-18s gated out (mac.agents)\n" "$svc:"
+                fi
+            elif ! mac_service_enabled "$svc"; then
                 printf "  %-18s disabled (config)\n" "$svc:"
             elif sudo launchctl print "system/${label}" &>/dev/null; then
                 printf "  %-18s loaded\n" "$svc:"
@@ -409,7 +426,7 @@ show_status() {
                 printf "  %-18s not deployed\n" "$svc:"
             fi
         done
-        if mac_service_enabled qmd-http && [ -f "$workspace/.qmd/index.sqlite" ]; then
+        if mac_agent_enabled "$agent" && mac_service_enabled qmd-http && [ -f "$workspace/.qmd/index.sqlite" ]; then
             if curl -sf "http://localhost:${port}/health" &>/dev/null; then
                 echo "  qmd-http health:   responding"
             else
@@ -467,6 +484,12 @@ case "${1:-}" in
 esac
 
 mapfile -t ALL_AGENT_IDS < <(get_agent_ids)
+
+# Agents this run should REMOVE daemons for rather than install. Populated only
+# on a full (unscoped) run: an explicit `deploy main` must touch main and nothing
+# else, exactly as a scoped run has always behaved.
+GATED_OUT_AGENTS=()
+
 SELECTED_AGENTS=()
 if [ $# -gt 0 ]; then
     for arg in "$@"; do
@@ -480,7 +503,29 @@ if [ $# -gt 0 ]; then
         $found || die "Unknown agent '$arg'. Available: ${ALL_AGENT_IDS[*]}"
     done
 else
-    SELECTED_AGENTS=("${ALL_AGENT_IDS[@]}")
+    # A mac.agents entry matching no real agent is almost certainly a typo, and
+    # its only visible effect would be an agent quietly not deploying — say so.
+    while IFS= read -r listed; do
+        [ -n "$listed" ] || continue
+        found=false
+        for id in "${ALL_AGENT_IDS[@]}"; do
+            [ "$id" = "$listed" ] && { found=true; break; }
+        done
+        $found || warn "mac.agents lists '${listed}', which is not in openclaw_agents (${ALL_AGENT_IDS[*]}) — ignoring it."
+    done < <(mac_agents_listed)
+
+    for id in "${ALL_AGENT_IDS[@]}"; do
+        if mac_agent_enabled "$id"; then
+            SELECTED_AGENTS+=("$id")
+        else
+            GATED_OUT_AGENTS+=("$id")
+        fi
+    done
+
+    # An all-typo mac.agents would otherwise select nothing and reconcile every
+    # agent away — the exact "broken config tears the fleet down" failure the
+    # gates are built to prevent. Refuse instead.
+    [ ${#SELECTED_AGENTS[@]} -gt 0 ] || die "mac.agents (openclaw.yml) matches no agent in openclaw_agents (${ALL_AGENT_IDS[*]}) — refusing to deploy nothing and reconcile everything away. Fix the list, or remove the key to deploy every agent."
 fi
 
 # =============================================================================
@@ -511,6 +556,7 @@ echo "=========================================="
 echo "  openclaw system-daemon deploy"
 echo "  account:  ${ACCOUNT} (index ${ACCOUNT_INDEX})"
 echo "  agents:   ${SELECTED_AGENTS[*]}"
+[ ${#GATED_OUT_AGENTS[@]} -eq 0 ] || echo "  gated out: ${GATED_OUT_AGENTS[*]} (mac.agents)"
 echo "  ob bin:   ${OB_BIN:-<not found — obsidian skipped>}"
 echo "=========================================="
 
@@ -609,6 +655,22 @@ for agent in "${SELECTED_AGENTS[@]}"; do
         teardown_old_launchagent "$old_plist"
     done < <(old_launchagent_plists "$agent")
 done
+
+# =============================================================================
+# Reconcile agents gated out by mac.agents
+# =============================================================================
+# Same convergence contract as a config-disabled service: a full run makes
+# runtime match config. Unreachable on a scoped run and on an unconfigured one
+# (GATED_OUT_AGENTS is empty in both cases), so neither can remove anything.
+if [ ${#GATED_OUT_AGENTS[@]} -gt 0 ]; then
+    echo ""
+    log "agents gated out by mac.agents: ${GATED_OUT_AGENTS[*]}"
+    for agent in "${GATED_OUT_AGENTS[@]}"; do
+        for svc in git-sync obsidian-headless qmd-watch qmd-http; do
+            reconcile_remove "$svc" "$agent" "not in mac.agents"
+        done
+    done
+fi
 
 echo ""
 echo "=========================================="
