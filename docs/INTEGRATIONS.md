@@ -171,6 +171,28 @@ Near-real-time two-way sync between agent workspaces and Obsidian Sync, enabling
    ob login    # creates ~/.obsidian-headless/auth_token
    ```
 
+   > **On macOS, prefer the runtime project.** `scripts/setup-mac-workspaces.sh`
+   > builds one at `~/.local/opt/obsidian-headless` (override with
+   > `OB_RUNTIME_DIR`) and the daemons use its `node_modules/.bin/ob`.
+   >
+   > A *global* install lets the package pick the `better-sqlite3` version, and
+   > that native addon only loads on one Node major — which one changed with ob
+   > 0.0.13 and will change again. A global install therefore forces the
+   > deployment to chase it with a Node pin, which is wrong in one direction or
+   > the other after every bump. The project's lockfile owns the pin instead, so
+   > there is no Node knob to maintain.
+   >
+   > If you do install globally with pnpm 10+, the build must be allowed
+   > explicitly or the addon lands with **no compiled binary at all** — ob then
+   > fails at `require()` with `MODULE_NOT_FOUND` for every ABI, which looks like
+   > a version mismatch but is not:
+   > ```bash
+   > pnpm add -g --allow-build=better-sqlite3 obsidian-headless
+   > ```
+   > (`pnpm approve-builds` is rejected for global installs.) Note `ob --version`
+   > does **not** load the addon, so it is not a valid health check — run a real
+   > sync, or `ob sync-status --path <vault>`.
+
 2. **Set Pulumi secrets:**
    ```bash
    cd pulumi

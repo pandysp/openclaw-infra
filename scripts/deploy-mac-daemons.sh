@@ -118,11 +118,17 @@ old_launchagent_plists() {
 # --- Per-service PATHs (three distinct ones — do NOT collapse) ----------------
 # git-sync: no node needed (the sync script only shells out to git).
 GIT_SYNC_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-# obsidian-headless: pin Node via OB_NODE_BIN (lib/mac-config.sh). ob's native
-# better-sqlite3 is ABI-locked to one Node major, and WHICH major depends on the
-# ob version — so the machine default is wrong in both directions, not just when
-# it is too new. lib/mac-config.sh owns the mapping; keep them in step.
-OBSIDIAN_PATH="${OB_NODE_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# obsidian-headless: which PATH depends on how ob is installed.
+#   runtime project (preferred) — its lockfile pins the native addon and it was
+#     built against the machine's Node, so plain resolution is correct and there
+#     is no ABI knob. Same shape as QMD_PATH, minus bun.
+#   bare global ob (legacy) — keep the historical OB_NODE_BIN pin verbatim, so a
+#     fork that has not adopted the runtime project emits byte-identical plists.
+if ob_runtime_present; then
+    OBSIDIAN_PATH="$HOME_DIR/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+else
+    OBSIDIAN_PATH="${OB_NODE_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+fi
 # qmd-watch + qmd-http: bun first, then mise shims (default Node 26 is fine for
 # qmd — its better-sqlite3 12.10.0 has a Node-26 prebuilt).
 QMD_PATH="$HOME_DIR/.bun/bin:$HOME_DIR/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -603,16 +609,18 @@ for agent in "${SELECTED_AGENTS[@]}"; do
 
     # --- obsidian-headless ---------------------------------------------------
     # Gate on three prereqs — a missing one must skip cleanly, not deploy a
-    # crash-looping daemon: (1) ob binary present, (2) the pinned Node installed
-    # (ob's better-sqlite3 is ABI-locked to it), (3) the vault is actually linked
-    # for this workspace (else `ob sync --continuous` errors forever).
+    # crash-looping daemon: (1) ob binary present, (2) for a legacy bare global
+    # ob only, the pinned Node installed (the runtime project carries its own
+    # addon pin, so there is nothing to check), (3) `sync-status` actually runs,
+    # which both proves the vault is linked AND loads the native addon — the one
+    # check that catches an ABI/build failure before it becomes a crash loop.
     if mac_service_enabled obsidian-headless; then
         if [ -z "${OB_BIN:-}" ]; then
-            warn "obsidian-headless skipped for '${agent}': ob binary not found (install @nicekiwi/obsidian-headless)"
-        elif [ ! -d "$OB_NODE_BIN" ]; then
-            warn "obsidian-headless skipped for '${agent}': pinned Node (${OB_NODE_VERSION}) not installed at $OB_NODE_BIN"
+            warn "obsidian-headless skipped for '${agent}': ob binary not found (run setup-mac-workspaces.sh to build the runtime project)"
+        elif ! ob_runtime_present && [ ! -d "$OB_NODE_BIN" ]; then
+            warn "obsidian-headless skipped for '${agent}': pinned Node (${OB_NODE_VERSION}) not installed at $OB_NODE_BIN — or adopt the runtime project via setup-mac-workspaces.sh, which removes the pin"
         elif ! PATH="$OBSIDIAN_PATH" "$OB_BIN" sync-status --path "$workspace" &>/dev/null; then
-            warn "obsidian-headless skipped for '${agent}': vault not linked for $workspace (run setup-mac-workspaces.sh first)"
+            warn "obsidian-headless skipped for '${agent}': 'ob sync-status' failed for $workspace — vault not linked (run setup-mac-workspaces.sh), or ob's native addon will not load"
         else
             tmp="$TMP_DIR/$(daemon_label obsidian-headless "$agent").plist"
             emit_obsidian_plist "$agent" "$OB_BIN" "$workspace" > "$tmp"
