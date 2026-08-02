@@ -1,148 +1,163 @@
 # OpenClaw Infrastructure
 
-Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€11.39/month.
+Deploy [OpenClaw](https://openclaw.ai) on your own server.
 
-**This is a reference template.** Clone it and adapt for your own deployment — the config values (timezone, model, cron prompts) are working examples you'll customize.
+## Why this setup?
 
-## Features
+You already know what OpenClaw can do. This repo gives you a secure, always-on place to run it.
 
-- **Cheap**: Hetzner CX43 x86 (8 vCPU, 16 GB) ~€9.49/mo + backups (~€11.39/mo total)
-- **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
-- **Simple**: Pulumi IaC, single command deploy, systemd user service
-- **Telegram**: Optional scheduled tasks (configurable cron jobs)
-- **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
+- **Security first.** Zero public ports. Tailscale zero-trust networking. Firewall blocks all inbound traffic. Only your devices can reach the server.
+- **Always on.** Runs on a VPS that doesn't sleep, travel, or lose WiFi. Your assistant keeps working whether your laptop is open or not.
+- **Your data stays yours.** Conversations, memory, and workspace live on a server you control. Not on someone else's platform.
+- **Fully automated.** One command creates the server, installs all software, and configures everything. No clicking through dashboards or installing things by hand.
+- **Cheap.** ~€11/month for a dedicated server with 8 CPUs and 16 GB RAM.
 
-## Prerequisites
+## How it works
 
-- Node.js 18+
-- [Pulumi CLI](https://www.pulumi.com/docs/install/)
-- [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/) (`pip install ansible`)
-- [Tailscale](https://tailscale.com/start) installed and connected on your machine
-- Hetzner Cloud API token ([console.hetzner.cloud](https://console.hetzner.cloud/))
-- Tailscale auth key ([login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys))
-- Tailscale MagicDNS and HTTPS enabled ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)) — required for Tailscale Serve
-- Claude setup token (run `claude setup-token`)
+This repo uses an approach called **Infrastructure as Code**. Instead of manually creating a server through a web interface — choosing the size, the operating system, installing software, configuring services — everything is described in files that a tool reads and executes automatically.
 
-See [CLAUDE.md](./CLAUDE.md#first-time-setup) for detailed setup instructions.
+That means:
 
-### First-Time Tailscale Setup
+- **No manual setup.** You don't need to select a server type, configure RAM, set up a firewall, or install any software on the server. It's all defined in the repo and happens automatically.
+- **Reproducible.** If something goes wrong, you can destroy the server and recreate an identical one in 30 minutes. Nothing is lost because nothing was configured by hand.
+- **Versionable.** The entire setup lives in this git repo. Changes are tracked, reversible, and shareable.
 
-If you've never used Tailscale before:
+The tools that make this work:
 
-1. **Create account**: Go to https://tailscale.com/start
-   - Sign up with GitHub (recommended for infra projects), Google, or email
-   - Free tier supports up to 100 devices
+| Tool | What it does |
+|------|-------------|
+| **Pulumi** | Creates the cloud server on Hetzner and configures networking. Think of it as a blueprint for your infrastructure. |
+| **Ansible** | Installs and configures everything on the server — Docker, OpenClaw, security settings, integrations. Think of it as a checklist that runs itself. |
+| **Tailscale** | Creates a private encrypted network between your devices and the server. Nothing is exposed to the public internet. |
 
-2. **Install on your Mac**:
-   ```bash
-   brew install --cask tailscale
-   ```
-   - Open Tailscale from Applications
-   - Click "Allow" for System Extension and VPN Configuration prompts
-   - Click menu bar icon → Log in → Authorize in browser
+You don't need to learn any of these tools. The coding agent handles them for you.
 
-3. **Generate auth key for server**:
-   - Go to https://login.tailscale.com/admin/settings/keys
-   - Click "Generate auth key"
-   - Enable: **Reusable**, **Ephemeral**
-   - Copy the key (starts with `tskey-auth-...`)
+## Before you start
 
-### Telegram Bot Setup
+**What it costs:**
 
-To enable optional Telegram notifications:
+| Service | Cost |
+|---------|------|
+| Claude Pro subscription (or higher) | ~$20/month |
+| Hetzner VPS (8 vCPU, 16 GB RAM) | ~€11/month |
+| Tailscale | Free |
+| Optional API keys (web search, etc.) | Most have free tiers |
 
-1. **Create a bot**: Open Telegram, search for **@BotFather**, send `/newbot`
-   - Choose a display name (e.g., "OpenClaw Assistant")
-   - Choose a username (must end in "bot", e.g., `openclaw_assistant_bot`)
-   - Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+**What you need:** A computer, an internet connection, a credit card, and about 30 minutes.
 
-2. **Get your user ID** (either method):
-   - Run `./scripts/get-telegram-id.sh` — briefly pauses the gateway, you send a message, it shows your IDs
-   - Or search for **@userinfobot** on Telegram, send `/start`, copy your numeric user ID
+## Where to run OpenClaw
 
-3. **Configure**: See [Quick Start](#quick-start) below for the Pulumi commands.
+This repo deploys to a VPS, but that's not the only option. Pick what fits your situation:
 
-## Quick Start
+| | Your Mac/PC | Mac Mini / home server | VPS (this repo) |
+|---|---|---|---|
+| Always on? | No — sleeps when you close the lid | Yes, if you keep it running | Yes |
+| Local hardware access? | Yes — camera, browser, local files | Yes | No (can add a Mac node later) |
+| Monthly cost | Free | One-time ~€700+ | ~€11/month |
+| Security | Only as secure as your network | Same | Zero public ports, Tailscale-only |
+| Setup complexity | Easiest | Medium | Handled by a coding agent |
+
+## What you get
+
+**Included:**
+- Hetzner VPS provisioned and configured automatically
+- Tailscale zero-trust networking (no public ports)
+- OpenClaw gateway running as a system service
+- Sandboxed sessions in Docker with a full dev toolchain
+- Web chat interface accessible from any device on your Tailscale network
+
+**Optional features** (the coding agent will ask if you want these):
+- **Telegram** — chat with your assistant from your phone, scheduled daily briefings
+- **WhatsApp** — same, via WhatsApp
+- **Discord** — same, via Discord (with per-channel session isolation)
+- **Web search** — research capability via Grok (xAI)
+- **Semantic search** — search across the assistant's own workspace and documents
+- **Workspace backup** — hourly git sync of the workspace to a private GitHub repo
+- **Multiple agents** — run several agents in parallel, each with their own workspace
+- **Mac remote control** — let the assistant run commands on your local Mac
+- **Obsidian sync** — two-way sync between agent workspace and Obsidian for mobile access
+- **GitHub OAuth** — seamless git authentication inside workspaces
+- **Custom domain** — wildcard TLS via Cloudflare for nicer URLs
+
+## Getting started
+
+You don't need to understand this repo or type infrastructure commands yourself. A coding agent will read the repo and guide you through everything — creating accounts, installing tools, deploying the server, and configuring features.
+
+### 1. Set up your coding agent
+
+If you don't have a coding agent yet, pick one and install it:
+
+**Option A — Claude Code** (recommended)
+1. Subscribe to [Claude Pro](https://claude.ai/pro) ($20/month) or higher
+2. Install Claude Code:
+   - **Mac/Linux:** Open Terminal, run: `npm install -g @anthropic-ai/claude-code`
+   - **Windows:** First install [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) by opening PowerShell as Administrator and running `wsl --install`, then restart your computer. Open the Ubuntu terminal that appears and run: `npm install -g @anthropic-ai/claude-code`
+
+**Option B — Codex**
+1. Subscribe to [ChatGPT Pro](https://openai.com/chatgpt/pricing/)
+2. Install: `npm install -g @openai/codex`
+
+**Option C — Cursor**
+1. Download [Cursor](https://cursor.com) (free tier available)
+2. Install and open it
+
+> **Note:** If you don't have Node.js installed (needed for Options A and B), download it from [nodejs.org](https://nodejs.org/) first. Pick the LTS version.
+
+### 2. Clone this repo
+
+Open your terminal (or Ubuntu terminal on Windows) and run:
 
 ```bash
-npm install
-cd pulumi
-pulumi login             # Authenticate with Pulumi Cloud
-pulumi stack init prod
-
-# Required
-pulumi config set hcloud:token --secret       # Hetzner API token
-pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
-pulumi config set claudeSetupToken --secret    # From `claude setup-token`
-
-# Optional: Telegram notifications (daily digests, weekly planning)
-pulumi config set telegramBotToken --secret    # From @BotFather
-pulumi config set telegramUserId "YOUR_ID"     # ./scripts/get-telegram-id.sh or @userinfobot
-
-# Optional: hourly workspace backup to a private GitHub repo
-pulumi config set workspaceRepoUrl "git@github.com:YOU/openclaw-workspace.git"
-
-# Deploy
-pulumi up
-
-# Verify (wait ~5 min for cloud-init)
-cd ..
-./scripts/verify.sh
+git clone https://github.com/pandysp/openclaw-infra.git
+cd openclaw-infra
 ```
 
-> After verifying, clean up the cloud-init log (contains secrets):
-> `ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"`
+### 3. Start the coding agent
 
-State and secrets are managed by [Pulumi Cloud](https://app.pulumi.com) — no local passphrase needed.
+Launch your coding agent inside the repo directory:
 
-## Access
+```bash
+# Claude Code
+claude
 
-Wait ~5 minutes after deployment for cloud-init + Ansible to finish, then open:
+# Codex
+codex
+
+# Cursor — open the folder in the Cursor app
 ```
-https://openclaw-vps.<tailnet>.ts.net/chat
-```
 
-### First-Time Device Pairing
+### 4. Give it the setup prompt
 
-OpenClaw requires **device pairing** for all connections — including the server's own CLI. On a fresh install:
+Copy and paste the contents of [`SETUP_PROMPT.md`](./SETUP_PROMPT.md) into the coding agent. It contains the exact instructions for the agent to guide you through the full setup.
 
-1. **Use the tokenized URL** to access the web UI without pairing:
-   ```bash
-   cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
-   ```
-   Open that URL in your browser. This bypasses pairing for initial setup.
+The agent will:
+- Check your system and install any missing prerequisites
+- Walk you through creating the necessary accounts (Hetzner, Tailscale)
+- Help you generate API keys and tokens
+- Deploy the server
+- Verify everything is working
+- Ask which optional features you'd like to enable
+- Configure those features for you
 
-2. **Approve devices** that need pairing. The server's CLI (used by Ansible) may show as pending:
-   ```bash
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
-   ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
-   ```
+### If something goes wrong
 
-3. **If Ansible failed during first deploy** (cron setup skipped due to pairing), re-run after approving:
-   ```bash
-   ./scripts/provision.sh --tags telegram
-   ```
-
-> No public SSH port is exposed. SSH works over Tailscale only.
-
-See [CLAUDE.md](./CLAUDE.md#device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
-
-## Architecture
-
-```
-Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
-                               Hetzner FW: no inbound
-                               UFW: tailscale0 only
-                               Gateway: localhost:18789 (systemd --user)
-                               Tailscale Serve: HTTPS proxy
-```
+Paste the error message into the coding agent and ask it to fix it. These agents are good at diagnosing and recovering from infrastructure issues. If the agent gets stuck, the [troubleshooting guide](./docs/TROUBLESHOOTING.md) covers common problems.
 
 ## Documentation
 
-- [CLAUDE.md](./CLAUDE.md) — Setup, operations, security, and troubleshooting
-- [docs/SECURITY.md](./docs/SECURITY.md) — Threat model and mitigations
-- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — Common issues
-- [docs/BROWSER-CONTROL-PLANNING.md](./docs/BROWSER-CONTROL-PLANNING.md) — Future browser automation approaches
+These docs are primarily for coding agents, but humans are welcome too:
+
+| Document | What it covers |
+|----------|---------------|
+| [CLAUDE.md](./CLAUDE.md) | Complete setup reference, all config options, operations guide |
+| [SETUP_PROMPT.md](./SETUP_PROMPT.md) | The starter prompt for your coding agent |
+| [docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md) | Telegram, WhatsApp, Discord, Obsidian setup details |
+| [docs/SECURITY.md](./docs/SECURITY.md) | Threat model and security architecture |
+| [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Common issues and fixes |
+
+## Contributing
+
+Issues and pull requests are welcome. This is a reference implementation — fork it and make it yours.
 
 ## License
 
