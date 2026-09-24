@@ -40,8 +40,10 @@ jobs:
       - name: Install test tools
         run: sudo apt-get update && sudo apt-get install -y jq ruby
 
+      # A self-contained venv, not `pip install --user`: the regression tests run
+      # real Ansible under a fixture HOME, where a user-site install is invisible.
       - name: Install Ansible
-        run: pip install ansible
+        run: pipx install --include-deps ansible
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements.yml
