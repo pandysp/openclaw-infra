@@ -28,7 +28,7 @@ Your Machine (Tailscale) → Hetzner VPS → Gateway (systemd, localhost:18789) 
 
 For the full threat model, see [docs/SECURITY.md](./docs/SECURITY.md).
 
-Gateway runs via systemd (not Docker) as unprivileged user. Docker is used only for sandbox sessions (`openclaw-sandbox-custom:latest`). Auth: Tailscale identity + device pairing; no token needed. Fallback tokenized URL: `pulumi stack output tailscaleUrlWithToken --show-secrets`.
+Gateway runs via systemd (not Docker) as unprivileged user. Docker runs sandbox sessions (`openclaw-sandbox-custom:latest`), MCP servers, and isolated workspace Git jobs. Auth: Tailscale identity + device pairing; no token needed. Resolve pairing requests over Tailscale SSH; do not print token-bearing URLs.
 
 ## Directory Structure
 
@@ -48,14 +48,14 @@ openclaw-infra/
 │   └── user-data.ts    # Cloud-init (Tailscale-only bootstrap)
 │
 ├── ansible/
-│   ├── ansible.cfg         # Ansible config (pipelining, no host key check)
+│   ├── ansible.cfg         # Defaults; strict host-key checks for every deployment
 │   ├── requirements.yml    # Ansible Galaxy collections
 │   ├── playbook.yml        # Main playbook
 │   ├── group_vars/all.yml  # Non-secret defaults (model, agent types, server templates)
 │   ├── group_vars/openclaw.yml        # Deployment-specific overrides (gitignored)
 │   ├── group_vars/openclaw.yml.example  # Template for openclaw.yml
 │   ├── inventory/
-│   │   └── pulumi_inventory.py  # Dynamic inventory (Tailscale IP from Pulumi)
+│   │   └── pulumi_inventory.py  # Inventory consumes authenticated provisioner inputs
 │   └── roles/
 │       ├── system/    # apt packages, unattended-upgrades
 │       ├── docker/    # Docker install, ubuntu→docker group
@@ -118,17 +118,22 @@ The OpenClaw CLI is installed locally and configured to talk to the remote gatew
 # Install
 brew install openclaw-cli
 
-# Configure for remote gateway (one-time)
-GATEWAY_TOKEN=$(pulumi stack output openclawGatewayToken --show-secrets)
-[ -n "$GATEWAY_TOKEN" ] || { echo "ERROR: Gateway token is empty — aborting (would wipe gateway.remote.token)"; exit 1; }
-openclaw onboard --non-interactive --accept-risk --flow quickstart --mode remote \
-  --remote-url "wss://openclaw-vps.<tailnet>.ts.net" \
-  --remote-token "$GATEWAY_TOKEN" \
-  --skip-channels --skip-skills --skip-health --skip-ui --skip-daemon
+# Configure once, from this repo with its backend environment loaded.
+# Replace <tailnet> below. Credentials travel through stdin, never command arguments.
+(
+  set -euo pipefail
+  GATEWAY_TOKEN=$(cd pulumi && pulumi stack output openclawGatewayToken --stack prod --show-secrets)
+  printf '%s' "$GATEWAY_TOKEN" |
+    jq -Rse 'if length == 0 then error("Gateway token is empty")
+      else {gateway: {mode: "remote", remote: {
+        url: "wss://openclaw-vps.<tailnet>.ts.net", token: .}}} end' |
+    openclaw config patch --stdin
+)
 
-# Approve the CLI as a paired device (on first connect, via SSH)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'   # find the pending request ID
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
+# Trigger pairing, then approve only this CLI's matching device/request.
+openclaw health
+tailscale ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list --json'
+tailscale ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
 ```
 
 After pairing, CLI commands work directly:
@@ -137,7 +142,7 @@ After pairing, CLI commands work directly:
 openclaw health              # Gateway health check
 openclaw doctor              # Diagnostics and quick fixes
 openclaw devices list        # List paired devices
-openclaw cron list           # List scheduled jobs
+openclaw cron list --all     # List enabled and disabled scheduled jobs
 openclaw security audit      # Run security audit (add --deep for thorough scan)
 openclaw status              # Session health
 ```
@@ -146,7 +151,19 @@ openclaw status              # Session health
 
 ## Common Operations
 
+### Phoenix Safety
+
+- Set `STAGING_PRIVATE_REPOSITORY` to a nonempty private repository readable by the staging PAT. Direct MCP checks are read-only, including when using real notes. Inference disables gateway and native Claude tools; write tests belong in the staging workspace repositories. Public reads do not prove private access.
+- Staging agents are permanently read-only: `openclaw_tools_allow` limits every session (heartbeats included) to the two `*_get_file_contents` MCP reads, `tools.alsoAllow` is cleared, and `openclaw_cli_backends` passes `--tools "" --strict-mcp-config` to the Claude CLI so no native tool can write private content into the publicly backed-up staging workspaces. The smoke test verifies this policy before touching real notes.
+- Staging never runs Obsidian Sync. The role picks the cloud vault by agent ID (`<agent>-workspace`), so a staging run would attach the public staging backup to the real vault. Obsidian Sync is therefore not Phoenix-verified; verify it read-only on production (`systemctl --user status obsidian-headless-main`, `ob sync-status`).
+- Phoenix runs `scripts/test-workspace-isolation.sh` on the staging VPS: a controlled Git hook in the public staging workspace proves the sync unit executes hooks as UID 1000 with no capabilities, no host config or Docker socket, and no route to the credential proxy (an unrestricted control container proves the proxy is reachable), then confirms the push by anonymous readback and removes its fixture.
+- `staging.yml` binds the run name, authenticated Tailscale peer and created server IP. Ansible also uses the peer's advertised host keys; a separate SSH probe alone does not authenticate Ansible's connection.
+- Teardown deletes only the proven node's API device ID, then reads it back as absent. Unrelated tailnet changes do not invalidate cleanup. Missing ownership or failed cleanup keeps the staging checkpoint for investigation.
+- Scheduled orphan cleanup only inventories leftovers. Never restore prefix-wide deletion or remove a checkpoint before all owned cleanup checks pass.
+
 ### Deploy Infrastructure (Fresh Server)
+
+Load the [backend environment](./README.md#pulumi-backend) before any Pulumi or provisioning command. This deployment uses R2 and a stack passphrase, not Pulumi Cloud.
 
 ```bash
 cd pulumi
@@ -242,7 +259,8 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 
 | Secret | Purpose | Where to regenerate |
 |--------|---------|---------------------|
-| Pulumi access token | Authenticates with Pulumi Cloud | app.pulumi.com → Settings → Access Tokens |
+| R2 access keys | Authenticate to the Pulumi state bucket | Cloudflare → R2 → API tokens (bucket-scoped) |
+| Pulumi config passphrase | Decrypts this stack's secrets | Load the current value from private `.env`; coordinate any rotation |
 | Hetzner API token | Creates/manages VPS | console.hetzner.cloud → Project → API Tokens |
 | Tailscale auth key | Joins server to your network | login.tailscale.com/admin/settings/keys |
 | Claude setup token | Powers OpenClaw (flat fee) | `claude setup-token` in terminal |
@@ -269,7 +287,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 - Use `pulumi config set --secret` for sensitive values
 - Run `./scripts/verify.sh` after deployment
 - Check that no public ports are exposed
-- Keep Pulumi Cloud access token scoped to this project
+- Scope R2 access keys to the state bucket; load backend credentials from private, ignored `.env` via `direnv exec`
 - **Cloud-init log is minimal** (Tailscale bootstrap only, no secrets beyond auth key)
 - **Monitor Tailscale admin console** for unauthorized devices: https://login.tailscale.com/admin/machines
 - **Rotate Tailscale auth keys periodically** (see [Key Rotation](#key-rotation) below)
@@ -291,7 +309,7 @@ Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscal
 
 ```bash
 cd pulumi
-pulumi login   # authenticate with Pulumi Cloud
+pulumi login "${PULUMI_BACKEND_URL:?Load the backend environment from README.md first}"
 pulumi stack init prod
 
 # Required secrets
@@ -309,14 +327,9 @@ pulumi up          # creates server + auto-runs Ansible
 cd ..
 ./scripts/verify.sh
 
-# Connect local CLI
-GATEWAY_TOKEN=$(pulumi stack output openclawGatewayToken --show-secrets)
-[ -n "$GATEWAY_TOKEN" ] || { echo "ERROR: Gateway token is empty — aborting (would wipe gateway.remote.token)"; exit 1; }
-openclaw onboard --non-interactive --accept-risk --flow quickstart --mode remote \
-  --remote-url "wss://openclaw-vps.<tailnet>.ts.net" \
-  --remote-token "$GATEWAY_TOKEN" \
-  --skip-channels --skip-skills --skip-health --skip-ui --skip-daemon
 ```
+
+Connect the local CLI using the [one-time setup above](#local-cli).
 
 ### Device Pairing
 
@@ -330,7 +343,7 @@ New browser or CLI client requires one-time approval:
    ```
 3. Refresh browser — authenticated via Tailscale identity
 
-Fallback if pairing fails: `pulumi stack output tailscaleUrlWithToken --show-secrets`
+If pairing fails, inspect the matching request over Tailscale SSH. Do not print or share token-bearing URLs.
 
 ## Workspace Git Sync (Optional)
 
@@ -345,16 +358,18 @@ The agent's workspace (`~/.openclaw/workspace`) contains memories, notes, skills
 pulumi up   # or: ./scripts/provision.sh --tags workspace
 ```
 
-Hourly systemd timer commits workspace changes and pushes. Deploy key: `pulumi stack output workspaceDeployPublicKey`.
+A per-agent hourly systemd timer (`workspace-git-sync-<agent-id>`) runs Git in a one-shot isolated container (only that workspace and its deploy key mounted, UID 1000, no capabilities, outbound SSH to GitHub only). It commits local changes, merges `origin/main`, and pushes; a conflict fails the run and preserves both histories. Deploy key: `pulumi stack output workspaceDeployPublicKey`.
 
 ### Verify Workspace Sync
 
 ```bash
-# Requires SSH (systemd timer management)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.timer'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync.service'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd ~/.openclaw/workspace && git log --oneline -5'
+# Requires SSH (systemd timer management). Replace `main` with the agent ID.
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.timer'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-main.service'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-main.service -n 20 --no-pager'
 ```
+
+Do not run host-side Git inside an agent workspace: the agent can write `.git/config` and hooks, so even `git log` on the host executes agent-controlled code outside the sandbox. Inspect history on GitHub or in a fresh clone instead.
 
 ## Web Search (Optional)
 
@@ -383,7 +398,7 @@ pulumi config rm xaiApiKey
 
 ## Telegram Integration (Optional)
 
-Pulumi secrets: `telegramBotToken` (from @BotFather) + `telegramUserId`. Use `./scripts/get-telegram-id.sh` to discover user/group IDs. Creates two default cron jobs for the main agent (Europe/Berlin timezone):
+Pulumi secrets: `telegramBotToken` (from @BotFather) + `telegramUserId`. Use `./scripts/get-telegram-id.sh` to discover user/group IDs. Declares two default cron jobs for the main agent (Europe/Berlin timezone); they remain disabled until the agent explicitly opts into scheduled automation:
 
 | Job | Schedule | Purpose |
 |-----|----------|---------|
@@ -450,6 +465,14 @@ By default, a single `main` agent is configured. To add more agents, define `ope
 | `_openclaw_mcp_servers` | `openclaw_agents` x `openclaw_mcp_server_types` | plugins role (MCP server config, deny rules) |
 | `_openclaw_workspaces` | `openclaw_agents` + provision.sh secrets | workspace, qmd, obsidian-headless, plugins roles |
 
+Scheduled automation is separately opt-in. Agent creation keeps chat online but
+does not enable heartbeats or cron jobs. Set
+`scheduled_automation_enabled: true` on an agent to apply its latent
+`heartbeat_every` cadence and enable its declared cron jobs. Setting it false
+removes the agent heartbeat block and disables all of that agent's cron jobs in
+place, preserving IDs and run history. A job-level `enabled: false` remains off
+even while its agent is enabled.
+
 **Naming conventions** (mechanical, from agent ID):
 
 | Resource | main | other (e.g., `bob`) |
@@ -461,7 +484,7 @@ By default, a single `main` agent is configured. To add more agents, define `ope
 
 ### Adding an Agent
 
-1. Add the agent to `openclaw_agents` in `openclaw.yml`
+1. Add the agent to `openclaw_agents` in `openclaw.yml`; set `scheduled_automation_enabled: true` only when autonomous work is intended
 2. Wire per-agent secrets through `scripts/provision.sh` (Pulumi config or env vars)
 3. Run `./scripts/provision.sh`
 
@@ -514,7 +537,7 @@ Architecture: VPS sandbox → `node-exec-mcp` (OPENCLAW_GATEWAY_TOKEN auth, Tail
 - Two approval layers: gateway (`tools.exec.security/ask`) AND node (`~/.openclaw/exec-approvals.json`, must have `defaults.security: full`) — both must allow the command
 - CWD defaults to `/tmp` — VPS workspace path doesn't exist on Mac; pass `workdir=/Users/<you>` explicitly
 - LaunchAgent plist patched to `/opt/homebrew/bin/openclaw` symlink (survives `brew upgrade`)
-- **Token wipe danger:** Running `openclaw onboard --mode remote` with an empty `--remote-token` silently wipes `gateway.remote.token`, breaking the node host (it connects but cannot authenticate — zero errors logged). The onboard snippets above guard against this with an empty-token check. `setup-mac-node.sh` detects and recovers a wiped token at setup time. Diagnosis: check `~/.openclaw/openclaw.json` → `gateway.remote.token` is non-empty; backups live in `.bak` files
+- **Token wipe danger:** An empty remote token breaks the node host's authentication. The [Local CLI setup](#local-cli) rejects an empty token and feeds the config through stdin rather than exposing it in command arguments. `setup-mac-node.sh` detects and recovers a wiped token at setup time. Diagnosis: check `~/.openclaw/openclaw.json` → `gateway.remote.token` is non-empty; backups live in `.bak` files
 
 ```bash
 ./scripts/setup-mac-node.sh                     # one-time Mac setup (installs LaunchAgent, sets approvals)

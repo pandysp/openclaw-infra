@@ -1,0 +1,26 @@
+{
+  "scheduledAutomationDefault": {{ openclaw_scheduled_automation_default | to_json }},
+  "agents": [
+{% for agent in openclaw_agents %}
+    {
+      "id": {{ agent.id | to_json }}{% if agent.scheduled_automation_enabled is defined %},
+      "scheduledAutomationEnabled": {{ agent.scheduled_automation_enabled | to_json }}{% endif %}
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  ],
+  "jobs": [
+{% for job in managed_cron_jobs %}
+    {
+      "name": {{ job.name | to_json }},
+      "agentId": {{ job.agent | to_json }},
+      "state": {{ job.state | default('present') | to_json }}{% if (job.state | default('present')) != 'absent' %},
+      "enabled": {{ job.enabled | default(true) | to_json }},
+      "schedule": {{ job.schedule | to_json }},
+      "timezone": {{ openclaw_timezone | to_json }},
+      "message": {{ job.message | to_json }},
+      "deliveryChannel": {{ agent_channel_map[job.agent] | default('telegram') | to_json }},
+      "deliveryTo": {{ agent_deliver_map[job.agent] | to_json }}{% endif %}
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  ]
+}

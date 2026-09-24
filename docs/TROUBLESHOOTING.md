@@ -23,10 +23,16 @@ Common issues and solutions for the OpenClaw deployment.
 
 **Symptom**: Any `pulumi` command fails with authentication error.
 
-**Solution**:
+**Solution**: Load the [backend environment](../README.md#pulumi-backend). This deployment uses R2, not Pulumi Cloud.
+
 ```bash
-pulumi login   # Authenticate with Pulumi Cloud
+pulumi login "${PULUMI_BACKEND_URL:?Load the backend environment first}"
 ```
+
+- S3 credential errors: check the R2 access key ID and secret access key, and confirm the backend URL names the intended bucket.
+- `incorrect passphrase`: check that `direnv exec` loaded this project's private `.env` and that `PULUMI_CONFIG_PASSPHRASE` is non-empty. Do not introduce per-command vault reads. For a one-time import, verify the actual vault field: API-credential items use `credential`, not `password`; a failed lookup does not prove the saved passphrase is wrong.
+
+Do not print credentials while diagnosing either error.
 
 ### Provision fails with empty secret validation error
 
@@ -120,10 +126,7 @@ Then refresh the browser.
 - Using incognito/private mode
 - Different browser or device
 
-**Fallback**: Use the tokenized URL to bypass pairing:
-```bash
-cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
-```
+Do not print or share token-bearing URLs. Inspect and approve only the matching pairing request over Tailscale SSH.
 
 ### Pairing deadlock on first install
 
@@ -132,17 +135,13 @@ cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
 This is a chicken-and-egg problem on fresh installs. The gateway requires device pairing for CLI commands like `openclaw health` and `openclaw cron list`, but those commands are needed during provisioning.
 
 **Solution**:
-1. Provisioning will complete with a warning (cron setup skipped, not a hard failure)
-2. Use the tokenized URL to access the web UI:
-   ```bash
-   cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
-   ```
-3. Approve pending devices via SSH:
+1. Provisioning attempts to establish the server CLI's admin access. It fails if that cannot be established; cron reconciliation must not silently skip.
+2. Inspect pending devices over Tailscale SSH and approve only the matching request:
    ```bash
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
    ```
-4. Re-run the skipped step:
+3. Re-run the failed step:
    ```bash
    ./scripts/provision.sh --tags telegram
    ```
@@ -286,19 +285,21 @@ Always use the Tailscale DNS name (`https://openclaw-vps.<tailnet>.ts.net/`), no
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
 # Check timer
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.timer
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.timer
 
 # Check last sync result
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync.service
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.service
 
 # Trigger a manual sync
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync.service
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-main.service
 
 # Check git log
-cd ~/.openclaw/workspace && git log --oneline -5
+XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-main.service -n 50 --no-pager
 ```
 
-**Common causes**: deploy key not added to GitHub repo, repo doesn't exist, SSH host key not accepted.
+Replace `main` with the agent ID when checking another workspace. Do not run host-side Git against agent-writable repositories; the service runs Git in its isolated container.
+
+**Common causes**: missing GitHub deploy-key permission, a missing repository, strict host-key verification failure, or a merge conflict. Re-provision `--tags workspace` to refresh managed inputs. Resolve conflicts deliberately; sync never force-pushes over them.
 
 ## Provisioning Issues
 

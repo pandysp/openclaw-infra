@@ -1,277 +1,58 @@
 ---
-# Filter to only active workspaces (with both repo_url and deploy_key set)
 - name: Determine active workspaces
   ansible.builtin.set_fact:
-    active_workspaces: >-
-      {{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list }}
+    active_workspaces: "{{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}"
 
-- name: Ensure .ssh directory exists
-  ansible.builtin.file:
-    path: /home/ubuntu/.ssh
-    state: directory
-    mode: "0700"
-
-- name: Create config.d directory
-  ansible.builtin.file:
-    path: /home/ubuntu/.ssh/config.d
-    state: directory
-    mode: "0700"
-
-- name: Ensure SSH config includes config.d
-  ansible.builtin.lineinfile:
-    path: /home/ubuntu/.ssh/config
-    line: "Include config.d/*"
-    insertbefore: BOF
-    create: true
-    mode: "0600"
-
-- name: Create local bin directory
-  ansible.builtin.file:
-    path: /home/ubuntu/.local/bin
-    state: directory
-    mode: "0755"
-
-- name: Ensure systemd user directory exists
-  ansible.builtin.file:
-    path: /home/ubuntu/.config/systemd/user
-    state: directory
-    mode: "0755"
-
-# Per-workspace setup (deploy key, SSH config, git repo, sync script, systemd units)
-- name: Install deploy keys
-  ansible.builtin.copy:
-    content: "{{ item.deploy_key }}"
-    dest: "/home/ubuntu/.ssh/{{ item.key_file }}"
-    mode: "0600"
-  no_log: true
+- name: Validate workspace service inputs
+  ansible.builtin.assert:
+    that:
+      - item.agent_id is match('^[a-zA-Z][a-zA-Z0-9_-]*$')
+      - item.repo_url is match('^git@github[.]com:[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$')
+      - item.ssh_alias == 'github-workspace-' ~ item.agent_id
+      - item.workspace_dir is match('^/home/ubuntu/[a-zA-Z0-9_./-]+$')
+      - item.key_file is match('^[a-zA-Z0-9_-]+$')
+    fail_msg: Workspace service inputs must be valid GitHub SSH URLs and local paths.
   loop: "{{ active_workspaces }}"
   loop_control:
     label: "{{ item.agent_id }}"
 
-- name: Configure SSH aliases
-  ansible.builtin.template:
-    src: ssh-config-workspace.j2
-    dest: "/home/ubuntu/.ssh/config.d/workspace-{{ item.agent_id }}"
-    mode: "0600"
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-
-- name: Ensure workspace directories exist
-  ansible.builtin.file:
-    path: "{{ item.workspace_dir }}"
-    state: directory
-    mode: "0755"
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-
-- name: Check if workspace directories exist
+- name: Find existing workspace units
   ansible.builtin.stat:
-    path: "{{ item.workspace_dir }}"
-  register: workspace_dirs
-  loop: "{{ active_workspaces }}"
+    path: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ item.0.agent_id }}.{{ item.1 }}"
+  loop: "{{ active_workspaces | product(['timer', 'service']) | list }}"
   loop_control:
-    label: "{{ item.agent_id }}"
+    label: "{{ item.0.agent_id }}.{{ item.1 }}"
+  register: workspace_existing_units
 
-- name: Initialize workspace git repos
-  no_log: true  # workspace_dirs.results carries deploy_key in item chain
-  ansible.builtin.shell: |
-    set -euo pipefail
-    cd "{{ item.item.workspace_dir }}"
-    CHANGED=""
-
-    if [ ! -d ".git" ]; then
-      git init -b main
-      CHANGED="yes"
-    fi
-
-    # Ensure branch is named 'main' (skip on empty repos where HEAD is detached)
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "HEAD" ]; then
-        git branch -m "$CURRENT_BRANCH" main
-        CHANGED="yes"
-    fi
-
-    # Set per-agent git identity (local scope) — only if different
-    DESIRED_NAME="OpenClaw Agent ({{ item.item.agent_id }})"
-    DESIRED_EMAIL="openclaw-{{ item.item.agent_id }}@localhost"
-    CURRENT_NAME=$(git config user.name 2>/dev/null || echo "")
-    CURRENT_EMAIL=$(git config user.email 2>/dev/null || echo "")
-    if [ "$CURRENT_NAME" != "$DESIRED_NAME" ]; then
-        git config user.name "$DESIRED_NAME"
-        CHANGED="yes"
-    fi
-    if [ "$CURRENT_EMAIL" != "$DESIRED_EMAIL" ]; then
-        git config user.email "$DESIRED_EMAIL"
-        CHANGED="yes"
-    fi
-
-    # Set remote URL — only if different
-    ALIAS_URL=$(echo "{{ item.item.repo_url }}" | sed "s/github\.com/{{ item.item.ssh_alias }}/")
-    CURRENT_URL=$(git remote get-url origin 2>/dev/null || echo "")
-    if [ -z "$CURRENT_URL" ]; then
-        git remote add origin "$ALIAS_URL"
-        CHANGED="yes"
-    elif [ "$CURRENT_URL" != "$ALIAS_URL" ]; then
-        git remote set-url origin "$ALIAS_URL"
-        CHANGED="yes"
-    fi
-
-    if [ -n "$CHANGED" ]; then echo "CHANGED"; else echo "OK"; fi
-  args:
-    executable: /bin/bash
-  register: workspace_init_result
-  changed_when: "'CHANGED' in workspace_init_result.stdout"
-  when: item.stat.exists and item.stat.isdir
-  loop: "{{ workspace_dirs.results }}"
+- name: Stop existing workspace units during installation
+  ansible.builtin.systemd:
+    name: "{{ item.stat.path | basename }}"
+    state: stopped
+    enabled: "{{ false if item.item.1 == 'timer' else omit }}"
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  loop: "{{ workspace_existing_units.results }}"
   loop_control:
-    label: "{{ item.item.agent_id }}"
+    label: "{{ item.item.0.agent_id }}.{{ item.item.1 }}"
+  when: item.stat.exists
 
-- name: Restore workspace content from remote on fresh server
-  no_log: true  # workspace_dirs.results carries deploy_key in item chain
-  ansible.builtin.shell: |
-    set -euo pipefail
-    cd "{{ item.item.workspace_dir }}"
+# The pre-multi-agent layout ran Git on the host. Retire it before the first
+# isolated run so no host-side Git can race the container on the same repository.
+- name: Check legacy workspace timer
+  ansible.builtin.stat:
+    path: /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
+  register: workspace_legacy_timer
 
-    # Only restore if this is a fresh workspace (no commits yet).
-    # On day-2 runs, the workspace already has commits and local state should be preserved.
-    if git rev-parse HEAD >/dev/null 2>&1; then
-        echo "SKIP"
-        exit 0
-    fi
-
-    # Fetch from remote. If it fails, this is a brand-new repo with nothing to restore.
-    if ! git fetch origin main 2>/dev/null; then
-        echo "SKIP"
-        exit 0
-    fi
-
-    # Remote has content: check it out to restore workspace files.
-    # This overwrites onboard blank templates with the real content from GitHub.
-    if git rev-parse --verify origin/main >/dev/null 2>&1; then
-        git checkout origin/main -- . 2>/dev/null || true
-        echo "RESTORED"
-    else
-        echo "SKIP"
-    fi
-  args:
-    executable: /bin/bash
-  register: workspace_restore
-  changed_when: "'RESTORED' in workspace_restore.stdout"
-  when: item.stat.exists and item.stat.isdir
-  loop: "{{ workspace_dirs.results }}"
-  loop_control:
-    label: "{{ item.item.agent_id }}"
-
-- name: Create workspace .gitignore files
-  no_log: true  # workspace_dirs.results carries deploy_key in item chain
-  ansible.builtin.copy:
-    src: gitignore-workspace
-    dest: "{{ item.item.workspace_dir }}/.gitignore"
-    mode: "0644"
-  when: item.stat.exists and item.stat.isdir
-  loop: "{{ workspace_dirs.results }}"
-  loop_control:
-    label: "{{ item.item.agent_id }}"
-
-
-- name: Initial workspace commit and push
-  no_log: true  # workspace_dirs.results carries deploy_key in item chain
-  ansible.builtin.shell: |
-    set -euo pipefail
-    cd "{{ item.item.workspace_dir }}"
-
-    # Rename branch to main if needed (handles git default of master)
-    CURRENT=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [ "$CURRENT" != "main" ] && [ -n "$CURRENT" ] && [ "$CURRENT" != "HEAD" ]; then
-        git branch -m "$CURRENT" main
-    fi
-
-    # Untrack any files now covered by .gitignore (e.g. .cache/ added before
-    # .gitignore was provisioned). git ls-files -ci lists tracked-but-ignored files.
-    git ls-files -ci --exclude-standard -z | xargs -0 -r git rm --cached
-
-    # Commit any local changes (Ansible-written templates, etc.)
-    git add -A
-    if ! git diff --cached --quiet; then
-        git commit -m "Initial workspace sync"
-    fi
-
-    # Reconcile with remote before pushing (local workspace takes precedence on conflict).
-    # Uses merge (not rebase) — simpler for auto-synced workspaces, avoids rebase complexity.
-    RECONCILED=true
-    if git fetch origin main 2>/dev/null; then
-        if git rev-parse --verify origin/main >/dev/null 2>&1; then
-            if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
-                git merge --abort 2>/dev/null || true
-                RECONCILED=false
-            fi
-        fi
-    fi
-
-    # Push (best-effort: deploy keys may not be configured yet on first deploy)
-    LOCAL=$(git rev-parse HEAD 2>/dev/null) || LOCAL=""
-    REMOTE=$(git rev-parse origin/main 2>/dev/null) || REMOTE=""
-    if [ "$LOCAL" != "$REMOTE" ]; then
-        if [ "$RECONCILED" = "false" ]; then
-            echo "WARNING: Conflict in {{ item.item.agent_id }}, force-pushing local state" >&2
-            git push -u --force-with-lease origin main || echo "Push failed (deploy key may not be configured yet)"
-        else
-            git push -u origin main || echo "Push failed (deploy key may not be configured yet)"
-        fi
-    else
-        echo "Nothing to push"
-    fi
-  args:
-    executable: /bin/bash
-  changed_when: false
-  when: item.stat.exists and item.stat.isdir
-  loop: "{{ workspace_dirs.results }}"
-  loop_control:
-    label: "{{ item.item.agent_id }}"
-
-- name: Install workspace sync scripts
-  ansible.builtin.template:
-    src: workspace-git-sync.sh.j2
-    dest: "/home/ubuntu/.local/bin/workspace-git-sync-{{ item.agent_id }}.sh"
-    mode: "0755"
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-
-- name: Install workspace sync systemd services
-  ansible.builtin.template:
-    src: workspace-git-sync.service.j2
-    dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ item.agent_id }}.service"
-    mode: "0644"
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-  notify: reload user systemd
-
-- name: Install workspace sync systemd timers
-  ansible.builtin.template:
-    src: workspace-git-sync.timer.j2
-    dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ item.agent_id }}.timer"
-    mode: "0644"
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-  notify:
-    - reload user systemd
-    - enable workspace timers
-
-# Clean up legacy single-workspace files (from before multi-agent refactor)
-- name: Stop legacy workspace timer if active
+- name: Stop legacy workspace timer
   ansible.builtin.systemd:
     name: workspace-git-sync.timer
     state: stopped
     enabled: false
     scope: user
   environment:
-    XDG_RUNTIME_DIR: "/run/user/1000"
-  failed_when: false
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: workspace_legacy_timer.stat.exists
 
 - name: Remove legacy workspace files
   ansible.builtin.file:
@@ -282,4 +63,95 @@
     - /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
     - /home/ubuntu/.local/bin/workspace-git-sync.sh
     - /home/ubuntu/.ssh/config.d/workspace
-  notify: reload user systemd
+
+- name: Ensure workspace support directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /home/ubuntu/.ssh, mode: "0700" }
+    - { path: /home/ubuntu/.openclaw, mode: "0700" }
+    - { path: /home/ubuntu/.config/systemd/user, mode: "0755" }
+    - { path: /home/ubuntu/.local/share/workspace-sync-build, mode: "0755" }
+
+- name: Install deploy keys
+  ansible.builtin.copy:
+    # OpenSSH requires a final newline, including for values read through shells.
+    content: "{{ (_deploy_key | trim) ~ '\n' if _deploy_key | trim | length > 0 else undef('Workspace deploy key is missing') }}"
+    dest: "/home/ubuntu/.ssh/{{ item.key_file }}"
+    mode: "0600"
+  vars:
+    _deploy_key: >-
+      {{ (openclaw_workspaces | selectattr('agent_id', 'equalto', item.agent_id) | first).deploy_key
+         if openclaw_workspaces is defined else lookup('vars', item.deploy_key_var) }}
+  no_log: true
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Read official GitHub SSH host keys
+  ansible.builtin.uri:
+    url: https://api.github.com/meta
+    return_content: true
+  register: workspace_github_meta
+
+- name: Require GitHub SSH host keys
+  ansible.builtin.assert:
+    that:
+      - workspace_github_meta.json.ssh_keys is defined
+      - workspace_github_meta.json.ssh_keys | length > 0
+    fail_msg: GitHub did not provide SSH host keys; refusing unauthenticated Git access.
+
+- name: Install GitHub known hosts for isolated sync
+  ansible.builtin.copy:
+    content: "{{ (workspace_github_meta.json.ssh_keys | map('regex_replace', '^', 'github.com ') | join('\n')) ~ '\n' }}"
+    dest: /home/ubuntu/.ssh/workspace-github-known-hosts
+    mode: "0644"
+
+- name: Install workspace sync image sources
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/home/ubuntu/.local/share/workspace-sync-build/{{ item }}"
+    mode: "0644"
+  loop:
+    - Dockerfile
+    - workspace-sync-entrypoint.sh
+    - workspace-sync.sh
+    - gitignore-workspace
+  register: workspace_image_sources
+
+- name: Check workspace sync image
+  ansible.builtin.command: docker image inspect openclaw-workspace-sync:latest
+  register: workspace_image
+  changed_when: false
+  failed_when: false
+
+- name: Build workspace sync image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - build
+      - --tag
+      - openclaw-workspace-sync:latest
+      - /home/ubuntu/.local/share/workspace-sync-build
+  when: workspace_image.rc != 0 or workspace_image_sources.changed
+
+- name: Install and synchronize each workspace
+  ansible.builtin.include_tasks: sync.yml
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    loop_var: workspace
+    label: "{{ workspace.agent_id }}"
+
+- name: Enable workspace timers after successful synchronization
+  ansible.builtin.systemd:
+    name: "workspace-git-sync-{{ item.agent_id }}.timer"
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  loop: "{{ active_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"

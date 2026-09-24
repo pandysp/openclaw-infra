@@ -3,7 +3,7 @@
 # OpenClaw Post-Deployment Verification Script
 #
 # Run this after `pulumi up` to verify the deployment.
-# Requires: tailscale CLI, ssh
+# Requires: tailscale CLI, jq
 
 set -euo pipefail
 
@@ -12,9 +12,10 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+FAILURES=0
 
 # Configuration
-HOSTNAME_PREFIX="${OPENCLAW_HOSTNAME:-openclaw-vps}"
+EXPECTED_HOSTNAME="${OPENCLAW_HOSTNAME:-openclaw-vps}"
 TAILNET="${TAILNET:-}"  # Your tailnet domain (e.g., tail12345.ts.net)
 
 echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -22,42 +23,21 @@ echo "║              OpenClaw Deployment Verification                    ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Check if tailnet is configured
-if [ -z "$TAILNET" ]; then
-    echo -e "${YELLOW}⚠ TAILNET not set. Set it with: export TAILNET=your-tailnet.ts.net${NC}"
-    echo "  Attempting to auto-detect from tailscale status..."
-    TAILNET=$(tailscale status --json 2>/dev/null | jq -r '.MagicDNSSuffix // empty' || true)
-    if [ -z "$TAILNET" ]; then
-        echo -e "${RED}✗ Could not detect tailnet. Please set TAILNET environment variable.${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✓ Detected tailnet: $TAILNET${NC}"
+# Require one exact online peer; never choose somebody else's suffix match.
+TAILSCALE_STATUS=$(tailscale status --json)
+if [[ -z "$TAILNET" ]]; then
+    TAILNET=$(printf '%s' "$TAILSCALE_STATUS" | jq -er '.MagicDNSSuffix | select(type == "string" and length > 0)')
 fi
-
-# Auto-detect actual hostname (may have numeric suffix like openclaw-vps-1)
-echo ""
-echo "Detecting OpenClaw server..."
-# First try to find an online device (filter lines first, then extract hostname)
-DETECTED_HOSTNAME=$(tailscale status 2>/dev/null | grep -E "${HOSTNAME_PREFIX}(-[0-9]+)?" | grep -v "offline" | grep -oE "${HOSTNAME_PREFIX}(-[0-9]+)?" | head -1 || true)
-
-if [ -z "$DETECTED_HOSTNAME" ]; then
-    # Fallback: check for any matching device even if offline
-    DETECTED_HOSTNAME=$(tailscale status 2>/dev/null | grep -oE "${HOSTNAME_PREFIX}(-[0-9]+)?" | head -1 || true)
-fi
-
-if [ -z "$DETECTED_HOSTNAME" ]; then
-    echo -e "${RED}✗ No device matching '${HOSTNAME_PREFIX}*' found in Tailscale${NC}"
+FULL_HOSTNAME=$(printf '%s' "$TAILSCALE_STATUS" | jq -er --arg name "$EXPECTED_HOSTNAME" --arg suffix "$TAILNET" '
+    [.Peer[] | select(.HostName == $name)] |
+    if length == 1 and .[0].Online == true and .[0].DNSName == ($name + "." + $suffix + ".")
+    then .[0].DNSName | rtrimstr(".")
+    else error("Expected exactly one online peer with the requested hostname") end')
+if [[ -n "${STAGING_HOST:-}" && "$FULL_HOSTNAME" != "$STAGING_HOST" ]]; then
+    echo "ERROR: Verification target differs from this run's staging host"
     exit 1
 fi
-
-if [ "$DETECTED_HOSTNAME" != "$HOSTNAME_PREFIX" ]; then
-    echo -e "${YELLOW}⚠ Device registered as '$DETECTED_HOSTNAME' (has suffix)${NC}"
-    echo "  Tip: Remove stale devices at https://login.tailscale.com/admin/machines"
-else
-    echo -e "${GREEN}✓ Detected device: $DETECTED_HOSTNAME${NC}"
-fi
-
-FULL_HOSTNAME="${DETECTED_HOSTNAME}.${TAILNET}"
+echo "Verifying exact host: $FULL_HOSTNAME"
 
 # Test functions
 check_pass() {
@@ -66,6 +46,7 @@ check_pass() {
 
 check_fail() {
     echo -e "${RED}✗ $1${NC}"
+    FAILURES=$((FAILURES + 1))
 }
 
 check_warn() {
@@ -75,25 +56,17 @@ check_warn() {
 # 1. Check Tailscale connectivity
 echo ""
 echo "1. Checking Tailscale connectivity..."
-# Check if device is online in tailscale status (idle, active, or direct all mean online)
-# Offline devices show "offline" in the status
-if tailscale status | grep "$DETECTED_HOSTNAME" | grep -qv "offline"; then
-    check_pass "Tailscale can reach $DETECTED_HOSTNAME"
-else
-    check_fail "Cannot reach $DETECTED_HOSTNAME via Tailscale"
-    echo "   Make sure the server has completed cloud-init and Tailscale is authenticated."
-    exit 1
-fi
+check_pass "Tailscale can reach $EXPECTED_HOSTNAME"
 
 # 2. Check SSH access
 echo ""
 echo "2. Checking SSH access..."
-if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "ubuntu@$FULL_HOSTNAME" "echo 'SSH OK'" > /dev/null 2>&1; then
+if tailscale ssh "ubuntu@$FULL_HOSTNAME" "echo 'SSH OK'" > /dev/null 2>&1; then
     check_pass "SSH access working"
 else
     check_fail "SSH connection failed"
     echo ""
-    echo -e "${RED}SSH connection failed — skipping 11 remote checks${NC}"
+    echo -e "${RED}SSH connection failed — skipping remaining checks${NC}"
     echo "   Possible causes: SSH key not in Tailscale ACLs, server still booting, sshd not running"
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
@@ -105,7 +78,7 @@ fi
 # 3. Check Node.js version (must be >= v22)
 echo ""
 echo "3. Checking Node.js version..."
-NODE_VERSION=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+NODE_VERSION=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "node --version" 2>/dev/null || echo "")
 
 NODE_MAJOR=$(echo "$NODE_VERSION" | grep -oE '[0-9]+' | head -1)
@@ -120,7 +93,7 @@ fi
 # 4. Check OpenClaw systemd user service
 echo ""
 echo "4. Checking OpenClaw service status..."
-SERVICE_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+SERVICE_STATUS=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active openclaw-gateway" 2>/dev/null || echo "inactive")
 
 if [[ "$SERVICE_STATUS" == "active" ]]; then
@@ -133,7 +106,7 @@ fi
 # 5. Check Tailscale Serve
 echo ""
 echo "5. Checking Tailscale Serve configuration..."
-SERVE_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+SERVE_STATUS=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "tailscale serve status 2>&1" || echo "")
 
 if [[ "$SERVE_STATUS" == *"18789"* ]]; then
@@ -146,18 +119,17 @@ fi
 # 6. Check gateway health endpoint
 echo ""
 echo "6. Checking gateway health..."
-HEALTH_CHECK=$(curl -s --max-time 10 "https://$FULL_HOSTNAME/" 2>/dev/null || echo "FAILED")
-
-if [[ "$HEALTH_CHECK" != "FAILED" ]] && [[ "$HEALTH_CHECK" != "" ]]; then
+if HTTP_STATUS=$(curl --silent --show-error --max-time 10 --output /dev/null \
+    --write-out '%{http_code}' "https://$FULL_HOSTNAME/") && [[ "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
     check_pass "Gateway responding at https://$FULL_HOSTNAME/"
 else
-    check_warn "Gateway not responding (may still be starting)"
+    check_fail "Gateway HTTPS request did not complete with HTTP success"
 fi
 
 # 7. Check gateway port on localhost (18789 is the only port openclaw binds)
 echo ""
 echo "7. Checking local ports on server..."
-PORTS_CHECK=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
+PORTS_CHECK=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "ss -tlnp | grep -E ':18789'" 2>/dev/null || echo "")
 
 if [[ -n "$PORTS_CHECK" ]]; then
@@ -173,169 +145,246 @@ fi
 # uniformly to v4 and v6, so scanning v4 is sufficient to confirm the intent.
 echo ""
 echo "8. Security audit: Checking for exposed ports..."
-PUBLIC_IP=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "curl -s --ipv4 --max-time 5 ifconfig.me" 2>/dev/null || echo "UNKNOWN")
-
-if [ "$PUBLIC_IP" != "UNKNOWN" ] && [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+PUBLIC_IP="${STAGING_PUBLIC_IP:-}"
+if { [[ -n "$PUBLIC_IP" ]] || PUBLIC_IP=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
+    "curl --fail --silent --show-error --ipv4 --max-time 5 https://ifconfig.me" 2>/dev/null); } &&
+    [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "   Server public IPv4: $PUBLIC_IP"
     # Python-based scan: BSD nc's -w timeout is unreliable against silently
     # dropped packets (Hetzner firewall drops without RST, so SYN_SENT
     # never resolves). socket.settimeout is deterministic.
     for PORT in 22 80 443 8080 18789; do
-        RESULT=$(python3 -c "
-import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(2)
-try:
-    s.connect(('$PUBLIC_IP', $PORT))
-    print('open')
-except Exception:
-    print('closed')
-finally:
-    s.close()
-" 2>/dev/null)
-        if [[ "$RESULT" == "open" ]]; then
+        if ! RESULT=$(python3 - "$PUBLIC_IP" "$PORT" 2>/dev/null <<'PY'
+import ipaddress, socket, sys
+address = str(ipaddress.IPv4Address(sys.argv[1]))
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+    connection.settimeout(2)
+    try:
+        connection.connect((address, int(sys.argv[2])))
+        print('open')
+    except (TimeoutError, ConnectionRefusedError):
+        print('closed')
+PY
+        ); then
+            check_fail "Port $PORT scan failed; no network evidence was obtained"
+        elif [[ "$RESULT" == "open" ]]; then
             check_fail "Port $PORT is publicly accessible!"
-        else
+        elif [[ "$RESULT" == "closed" ]]; then
             check_pass "Port $PORT is blocked (good)"
+        else
+            check_fail "Port $PORT scan returned an invalid result"
         fi
     done
 else
-    check_warn "Could not determine server public IPv4 (got: ${PUBLIC_IP})"
+    check_fail "Could not determine server public IPv4; public-port checks were not performed"
 fi
 
-# 9. OpenClaw built-in status
-# Server-side timeout guards against openclaw status hanging during config
-# hot-reload or MCP bootstrap (observed taking >2min on some invocations).
+# 9. OpenClaw health check
+# Require a completed command and an explicit healthy JSON result.
 echo ""
-echo "9. Checking OpenClaw status..."
-OPENCLAW_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "timeout 60 openclaw status 2>&1" || echo "FAILED")
-
-if [[ "$OPENCLAW_STATUS" == "FAILED" ]] || [[ -z "$OPENCLAW_STATUS" ]]; then
-    check_warn "Could not get OpenClaw status (timed out or unreachable)"
-elif echo "$OPENCLAW_STATUS" | grep -qE "Gateway service\s+.*running"; then
-    check_pass "OpenClaw status OK (gateway service running)"
-    echo "$OPENCLAW_STATUS" | grep -E "^│ (Gateway|Agents|Update|Channel) " | head -5 | sed 's/^/   /'
-else
-    check_warn "OpenClaw status returned but gateway service marker missing"
-    echo "$OPENCLAW_STATUS" | head -8 | sed 's/^/   /'
-fi
-
-# 10. OpenClaw health check
-# Look for negative signals rather than just non-empty output. A channel line
-# reading "Discord: error" would pass a non-empty check but indicates a problem.
-echo ""
-echo "10. Checking OpenClaw health..."
-OPENCLAW_HEALTH=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "timeout 60 openclaw health 2>&1" || echo "FAILED")
-
-if [[ "$OPENCLAW_HEALTH" == "FAILED" ]] || [[ -z "$OPENCLAW_HEALTH" ]]; then
-    check_warn "Could not get OpenClaw health"
-elif echo "$OPENCLAW_HEALTH" | grep -qiE ":\s*(error|offline|expired|disconnected|failed)"; then
-    check_fail "OpenClaw health reports a failing channel/agent"
-    echo "$OPENCLAW_HEALTH" | grep -iE ":\s*(error|offline|expired|disconnected|failed)" | sed 's/^/   /'
-else
-    check_pass "OpenClaw health OK"
-    echo "$OPENCLAW_HEALTH" | head -10 | sed 's/^/   /'
-fi
-
-# 11. OpenClaw security audit
-echo ""
-echo "11. Running OpenClaw security audit..."
-SECURITY_AUDIT=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "timeout 180 openclaw security audit --deep 2>&1" || echo "FAILED")
-
-# The audit summary line reads e.g. "Summary: 0 critical · 3 warn · 2 info".
-# Grep for it rather than tail -3, which otherwise shows the last finding body
-# and hides the counts that actually matter.
-SUMMARY_LINE=$(echo "$SECURITY_AUDIT" | grep -E "^Summary:" | head -1)
-if [[ "$SUMMARY_LINE" == *"0 critical"* ]]; then
-    check_pass "Security audit passed"
-    [[ -n "$SUMMARY_LINE" ]] && echo "   $SUMMARY_LINE"
-elif [[ "$SECURITY_AUDIT" != "FAILED" ]]; then
-    check_warn "Security audit returned critical findings"
-    [[ -n "$SUMMARY_LINE" ]] && echo "   $SUMMARY_LINE"
-else
-    check_warn "Could not run security audit"
-fi
-
-# 12. Channel status — one SSH call, parse once per channel
-echo ""
-echo "12. Checking configured channels..."
-CHANNELS_STATUS=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "timeout 60 openclaw channels status 2>&1" || echo "FAILED")
-
-check_channel() {
-    local name="$1"
-    local line
-    # `|| true`: an unconfigured channel (no matching line) makes grep exit 1,
-    # which under `set -euo pipefail` would kill the script at the assignment
-    # before the "not configured" branch below can handle it. Only bites when
-    # some channels are absent (staging runs Telegram only; prod has all three,
-    # so every grep matched and it never surfaced there).
-    line=$(echo "$CHANNELS_STATUS" | grep -iE "^- $name" | head -1 || true)
-    if [[ -z "$line" ]]; then
-        echo "   $name not configured (optional)"
-    elif [[ "$line" == *"enabled"* ]]; then
-        check_pass "$name channel enabled"
-        echo "$line" | sed 's/^/   /'
+echo "9. Checking OpenClaw health..."
+if OPENCLAW_HEALTH=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" "timeout 60 openclaw health --json"); then
+    if printf '%s' "$OPENCLAW_HEALTH" | jq -se 'length == 1 and (.[0] | type == "object" and .ok == true)' >/dev/null; then
+        check_pass "OpenClaw health OK"
     else
-        check_warn "$name channel present but not enabled"
-        echo "$line" | sed 's/^/   /'
+        check_fail "OpenClaw returned an invalid or unhealthy result"
     fi
-}
-
-check_channel "Telegram"
-check_channel "WhatsApp"
-check_channel "Discord"
-
-# 13. Check cron jobs
-echo ""
-echo "13. Checking scheduled tasks..."
-CRON_LIST=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" \
-    "timeout 60 openclaw cron list 2>&1" || echo "FAILED")
-
-# Each cron job row starts with a UUID. Matching on status (idle|running|ok)
-# was fragile and missed jobs whose status doesn't happen to fall in that set;
-# UUID prefix matches every job regardless of current state.
-CRON_COUNT=$(echo "$CRON_LIST" | grep -c -E '^[0-9a-f]{8}-[0-9a-f]{4}-' || true)
-if [[ "$CRON_LIST" == "FAILED" ]]; then
-    check_warn "Could not reach server to list cron jobs"
-elif [[ "$CRON_COUNT" -gt 0 ]]; then
-    check_pass "$CRON_COUNT scheduled task(s) configured"
-    echo "$CRON_LIST" | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-' | sed 's/^/   /' | head -5
 else
-    echo "   No cron jobs configured (optional)"
+    check_fail "OpenClaw health did not complete successfully (SSH, timeout or health failure)"
 fi
 
-# 14. Check local gateway token (Mac client only)
+# 10. OpenClaw security audit
+echo ""
+echo "10. Running OpenClaw security audit..."
+if SECURITY_AUDIT=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
+    "timeout 180 openclaw security audit --deep --json"); then
+    if printf '%s' "$SECURITY_AUDIT" | jq -se \
+        'length == 1 and (.[0] | type == "object" and .summary.critical == 0)' >/dev/null; then
+        check_pass "Security audit passed (0 critical findings)"
+    else
+        check_fail "Security audit returned critical findings or an invalid result"
+    fi
+else
+    check_fail "Security audit did not complete successfully (SSH, timeout or audit failure)"
+fi
+
+# 11. Channel status — one SSH call, parse once per channel
+echo ""
+echo "11. Checking configured channels..."
+if CHANNELS_STATUS=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
+    "timeout 60 openclaw channels status --json" 2>/dev/null) &&
+    printf '%s' "$CHANNELS_STATUS" | jq -es --arg required "${REQUIRED_CHANNELS:-}" '
+        def healthy: .enabled == true and .configured == true and .running == true and
+                     .lastError == null and .connected == true;
+        length == 1 and (.[0].channelAccounts |
+            type == "object" and all(.[]; type == "array") and
+            all(.[][] | select(.enabled == true and .configured == true); healthy) and
+            (. as $accounts | all($required | split(",")[] | select(length > 0);
+                $accounts[.] | type == "array" and length > 0 and all(.[]; healthy))))
+    ' >/dev/null 2>&1; then
+    check_pass "Configured and explicitly required channels are healthy"
+else
+    check_fail "Channel query failed, a required channel is missing, or an account is unhealthy"
+fi
+
+# 12. Check scheduled automation policy
+echo ""
+echo "12. Checking scheduled automation policy..."
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+POLICY_OK=true
+POLICY_PYTHON=python3
+if command -v ansible-playbook >/dev/null 2>&1; then
+    ANSIBLE_SHEBANG=$(head -1 "$(command -v ansible-playbook)")
+    if [[ "$ANSIBLE_SHEBANG" == '#!'* ]]; then
+        ANSIBLE_PYTHON=${ANSIBLE_SHEBANG#\#!}
+        if [[ -x "$ANSIBLE_PYTHON" ]] && "$ANSIBLE_PYTHON" -c 'import yaml' >/dev/null 2>&1; then
+            POLICY_PYTHON="$ANSIBLE_PYTHON"
+        fi
+    fi
+fi
+if ! "$POLICY_PYTHON" -c 'import yaml' >/dev/null 2>&1; then
+    POLICY_OK=false
+    AUTOMATION_POLICY=""
+    check_fail "Could not load the YAML parser used for scheduled automation verification"
+elif ! AUTOMATION_POLICY=$("$POLICY_PYTHON" - "$REPO_DIR/ansible/group_vars/all.yml" "$REPO_DIR/ansible/group_vars/openclaw.yml" 2>/dev/null << 'PYEOF'
+import json, pathlib, sys, yaml
+
+def require_mapping(value, label):
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} root must be a mapping")
+    return value
+
+defaults = require_mapping(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text()) or {}, "all.yml")
+override_path = pathlib.Path(sys.argv[2])
+override = yaml.safe_load(override_path.read_text()) if override_path.exists() else {}
+override = require_mapping(override or {}, "openclaw.yml")
+agents = override.get("openclaw_agents", defaults.get("openclaw_agents", []))
+default_enabled = override.get(
+    "openclaw_scheduled_automation_default",
+    defaults.get("openclaw_scheduled_automation_default", False),
+)
+if not isinstance(default_enabled, bool):
+    raise ValueError("openclaw_scheduled_automation_default must be a boolean")
+if not isinstance(agents, list) or not agents:
+    raise ValueError("effective openclaw_agents must be a non-empty list")
+seen = set()
+paused = []
+active = []
+for agent in agents:
+    if not isinstance(agent, dict):
+        raise ValueError("every effective agent must be a mapping")
+    agent_id = agent.get("id")
+    if not isinstance(agent_id, str) or not agent_id or agent_id in seen:
+        raise ValueError("effective agent IDs must be non-empty and unique")
+    seen.add(agent_id)
+    enabled = agent.get("scheduled_automation_enabled", default_enabled)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"scheduled automation switch for {agent_id} must be a boolean")
+    (active if enabled else paused).append(agent_id)
+print(json.dumps({"paused": paused, "active": active}))
+PYEOF
+); then
+    POLICY_OK=false
+    AUTOMATION_POLICY=""
+    check_fail "Could not parse scheduled automation policy; check the agent configuration (private diagnostics withheld)"
+fi
+
+CRON_OK=true
+if CRON_RAW=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
+    "timeout 60 openclaw cron list --all --json" 2>/dev/null); then
+    CRON_JSON=$(printf '%s\n' "$CRON_RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+else
+    CRON_OK=false
+    CRON_JSON=""
+    check_fail "Cron query failed; check the gateway connection and CLI (private diagnostics withheld)"
+fi
+
+STATUS_OK=true
+if STATUS_RAW=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
+    "timeout 60 openclaw status --json" 2>/dev/null); then
+    STATUS_JSON=$(printf '%s\n' "$STATUS_RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+else
+    STATUS_OK=false
+    STATUS_JSON=""
+    check_fail "Heartbeat query failed; check the gateway connection and CLI (private diagnostics withheld)"
+fi
+
+BOOTSTRAP_OK=true
+if BOOTSTRAP_RAW=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
+    "openclaw config get agents.defaults.skipBootstrap" 2>/dev/null); then
+    SKIP_BOOTSTRAP=$(printf '%s\n' "$BOOTSTRAP_RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+else
+    BOOTSTRAP_OK=false
+    SKIP_BOOTSTRAP=""
+    check_fail "Could not read agents.defaults.skipBootstrap; check the gateway connection and CLI (private diagnostics withheld)"
+fi
+
+if [[ "$CRON_OK" == true ]] && ! jq -e '.jobs | type == "array"' >/dev/null 2>&1 <<< "$CRON_JSON"; then
+    check_fail "Could not read cron state including disabled jobs"
+elif [[ "$STATUS_OK" == true ]] && ! jq -e '.heartbeat.agents | type == "array"' >/dev/null 2>&1 <<< "$STATUS_JSON"; then
+    check_fail "Could not read heartbeat state"
+elif [[ "$CRON_OK" != true ]] || [[ "$STATUS_OK" != true ]] || [[ "$POLICY_OK" != true ]]; then
+    : # The specific query/parser failure was already reported above.
+else
+    PAUSED=$(jq -c '.paused' <<< "$AUTOMATION_POLICY")
+    ACTIVE=$(jq -c '.active' <<< "$AUTOMATION_POLICY")
+    CRON_TOTAL=$(jq '.jobs | length' <<< "$CRON_JSON")
+    CRON_ENABLED=$(jq '[.jobs[] | select(.enabled)] | length' <<< "$CRON_JSON")
+    CRON_DISABLED=$(jq '[.jobs[] | select(.enabled | not)] | length' <<< "$CRON_JSON")
+    ENABLED_FOR_PAUSED=$(jq --argjson paused "$PAUSED" \
+        '[.jobs[] | select(.agentId as $id | $paused | index($id)) | select(.enabled)] | length' <<< "$CRON_JSON")
+    LIVE_HEARTBEATS_FOR_PAUSED=$(jq --argjson paused "$PAUSED" \
+        '[.heartbeat.agents[] | select(.agentId as $id | $paused | index($id)) | select(.everyMs != null)] | length' <<< "$STATUS_JSON")
+    MISSING_ACTIVE_HEARTBEATS=$(jq --argjson active "$ACTIVE" \
+        '[ $active[] as $id | select([.heartbeat.agents[] | select(.agentId == $id and .everyMs != null)] | length == 0) ] | length' <<< "$STATUS_JSON")
+
+    if [[ "$ENABLED_FOR_PAUSED" -eq 0 ]] && [[ "$LIVE_HEARTBEATS_FOR_PAUSED" -eq 0 ]]; then
+        check_pass "Paused agents have no enabled cron jobs or live heartbeats"
+    else
+        check_fail "Paused-agent policy violated: cron=$ENABLED_FOR_PAUSED heartbeat=$LIVE_HEARTBEATS_FOR_PAUSED"
+    fi
+    if [[ "$MISSING_ACTIVE_HEARTBEATS" -eq 0 ]]; then
+        check_pass "Enabled agents have live heartbeat cadences"
+    else
+        check_fail "$MISSING_ACTIVE_HEARTBEATS enabled agent(s) lack a live heartbeat cadence"
+    fi
+    echo "   Cron inventory: total=$CRON_TOTAL enabled=$CRON_ENABLED disabled=$CRON_DISABLED"
+fi
+if [[ "$BOOTSTRAP_OK" != true ]]; then
+    : # The transport/CLI failure was already reported above.
+elif [[ "$SKIP_BOOTSTRAP" == "true" ]]; then
+    check_pass "Workspace bootstrap replacement is disabled"
+else
+    check_fail "agents.defaults.skipBootstrap is '$SKIP_BOOTSTRAP', expected true — context files may be re-scaffolded"
+fi
+
+# 13. Check local gateway token (Mac client only)
 LOCAL_CONFIG="$HOME/.openclaw/openclaw.json"
-TOKEN_LEN=$(OPENCLAW_CONFIG="$LOCAL_CONFIG" python3 -c "
+echo ""
+echo "13. Checking local gateway token..."
+if [[ ! -f "$LOCAL_CONFIG" ]]; then
+    echo "   Local OpenClaw node config not present (optional on this machine)"
+elif ! TOKEN_LEN=$(OPENCLAW_CONFIG="$LOCAL_CONFIG" python3 -c "
 import json, os
 with open(os.environ['OPENCLAW_CONFIG']) as f:
     d = json.load(f)
-print(len(d.get('gateway', {}).get('remote', {}).get('token', '')))" || echo "0")
-if [ "$TOKEN_LEN" -gt 0 ] 2>/dev/null; then
-    echo ""
-    echo "14. Checking local gateway token..."
+print(len(d.get('gateway', {}).get('remote', {}).get('token', '')))" 2>/dev/null); then
+    check_fail "Local OpenClaw node config is unreadable"
+elif [ "$TOKEN_LEN" -gt 0 ] 2>/dev/null; then
     check_pass "Local gateway.remote.token is set"
-elif [ -f "$LOCAL_CONFIG" ]; then
+else
     # Non-fatal: verify continues to report all checks
-    echo ""
-    echo "14. Checking local gateway token..."
     check_fail "Local gateway.remote.token is EMPTY — node host cannot authenticate"
-    echo "   Fix: run ./scripts/setup-mac-node.sh or restore from backup:"
-    echo "   cat ~/.openclaw/openclaw.json.bak | python3 -c \"import json,sys; print(json.load(sys.stdin)['gateway']['remote']['token'])\""
+    echo "   Fix: run ./scripts/setup-mac-node.sh; never print the gateway token or its backup."
 fi
 
-# 15. Version match — IaC pin vs installed. Catches drift across VPS, local CLI,
+# 14. Version match — IaC pin vs installed. Catches drift across VPS, local CLI,
 # and the Mac node host: these three must stay in lockstep to avoid protocol
 # mismatches after a skipped upgrade.
 echo ""
-echo "15. Checking version alignment (IaC pin vs installed)..."
+echo "14. Checking version alignment (IaC pin vs installed)..."
 IAC_VERSION=$(grep -E '^openclaw_version:' "$(dirname "${BASH_SOURCE[0]}")/../ansible/group_vars/all.yml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
-VPS_VERSION=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$FULL_HOSTNAME" 'openclaw --version' 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+VPS_VERSION=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" 'openclaw --version' 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
 LOCAL_VERSION=$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
 
 if [[ -z "$IAC_VERSION" ]]; then
@@ -345,7 +394,7 @@ elif [[ -z "$VPS_VERSION" ]]; then
 elif [[ "$VPS_VERSION" != "$IAC_VERSION" ]]; then
     check_fail "VPS on $VPS_VERSION but IaC pins $IAC_VERSION — run ./scripts/provision.sh --tags openclaw"
 elif [[ -n "$LOCAL_VERSION" ]] && [[ "$LOCAL_VERSION" != "$IAC_VERSION" ]]; then
-    check_warn "Local CLI on $LOCAL_VERSION but VPS/IaC on $IAC_VERSION — brew upgrade openclaw-cli"
+    check_warn "Local CLI on $LOCAL_VERSION but VPS/IaC on $IAC_VERSION — align versions intentionally before using the local CLI as contract evidence"
 else
     check_pass "All components on $IAC_VERSION (IaC=$IAC_VERSION, VPS=$VPS_VERSION, local=${LOCAL_VERSION:-n/a})"
 fi
@@ -355,6 +404,11 @@ echo "════════════════════════�
 echo "                    Verification Complete"
 echo "═══════════════════════════════════════════════════════════════════"
 echo ""
+if [[ "$FAILURES" -gt 0 ]]; then
+    echo -e "${RED}$FAILURES verification check(s) failed.${NC}"
+    exit 1
+fi
+
 echo "Access your OpenClaw instance at:"
 echo "  https://$FULL_HOSTNAME/"
 echo "═══════════════════════════════════════════════════════════════════"

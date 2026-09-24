@@ -4,124 +4,6 @@
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
 
-- name: Check if mcp-adapter plugin directory exists
-  ansible.builtin.stat:
-    path: /home/ubuntu/.openclaw/extensions/openclaw-mcp-adapter/index.ts
-  register: plugin_dir
-
-- name: Save existing MCP adapter config before potential reinstall
-  ansible.builtin.shell: |
-    set -euo pipefail
-    jq -c '.plugins.entries["openclaw-mcp-adapter"].config // empty' \
-      /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo ""
-  args:
-    executable: /bin/bash
-  register: saved_mcp_adapter_config
-  changed_when: false
-
-- name: Install mcp-adapter plugin
-  when: not plugin_dir.stat.exists or force_plugin_reinstall | bool
-  block:
-    - name: Remove stale plugin config entry before reinstall
-      ansible.builtin.shell: |
-        set -euo pipefail
-        python3 -c "
-        import json, os, tempfile
-        config_path = '/home/ubuntu/.openclaw/openclaw.json'
-        with open(config_path) as f:
-            cfg = json.load(f)
-        changed = False
-        if 'openclaw-mcp-adapter' in cfg.get('plugins', {}).get('entries', {}):
-            del cfg['plugins']['entries']['openclaw-mcp-adapter']
-            changed = True
-        allow = cfg.get('plugins', {}).get('allow', [])
-        if 'openclaw-mcp-adapter' in allow:
-            allow.remove('openclaw-mcp-adapter')
-            changed = True
-        if changed:
-            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config_path), suffix='.tmp')
-            try:
-                with os.fdopen(fd, 'w') as f:
-                    json.dump(cfg, f, indent=2)
-                os.rename(tmp, config_path)
-            except Exception:
-                os.unlink(tmp)
-                raise
-        "
-      args:
-        executable: /bin/bash
-      when: force_plugin_reinstall | bool
-      changed_when: false
-
-    - name: Remove existing plugin directory (reinstall)
-      ansible.builtin.file:
-        path: /home/ubuntu/.openclaw/extensions/openclaw-mcp-adapter
-        state: absent
-      when: force_plugin_reinstall | bool
-
-    - name: Install plugin from npm
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        openclaw plugins install --pin "{{ openclaw_mcp_adapter.npm_package }}"
-      args:
-        executable: /bin/bash
-
-    - name: Restore MCP adapter config after reinstall
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        openclaw config set plugins.entries.openclaw-mcp-adapter.config \
-          --json '{{ saved_mcp_adapter_config.stdout }}'
-        # Invalidate hash so the final config write is not skipped due to stale hash
-        rm -f /home/ubuntu/.openclaw/.ansible-hashes/mcp-adapter-config
-        echo "RESTORED"
-      args:
-        executable: /bin/bash
-      changed_when: true
-      when: saved_mcp_adapter_config.stdout | length > 0 and saved_mcp_adapter_config.stdout != 'null'
-
-    - name: Ensure plugin is in allowlists
-      ansible.builtin.shell: |
-        set -euo pipefail
-        python3 -c "
-        import json, os, tempfile
-        config_path = '/home/ubuntu/.openclaw/openclaw.json'
-        with open(config_path) as f:
-            cfg = json.load(f)
-        changed = False
-
-        # plugins.allow
-        allow = cfg.setdefault('plugins', {}).setdefault('allow', [])
-        if 'openclaw-mcp-adapter' not in allow:
-            allow.append('openclaw-mcp-adapter')
-            changed = True
-
-        # tools.sandbox.tools.allow
-        tool_allow = cfg.setdefault('tools', {}).setdefault('sandbox', {}).setdefault('tools', {}).setdefault('allow', [])
-        for entry in ['group:plugins', 'openclaw-mcp-adapter']:
-            if entry not in tool_allow:
-                tool_allow.append(entry)
-                changed = True
-
-        if changed:
-            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config_path), suffix='.tmp')
-            try:
-                with os.fdopen(fd, 'w') as f:
-                    json.dump(cfg, f, indent=2)
-                os.rename(tmp, config_path)
-            except Exception:
-                os.unlink(tmp)
-                raise
-            print('ADDED')
-        else:
-            print('OK')
-        "
-      args:
-        executable: /bin/bash
-      register: allowlist_result
-      changed_when: "'ADDED' in allowlist_result.stdout"
-
 - name: Ensure npm global prefix is configured
   ansible.builtin.shell: |
     set -euo pipefail
@@ -1190,277 +1072,365 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Write server tokens to temp files (de-duplicated by token_var)
-  ansible.builtin.copy:
-    content: "{{ lookup('vars', item, default='') }}"
-    dest: "/tmp/ansible-mcp-token-{{ item }}"
-    mode: "0600"
-  no_log: true
-  changed_when: false
-  loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
-
-- name: Write Claude setup token to temp file
-  ansible.builtin.copy:
-    content: "{{ claude_setup_token }}"
-    dest: "/tmp/ansible-mcp-claude-setup-token"
-    mode: "0600"
-  no_log: true
-  changed_when: false
-  when: claude_setup_token | default('') | length > 0
-
-- name: Build and write plugin config JSON
-  ansible.builtin.shell: |
-    set -euo pipefail
-    GITHUB_BINARY="{{ github_mcp_binary.stdout | trim }}"
-    TOOL_PREFIX='{{ openclaw_mcp_adapter.tool_prefix | to_json }}'
-    CODEX_SANDBOX="{{ openclaw_mcp_adapter.codex_sandbox | default('workspace-write') }}"
-    CODEX_APPROVAL="{{ openclaw_mcp_adapter.codex_approval | default('never') }}"
-    # Build servers array
-    SERVERS="[]"
-
-    # GitHub servers — only include when token is non-empty
-    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'github') %}
-    TOKEN_FILE="/tmp/ansible-mcp-token-{{ srv.token_var }}"
-    if [ ! -f "$TOKEN_FILE" ]; then
-        echo "ERROR: Token file $TOKEN_FILE is missing — write task may have failed"
-        exit 1
-    fi
-    TOKEN=$(cat "$TOKEN_FILE")
-    if [ -n "$TOKEN" ]; then
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
-            --arg cmd "$GITHUB_BINARY" \
-            --arg token "$TOKEN" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, env: {GITHUB_PERSONAL_ACCESS_TOKEN: $token}}]')
-    fi
-    {% endfor %}
-
-    # Codex servers — containerized with docker run -i (stdio piped through Docker)
-    # Security: containers have NO credentials. Auth is injected by mcp-auth-proxy (formerly codex-token-proxy)
-    # running on codex-proxy-net. Sandbox containers on default bridge cannot reach proxy.
-    CODEX_IMAGE="{{ openclaw_mcp_adapter.codex_docker_image }}"
-    CODEX_MEM="{{ openclaw_mcp_adapter.codex_memory_limit | default('2g') }}"
-    PROXY_GW="{{ codex_proxy_gateway_ip | default('') }}"
-    if [ -f "/home/ubuntu/.codex/auth.json" ] && [ -n "$PROXY_GW" ]; then
-    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'codex') %}
-        DOCKER_ARGS=$(jq -n \
-            --arg ws "{{ srv.cwd }}" \
-            --arg img "$CODEX_IMAGE" \
-            --arg agent "{{ srv.agent_id }}" \
-            --arg mem "$CODEX_MEM" \
-            --arg sandbox "$CODEX_SANDBOX" \
-            --arg approval "$CODEX_APPROVAL" \
-            '["run","--rm","-i","--init","--network=codex-proxy-net",
-              "--cap-drop","ALL",
-              "--security-opt","no-new-privileges",
-              "--read-only",
-              "--tmpfs","/tmp",
-              "--tmpfs","/home/node/.codex:uid=1000,gid=1000",
-              "--tmpfs","/home/node/.npm:uid=1000,gid=1000",
-              "--tmpfs","/home/node/.config:uid=1000,gid=1000",
-              "--tmpfs","/home/node/.cache:uid=1000,gid=1000",
-              "--pids-limit","100",
-              "--cpus","2",
-              ("--memory=" + $mem),("--memory-swap=" + $mem),
-              "--label","openclaw-role=codex-mcp",
-              "--label",("openclaw-agent=" + $agent),
-              "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-              "--mount","type=bind,source=/home/ubuntu/.openclaw/codex-config.toml,target=/home/node/.codex/config.toml,readonly",
-              "-e","CODEX_PROXY_TOKEN=proxy",
-              "-w","/workspace",
-              $img,
-              "codex","mcp-server",
-              "-c",("sandbox_mode=" + $sandbox),
-              "-c",("approval_policy=" + $approval)]')
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
-            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
-    {% endfor %}
-    fi
-
-    # Claude Code servers — containerized with docker run -i (stdio piped through Docker)
-    # Security: containers have NO credentials. Auth is injected by the proxy
-    # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
-    CLAUDE_IMAGE="{{ openclaw_mcp_adapter.claude_code_docker_image }}"
-    CLAUDE_MEM="{{ openclaw_mcp_adapter.claude_code_memory_limit | default('2g') }}"
-    if [ -n "$PROXY_GW" ]; then
-    {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-    CLAUDE_CMD="mkdir -p /home/node/.claude && cp -a /opt/claude-config/. /home/node/.claude/ && exec claude-code-mcp"
-    {% else %}
-    CLAUDE_CMD="exec claude-code-mcp"
-    {% endif %}
-    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'claude-code') %}
-        DOCKER_ARGS=$(jq -n \
-            --arg ws "{{ srv.cwd }}" \
-            --arg img "$CLAUDE_IMAGE" \
-            --arg agent "{{ srv.agent_id }}" \
-            --arg mem "$CLAUDE_MEM" \
-            --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
-    {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-            --arg config_dir "{{ claude_code_plugins.config_dir }}" \
-    {% endif %}
-            --arg cmd "$CLAUDE_CMD" \
-            '["run","--rm","-i","--init","--network=codex-proxy-net",
-              "--cap-drop","ALL",
-              "--security-opt","no-new-privileges",
-              "--read-only",
-              "--tmpfs","/tmp:size=256m",
-              "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
-              "--pids-limit","300",
-              "--cpus","2",
-              ("--memory=" + $mem),("--memory-swap=" + $mem),
-              "--label","openclaw-role=claude-code-mcp",
-              "--label",("openclaw-agent=" + $agent),
-              "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-    {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-              "--mount",("type=bind,source=" + $config_dir + ",target=/opt/claude-config,readonly"),
-    {% endif %}
-              "-e","ANTHROPIC_API_KEY=proxy",
-              "-e",("ANTHROPIC_BASE_URL=" + $base_url),
-              "-e","ENABLE_LSP_TOOL=1",
-              "-e","CLAUDE_CODE_SUBAGENT_MODEL=opus",
-              "-w","/workspace",
-              $img,
-              "sh","-c",$cmd]')
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
-            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
-    {% endfor %}
-    fi
-
-    # Pi MCP servers — containerized with docker run -i (stdio piped through Docker)
-    # Security: containers have NO credentials. Auth is injected by the proxy
-    # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
-    PI_IMAGE="{{ openclaw_mcp_adapter.pi_mcp_docker_image }}"
-    PI_MEM="{{ openclaw_mcp_adapter.pi_mcp_memory_limit | default('1g') }}"
-    PI_MODEL="{{ openclaw_mcp_adapter.pi_mcp_model | default('claude-sonnet-4-5-20250929') }}"
-    PI_THINKING="{{ openclaw_mcp_adapter.pi_mcp_thinking | default('medium') }}"
-    if [ -n "$PROXY_GW" ]; then
-    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'pi') %}
-        DOCKER_ARGS=$(jq -n \
-            --arg ws "{{ srv.cwd }}" \
-            --arg img "$PI_IMAGE" \
-            --arg agent "{{ srv.agent_id }}" \
-            --arg mem "$PI_MEM" \
-            --arg model "$PI_MODEL" \
-            --arg thinking "$PI_THINKING" \
-            --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
-            '["run","--rm","-i","--init","--network=codex-proxy-net",
-              "--cap-drop","ALL",
-              "--security-opt","no-new-privileges",
-              "--read-only",
-              "--tmpfs","/tmp:size=256m",
-              "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
-              "--pids-limit","100",
-              "--cpus","2",
-              ("--memory=" + $mem),("--memory-swap=" + $mem),
-              "--label","openclaw-role=pi-mcp",
-              "--label",("openclaw-agent=" + $agent),
-              "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-              "-e","ANTHROPIC_OAUTH_TOKEN=sk-ant-oat-proxy",
-              "-e","PI_MCP_PROVIDER=anthropic",
-              "-e",("PI_MCP_MODEL=" + $model),
-              "-e",("PI_MCP_THINKING=" + $thinking),
-              "-e","PI_MCP_CWD=/workspace",
-              "-e","PI_MCP_SANDBOX=false",
-              "-e","PI_MCP_MAX_SESSIONS=10",
-              "-e","PI_MCP_SESSION_IDLE_TIMEOUT=1800",
-              "-e",("ANTHROPIC_BASE_URL=" + $base_url),
-              "-w","/workspace",
-              $img]')
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
-            '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
-    {% endfor %}
-    fi
-
-    {% if qmd_workspaces | length > 0 %}
-    # qmd servers — HTTP daemon mode (decoupled from gateway lifecycle)
-    # Port assignment positional over qmd_workspaces list, must match qmd role.
-    QMD_BINARY="{{ (qmd_mcp_binary.stdout | default('')) | trim }}"
-    if [ -n "$QMD_BINARY" ] && [ -x "$QMD_BINARY" ]; then
-    {% for ws in qmd_workspaces %}
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ ws.server_name }}" \
-            --arg url "http://localhost:{{ ws.port }}/mcp" \
-            '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 300000}]')
-    {% endfor %}
-    else
-        echo "NOTE: qmd binary not found, skipping qmd MCP servers"
-    fi
-    {% endif %}
-
-    {% if node_exec_enabled | default(false) %}
-    # node-exec: Mac shell access via openclaw nodes run (no Docker, no credentials)
-    NODE_EXEC_BINARY="{{ (node_exec_mcp_binary.stdout | default('')) | trim }}"
-    OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
-    NODE_ID=$(jq -r '.tools.exec.node // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "")
-    GW_TOKEN=$(jq -r '.gateway.auth.token // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "")
-    # In 2026.3.13+, nodes is owner-only. Loopback shared-token auth lacks owner scope.
-    # Route through Tailscale Serve so the CLI gets full auth via allowTailscale.
-    GW_URL="{{ _tailscale_wss_url }}"
-    if [ -n "$NODE_ID" ] && [ -n "$OPENCLAW_BIN" ] && [ -x "$NODE_EXEC_BINARY" ]; then
-    {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'node-exec') %}
-        SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
-            --arg cmd "$NODE_EXEC_BINARY" \
-            --arg node_id "$NODE_ID" \
-            --arg openclaw_bin "$OPENCLAW_BIN" \
-            --arg gw_token "$GW_TOKEN" \
-            --arg gw_url "$GW_URL" \
-            '. + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000", OPENCLAW_GATEWAY_URL: $gw_url, OPENCLAW_GATEWAY_TOKEN: $gw_token, OPENCLAW_LOG_LEVEL: "error", DEFAULT_CWD: "/private/tmp"}}]')
-    {% endfor %}
-    else
-        echo "NOTE: Skipping node-exec MCP servers (node_id='${NODE_ID}', binary='${NODE_EXEC_BINARY}')" >&2
-    fi
-    {% else %}
-    echo "NOTE: Node exec disabled (node_exec_enabled=false in group_vars/all.yml)" >&2
-    {% endif %}
-
-    # Build final config
-    CONFIG=$(jq -n --argjson prefix "$TOOL_PREFIX" --argjson servers "$SERVERS" \
-        '{toolPrefix: $prefix, servers: $servers}')
-
-    echo "$CONFIG" > /tmp/ansible-plugin-config
-    chmod 600 /tmp/ansible-plugin-config
-  args:
-    executable: /bin/bash
-  changed_when: false
-  # no_log omitted intentionally — tokens are in temp files, not in this template.
-  # Errors here (jq failures, missing files) must be visible for debugging.
-
 - name: Configure mcp-adapter plugin
   block:
+    - name: Write server tokens to temp files (de-duplicated by token_var)
+      ansible.builtin.copy:
+        content: "{{ lookup('vars', item, default='') }}"
+        dest: "/tmp/ansible-mcp-token-{{ item }}"
+        mode: "0600"
+      no_log: true
+      changed_when: false
+      loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
+
+    - name: Write Claude setup token to temp file
+      ansible.builtin.copy:
+        content: "{{ claude_setup_token }}"
+        dest: "/tmp/ansible-mcp-claude-setup-token"
+        mode: "0600"
+      no_log: true
+      changed_when: false
+      when: claude_setup_token | default('') | length > 0
+
+    - name: Build and write plugin config JSON
+      ansible.builtin.shell: |
+        set -euo pipefail
+        GITHUB_BINARY="{{ github_mcp_binary.stdout | trim }}"
+        TOOL_PREFIX='{{ openclaw_mcp_adapter.tool_prefix | to_json }}'
+        CODEX_SANDBOX="{{ openclaw_mcp_adapter.codex_sandbox | default('workspace-write') }}"
+        CODEX_APPROVAL="{{ openclaw_mcp_adapter.codex_approval | default('never') }}"
+        # Build servers array
+        SERVERS="[]"
+
+        # GitHub servers — only include when token is non-empty
+        {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'github') %}
+        TOKEN_FILE="/tmp/ansible-mcp-token-{{ srv.token_var }}"
+        if [ ! -f "$TOKEN_FILE" ]; then
+            echo "ERROR: Token file $TOKEN_FILE is missing — write task may have failed"
+            exit 1
+        fi
+        SERVERS=$(printf '%s' "$SERVERS" | jq --arg name "{{ srv.name }}" \
+            --arg cmd "$GITHUB_BINARY" --rawfile token "$TOKEN_FILE" \
+            '($token | sub("\\n+$"; "")) as $token |
+             if $token == "" then . else
+             . + [{name: $name, transport: "stdio", command: $cmd, env: {GITHUB_PERSONAL_ACCESS_TOKEN: $token}}] end')
+        {% endfor %}
+
+        # Codex servers — containerized with docker run -i (stdio piped through Docker)
+        # Security: containers have NO credentials. Auth is injected by mcp-auth-proxy (formerly codex-token-proxy)
+        # running on codex-proxy-net. Sandbox containers on default bridge cannot reach proxy.
+        CODEX_IMAGE="{{ openclaw_mcp_adapter.codex_docker_image }}"
+        CODEX_MEM="{{ openclaw_mcp_adapter.codex_memory_limit | default('2g') }}"
+        PROXY_GW="{{ codex_proxy_gateway_ip | default('') }}"
+        {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'codex') %}
+        if [ -f "/home/ubuntu/.codex/auth.json" ] && [ -n "$PROXY_GW" ]; then
+            DOCKER_ARGS=$(jq -n \
+                --arg ws "{{ srv.cwd }}" \
+                --arg img "$CODEX_IMAGE" \
+                --arg agent "{{ srv.agent_id }}" \
+                --arg mem "$CODEX_MEM" \
+                --arg sandbox "$CODEX_SANDBOX" \
+                --arg approval "$CODEX_APPROVAL" \
+                '["run","--rm","-i","--init","--network=codex-proxy-net",
+                  "--cap-drop","ALL",
+                  "--security-opt","no-new-privileges",
+                  "--read-only",
+                  "--tmpfs","/tmp",
+                  "--tmpfs","/home/node/.codex:uid=1000,gid=1000",
+                  "--tmpfs","/home/node/.npm:uid=1000,gid=1000",
+                  "--tmpfs","/home/node/.config:uid=1000,gid=1000",
+                  "--tmpfs","/home/node/.cache:uid=1000,gid=1000",
+                  "--pids-limit","100",
+                  "--cpus","2",
+                  ("--memory=" + $mem),("--memory-swap=" + $mem),
+                  "--label","openclaw-role=codex-mcp",
+                  "--label",("openclaw-agent=" + $agent),
+                  "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+                  "--mount","type=bind,source=/home/ubuntu/.openclaw/codex-config.toml,target=/home/node/.codex/config.toml,readonly",
+                  "-e","CODEX_PROXY_TOKEN=proxy",
+                  "-w","/workspace",
+                  $img,
+                  "codex","mcp-server",
+                  "-c",("sandbox_mode=" + $sandbox),
+                  "-c",("approval_policy=" + $approval)]')
+            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+                '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
+        fi
+        {% endfor %}
+
+        # Claude Code servers — containerized with docker run -i (stdio piped through Docker)
+        # Security: containers have NO credentials. Auth is injected by the proxy
+        # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
+        CLAUDE_IMAGE="{{ openclaw_mcp_adapter.claude_code_docker_image }}"
+        CLAUDE_MEM="{{ openclaw_mcp_adapter.claude_code_memory_limit | default('2g') }}"
+        if [ -n "$PROXY_GW" ]; then
+        {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
+        CLAUDE_CMD="mkdir -p /home/node/.claude && cp -a /opt/claude-config/. /home/node/.claude/ && exec claude-code-mcp"
+        {% else %}
+        CLAUDE_CMD="exec claude-code-mcp"
+        {% endif %}
+        {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'claude-code') %}
+            DOCKER_ARGS=$(jq -n \
+                --arg ws "{{ srv.cwd }}" \
+                --arg img "$CLAUDE_IMAGE" \
+                --arg agent "{{ srv.agent_id }}" \
+                --arg mem "$CLAUDE_MEM" \
+                --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+        {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
+                --arg config_dir "{{ claude_code_plugins.config_dir }}" \
+        {% endif %}
+                --arg cmd "$CLAUDE_CMD" \
+                '["run","--rm","-i","--init","--network=codex-proxy-net",
+                  "--cap-drop","ALL",
+                  "--security-opt","no-new-privileges",
+                  "--read-only",
+                  "--tmpfs","/tmp:size=256m",
+                  "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
+                  "--pids-limit","300",
+                  "--cpus","2",
+                  ("--memory=" + $mem),("--memory-swap=" + $mem),
+                  "--label","openclaw-role=claude-code-mcp",
+                  "--label",("openclaw-agent=" + $agent),
+                  "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+        {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
+                  "--mount",("type=bind,source=" + $config_dir + ",target=/opt/claude-config,readonly"),
+        {% endif %}
+                  "-e","ANTHROPIC_API_KEY=proxy",
+                  "-e",("ANTHROPIC_BASE_URL=" + $base_url),
+                  "-e","ENABLE_LSP_TOOL=1",
+                  "-e","CLAUDE_CODE_SUBAGENT_MODEL=opus",
+                  "-w","/workspace",
+                  $img,
+                  "sh","-c",$cmd]')
+            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+                '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
+        {% endfor %}
+        fi
+
+        # Pi MCP servers — containerized with docker run -i (stdio piped through Docker)
+        # Security: containers have NO credentials. Auth is injected by the proxy
+        # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
+        PI_IMAGE="{{ openclaw_mcp_adapter.pi_mcp_docker_image }}"
+        PI_MEM="{{ openclaw_mcp_adapter.pi_mcp_memory_limit | default('1g') }}"
+        PI_MODEL="{{ openclaw_mcp_adapter.pi_mcp_model | default('claude-sonnet-4-5-20250929') }}"
+        PI_THINKING="{{ openclaw_mcp_adapter.pi_mcp_thinking | default('medium') }}"
+        {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'pi') %}
+        if [ -n "$PROXY_GW" ]; then
+            DOCKER_ARGS=$(jq -n \
+                --arg ws "{{ srv.cwd }}" \
+                --arg img "$PI_IMAGE" \
+                --arg agent "{{ srv.agent_id }}" \
+                --arg mem "$PI_MEM" \
+                --arg model "$PI_MODEL" \
+                --arg thinking "$PI_THINKING" \
+                --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
+                '["run","--rm","-i","--init","--network=codex-proxy-net",
+                  "--cap-drop","ALL",
+                  "--security-opt","no-new-privileges",
+                  "--read-only",
+                  "--tmpfs","/tmp:size=256m",
+                  "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
+                  "--pids-limit","100",
+                  "--cpus","2",
+                  ("--memory=" + $mem),("--memory-swap=" + $mem),
+                  "--label","openclaw-role=pi-mcp",
+                  "--label",("openclaw-agent=" + $agent),
+                  "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
+                  "-e","ANTHROPIC_OAUTH_TOKEN=sk-ant-oat-proxy",
+                  "-e","PI_MCP_PROVIDER=anthropic",
+                  "-e",("PI_MCP_MODEL=" + $model),
+                  "-e",("PI_MCP_THINKING=" + $thinking),
+                  "-e","PI_MCP_CWD=/workspace",
+                  "-e","PI_MCP_SANDBOX=false",
+                  "-e","PI_MCP_MAX_SESSIONS=10",
+                  "-e","PI_MCP_SESSION_IDLE_TIMEOUT=1800",
+                  "-e",("ANTHROPIC_BASE_URL=" + $base_url),
+                  "-w","/workspace",
+                  $img]')
+            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
+                '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
+        fi
+        {% endfor %}
+
+        {% if qmd_workspaces | length > 0 %}
+        # qmd servers — HTTP daemon mode (decoupled from gateway lifecycle)
+        # Port assignment positional over qmd_workspaces list, must match qmd role.
+        QMD_BINARY="{{ (qmd_mcp_binary.stdout | default('')) | trim }}"
+        if [ -n "$QMD_BINARY" ] && [ -x "$QMD_BINARY" ]; then
+        {% for ws in qmd_workspaces %}
+            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ ws.server_name }}" \
+                --arg url "http://localhost:{{ ws.port }}/mcp" \
+                '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 300000}]')
+        {% endfor %}
+        else
+            echo "NOTE: qmd binary not found, skipping qmd MCP servers"
+        fi
+        {% endif %}
+
+        {% if node_exec_enabled | default(false) %}
+        # node-exec: Mac shell access via openclaw nodes run (no Docker, no credentials)
+        NODE_EXEC_BINARY="{{ (node_exec_mcp_binary.stdout | default('')) | trim }}"
+        OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "")
+        NODE_ID=$(jq -r '.tools.exec.node // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "")
+        # In 2026.3.13+, nodes is owner-only. Loopback shared-token auth lacks owner scope.
+        # Route through Tailscale Serve so the CLI gets full auth via allowTailscale.
+        GW_URL="{{ _tailscale_wss_url }}"
+        {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'node-exec') %}
+        if [ -n "$NODE_ID" ] && [ -n "$OPENCLAW_BIN" ] && [ -x "$NODE_EXEC_BINARY" ]; then
+            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" \
+                --arg cmd "$NODE_EXEC_BINARY" \
+                --arg node_id "$NODE_ID" \
+                --arg openclaw_bin "$OPENCLAW_BIN" \
+                --slurpfile gateway_config /home/ubuntu/.openclaw/openclaw.json \
+                --arg gw_url "$GW_URL" \
+                'if ($gateway_config | length) != 1 or
+                    ($gateway_config[0].gateway.auth.token | type != "string" or length == 0) then
+                   error("Expected a gateway auth token for node-exec")
+                 else . + [{name: $name, transport: "stdio", command: $cmd, env: {NODE_ID: $node_id, OPENCLAW_BIN: $openclaw_bin, XDG_RUNTIME_DIR: "/run/user/1000", OPENCLAW_GATEWAY_URL: $gw_url, OPENCLAW_GATEWAY_TOKEN: $gateway_config[0].gateway.auth.token, OPENCLAW_LOG_LEVEL: "error", DEFAULT_CWD: "/private/tmp"}}] end')
+        else
+            echo "NOTE: Skipping node-exec MCP servers (node_id='${NODE_ID}', binary='${NODE_EXEC_BINARY}')" >&2
+        fi
+        {% endfor %}
+        {% else %}
+        echo "NOTE: Node exec disabled (node_exec_enabled=false in group_vars/all.yml)" >&2
+        {% endif %}
+
+        # Build final config
+        test ! -L /tmp/ansible-plugin-config
+        install -m 600 /dev/null /tmp/ansible-plugin-config
+        test -f /tmp/ansible-plugin-config && test -O /tmp/ansible-plugin-config
+        printf '%s' "$SERVERS" | jq --argjson prefix "$TOOL_PREFIX" \
+            '{toolPrefix: $prefix, servers: .}' > /tmp/ansible-plugin-config
+      args:
+        executable: /bin/bash
+      changed_when: false
+      # Inputs and intermediate JSON contain credentials, including on error paths.
+      no_log: true
+
+    - name: Validate desired plugin configuration before maintenance
+      ansible.builtin.command:
+        argv:
+          - jq
+          - -es
+          - 'length == 1 and (.[0] | type == "object")'
+          - /tmp/ansible-plugin-config
+      changed_when: false
+      no_log: true
+
+    - name: Read installed MCP adapter metadata
+      ansible.builtin.shell: |
+        set -euo pipefail
+        openclaw plugins list --json | jq -ce '
+          [.plugins[] | select(.id == "openclaw-mcp-adapter")] |
+          if length == 0 then {version: ""}
+          elif length == 1 then .[0] | {version, rootDir}
+          else error("Multiple MCP adapter installations") end'
+      args:
+        executable: /bin/bash
+      register: mcp_install
+      changed_when: false
+
+    - name: Save global plugin loading policy
+      ansible.builtin.command:
+        argv:
+          - jq
+          - -ce
+          - '(.plugins // {}) | {present: has("enabled"), enabled: .enabled}'
+          - /home/ubuntu/.openclaw/openclaw.json
+      register: mcp_plugin_policy
+      changed_when: false
+      no_log: true
+
+    # Installation auto-enables its entry. The global switch keeps native CLI
+    # loads from registering the new adapter before preparation has completed.
+    - name: Stop gateway for exclusive MCP maintenance
+      ansible.builtin.command:
+        argv: [openclaw, gateway, stop, --json]
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      register: mcp_gateway_stopped
+      notify: restart openclaw-gateway
+
+    - name: Disable plugin loading during MCP maintenance
+      ansible.builtin.command:
+        argv: [openclaw, config, set, plugins.enabled, 'false']
+      register: mcp_loading_disabled
+      no_log: true
+
+    - name: Install plugin from npm
+      ansible.builtin.command:
+        argv:
+          - openclaw
+          - plugins
+          - install
+          - --force
+          - --pin
+          - '{{ openclaw_mcp_adapter.npm_package }}'
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      no_log: true
+      when: >-
+        (mcp_install.stdout | from_json).version != openclaw_mcp_adapter.npm_package.split('@')[-1]
+        or force_plugin_reinstall | default(false) | bool
+
+    - name: Prepare MCP tool cache and contracts
+      ansible.builtin.shell: |
+        set -euo pipefail
+        PLUGIN_DIR=$(openclaw plugins inspect openclaw-mcp-adapter --json |
+          jq -er '.install.installPath | select(type == "string" and length > 0)')
+        node "$PLUGIN_DIR/dist/prepare.js" < /tmp/ansible-plugin-config
+      args:
+        executable: /bin/bash
+      register: mcp_preparation
+      changed_when: (mcp_preparation.stdout | from_json).changed | bool
+      no_log: true
+
     - name: Set plugin config and enable
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        DESIRED=$(cat /tmp/ansible-plugin-config)
-        CHANGED=""
-
-        # Hash-file comparison for config (config get redacts secrets like GitHub tokens)
-        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
-        mkdir -p "$HASH_DIR"
-        D_NORM=$(echo "$DESIRED" | jq -cS '.')
-        DESIRED_HASH=$(echo -n "$D_NORM" | sha256sum | cut -d' ' -f1)
-        CURRENT_HASH=$(cat "$HASH_DIR/mcp-adapter-config" 2>/dev/null) || CURRENT_HASH=""
-        # Force re-write if hash matches but actual config has 0 servers (hash-desync recovery)
-        ACTUAL_SERVERS=$(jq '.plugins.entries["openclaw-mcp-adapter"].config.servers | length' \
-          /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "0")
-        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ] || [ "$ACTUAL_SERVERS" -eq 0 ]; then
-            openclaw config set plugins.entries.openclaw-mcp-adapter.config --json "$DESIRED"
-            echo "$DESIRED_HASH" > "$HASH_DIR/mcp-adapter-config"
-            CHANGED="yes"
+        # Compare and apply the config and enabled state together.
+        CONFIG_DIFFERS=$(jq -ner --slurpfile desired /tmp/ansible-plugin-config \
+            --slurpfile current /home/ubuntu/.openclaw/openclaw.json '
+            if ($desired | length) != 1 or ($current | length) != 1 or
+                ($desired[0] | type) != "object" or ($current[0] | type) != "object" then
+              error("Expected one desired and one current config object")
+            elif $desired[0] == $current[0].plugins.entries["openclaw-mcp-adapter"].config and
+                $current[0].plugins.entries["openclaw-mcp-adapter"].enabled == true then "no"
+            else "yes" end')
+        if [ "$CONFIG_DIFFERS" = "yes" ]; then
+            jq '{plugins: {entries: {"openclaw-mcp-adapter": {config: ., enabled: true}}}}' /tmp/ansible-plugin-config |
+                openclaw config patch --stdin --replace-path plugins.entries.openclaw-mcp-adapter.config
+            echo "UPDATED"
+        else
+            echo "OK"
         fi
-
-        # Check enabled state
-        ENABLED=$(jq -r '.plugins.entries["openclaw-mcp-adapter"].enabled // false' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || ENABLED=""
-        if [ "$ENABLED" != "true" ]; then
-            openclaw config set plugins.entries.openclaw-mcp-adapter.enabled true
-            CHANGED="yes"
-        fi
-
-        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
       args:
         executable: /bin/bash
       no_log: true
       register: plugin_config_result
       changed_when: "'UPDATED' in plugin_config_result.stdout"
       notify: restart openclaw-gateway
+
+    - name: Restore global plugin loading policy after preparation
+      ansible.builtin.command:
+        argv: >-
+          {{ ['openclaw', 'config', 'set', 'plugins.enabled',
+              (mcp_plugin_policy.stdout | from_json).enabled | to_json]
+             if (mcp_plugin_policy.stdout | from_json).present
+             else ['openclaw', 'config', 'unset', 'plugins.enabled'] }}
+      no_log: true
+
+    - name: Ensure MCP tools are allowed in the sandbox
+      ansible.builtin.shell: |
+        set -euo pipefail
+        jq '{tools: {sandbox: {tools: {allow:
+            ((.tools.sandbox.tools.allow // []) + ["group:plugins", "openclaw-mcp-adapter"] | unique)
+        }}}}' /home/ubuntu/.openclaw/openclaw.json |
+            openclaw config patch --stdin --replace-path tools.sandbox.tools.allow
+      args:
+        executable: /bin/bash
+      no_log: true
 
     - name: Verify plugin config was applied
       ansible.builtin.shell: |
@@ -1489,6 +1459,40 @@
       args:
         executable: /bin/bash
       changed_when: false
+
+  rescue:
+    - name: Keep the failed adapter disabled while restoring other plugins
+      when: mcp_loading_disabled is defined and mcp_loading_disabled is succeeded
+      block:
+        - name: Disable adapter after failed maintenance
+          ansible.builtin.command:
+            argv: [openclaw, config, set, plugins.entries.openclaw-mcp-adapter.enabled, 'false']
+          no_log: true
+
+        - name: Restore global plugin loading policy after failure
+          ansible.builtin.command:
+            argv: >-
+              {{ ['openclaw', 'config', 'set', 'plugins.enabled',
+                  (mcp_plugin_policy.stdout | from_json).enabled | to_json]
+                 if (mcp_plugin_policy.stdout | from_json).present
+                 else ['openclaw', 'config', 'unset', 'plugins.enabled'] }}
+          no_log: true
+
+    - name: Restore gateway service after failed MCP maintenance
+      when: mcp_gateway_stopped is defined and mcp_gateway_stopped is succeeded
+      ansible.builtin.command:
+        argv: [openclaw, gateway, start, --json]
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      no_log: true
+
+    - name: Report failed MCP maintenance
+      ansible.builtin.fail:
+        msg: >-
+          MCP configuration failed at {{ ansible_failed_task.name }}.
+          If maintenance stopped the gateway, it has been started again.
+          The adapter stays disabled after failed preparation; fix the failure and rerun
+          the plugins role. Private diagnostics are withheld.
 
   always:
     - name: Clean up plugin config temp file

@@ -2,69 +2,83 @@
 - name: Flush handlers (ensure gateway is restarted before cron operations)
   ansible.builtin.meta: flush_handlers
 
+- name: Verify installed OpenClaw cron contract
+  ansible.builtin.shell: |
+    set -euo pipefail
+    INSTALLED=$(openclaw --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ "$INSTALLED" != "{{ openclaw_version }}" ]; then
+      echo "ERROR: installed OpenClaw $INSTALLED does not match IaC pin {{ openclaw_version }}" >&2
+      exit 1
+    fi
+    openclaw cron list --help | grep -q -- '--all' || {
+      echo "ERROR: OpenClaw {{ openclaw_version }} cron list lacks required --all" >&2
+      exit 1
+    }
+    openclaw cron add --help | grep -q -- '--disabled' || {
+      echo "ERROR: OpenClaw {{ openclaw_version }} cron add lacks required --disabled" >&2
+      exit 1
+    }
+    EDIT_HELP=$(openclaw cron edit --help)
+    grep -q -- '--enable' <<< "$EDIT_HELP" || {
+      echo "ERROR: OpenClaw {{ openclaw_version }} cron edit lacks required --enable" >&2
+      exit 1
+    }
+    grep -q -- '--disable' <<< "$EDIT_HELP" || {
+      echo "ERROR: OpenClaw {{ openclaw_version }} cron edit lacks required --disable" >&2
+      exit 1
+    }
+  args:
+    executable: /bin/bash
+  changed_when: false
+  check_mode: false
+
 - name: Wait for gateway and establish cli operator.admin (silent first-contact)
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    export OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
+    OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json; print(json.load(open('/home/ubuntu/.openclaw/openclaw.json'))['gateway']['auth']['token'])")
+    [[ -n "$OPENCLAW_GATEWAY_TOKEN" ]] || { echo 'ERROR: gateway token is empty' >&2; exit 1; }
+    export OPENCLAW_GATEWAY_TOKEN
     PROBE="00000000-0000-0000-0000-000000000000"
 
-    # Wait for the gateway PROCESS via HTTP health, which does not open a gateway
-    # WS session and so does not pair the cli device.
+    # HTTP health does not open a gateway WS session or pair the cli device.
     for i in $(seq 1 12); do
         if openclaw health >/dev/null 2>&1; then break; fi
         sleep 5
     done
 
-    # Make the FIRST gateway WS op the cli makes an operator.admin write (a bogus
-    # cron remove). cron.add/remove require operator.admin; on a fresh box the cli
-    # is unpaired, and the gateway silently grants an unpaired loopback client the
-    # scopes it requests on first contact (openclaw#51495). So this single op both
-    # confirms WS readiness AND establishes operator.admin for the cli device --
-    # no devices approve, no pairing dance. Removing a non-existent id changes no
-    # state. An "id not found"/success result means ready + admin; a persistent
-    # scope/pairing block means an earlier read paired the cli below admin
-    # (openclaw#74484); connectivity errors just mean the gateway is still
-    # starting, so retry.
+    # Make the first gateway WS operation an operator.admin write. A bogus cron
+    # remove changes no state and gives a fresh loopback cli the scopes cron
+    # reconciliation needs. An earlier read would pair it below admin.
     BLOCKED="scope upgrade|pairing required|more scopes|not approved|not paired"
     CONNECTING="refused|econnrefused|not ready|unavailable|closed|timed out|timeout|connect"
     OUT=""
+    RC=0
     for i in $(seq 1 24); do
-        OUT=$(openclaw cron remove "$PROBE" 2>&1 || true)
-        if ! printf '%s' "$OUT" | grep -qiE "$BLOCKED|$CONNECTING"; then
+        set +e
+        OUT=$(openclaw cron remove "$PROBE" 2>&1)
+        RC=$?
+        set -e
+        if [ "$RC" -eq 0 ] || printf '%s' "$OUT" | grep -qiF 'invalid cron.remove params: id not found'; then
             echo "Gateway ready; cli holds operator.admin via silent first-contact grant"
             exit 0
         fi
-        sleep 10
+        if printf '%s' "$OUT" | grep -qiE "$BLOCKED|$CONNECTING"; then
+            sleep 10
+            continue
+        fi
+        echo "ERROR: unexpected cron probe failure (exit $RC); private diagnostics withheld" >&2
+        exit 1
     done
-    echo "WARNING: gateway not ready or cli lacks operator.admin within the window" >&2
-    echo "LAST: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-200)" >&2
-    echo "Re-run: ./scripts/provision.sh --tags telegram" >&2
+    echo "ERROR: gateway did not become ready or cli lacks operator.admin" >&2
+    echo "Re-run after resolving gateway health or pairing: ./scripts/provision.sh --tags telegram" >&2
     exit 1
   args:
     executable: /bin/bash
   register: gateway_health
   changed_when: false
-  failed_when: false
-  no_log: false
-
-- name: Skip cron setup if gateway is not healthy
-  when: gateway_health.rc != 0
-  block:
-    - name: Warn about skipped cron setup
-      ansible.builtin.debug:
-        msg: >-
-          Skipping cron job setup — the gateway did not become ready, or the cli
-          device did not obtain operator.admin on first contact (openclaw#74484).
-          Re-run once the gateway is healthy: ./scripts/provision.sh --tags telegram
-
-    - name: Flag cron setup as skipped for provision.sh
-      delegate_to: localhost
-      ansible.builtin.copy:
-        content: "cron_setup_skipped"
-        dest: /tmp/ansible-cron-skipped
-        mode: "0600"
-      changed_when: false
+  failed_when: gateway_health.rc != 0
+  check_mode: false
 
 - name: Read gateway token for cron operations
   ansible.builtin.shell: |
@@ -74,258 +88,275 @@
   register: _gw_token
   changed_when: false
   no_log: true
-  when: gateway_health.rc == 0
+  failed_when: false
+  check_mode: false
 
-- name: Get existing cron jobs
-  ansible.builtin.shell: |
-    export XDG_RUNTIME_DIR=/run/user/1000
-    export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
-    openclaw cron list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
-  args:
-    executable: /bin/bash
-  register: existing_cron
-  changed_when: false
-  no_log: true
-  when: gateway_health.rc == 0
+- name: Fail closed when gateway token cannot be read
+  ansible.builtin.fail:
+    msg: >-
+      Could not read a non-empty gateway token for cron reconciliation
+      (exit {{ _gw_token.rc }}). The cron state was not changed.
+  when: _gw_token.rc != 0 or _gw_token.stdout | trim | length == 0
 
-# All remaining cron tasks require a healthy gateway
-- name: Configure cron jobs
-  when: gateway_health.rc == 0
+- name: Build agent delivery maps
+  ansible.builtin.set_fact:
+    agent_deliver_map: >-
+      {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_to'))) }}
+    agent_channel_map: >-
+      {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_channel', default='telegram'))) }}
+
+- name: Initialize managed cron jobs
+  ansible.builtin.set_fact:
+    managed_cron_jobs: []
+
+- name: Select cron jobs with usable delivery or explicit absent state
+  ansible.builtin.set_fact:
+    managed_cron_jobs: "{{ managed_cron_jobs + [item] }}"
+  loop: "{{ openclaw_cron_jobs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: >-
+    (item.state | default('present')) == 'absent' or
+    (agent_deliver_map[item.agent] | default('') | string | length > 0)
+
+- name: Show skipped cron jobs (agents without delivery targets)
+  ansible.builtin.debug:
+    msg: "Skipping {{ item.name }} — agent '{{ item.agent }}' has no delivery target"
+  loop: "{{ openclaw_cron_jobs | difference(managed_cron_jobs) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (openclaw_cron_jobs | difference(managed_cron_jobs)) | length > 0
+
+- name: Initialize managed present cron names
+  ansible.builtin.set_fact:
+    managed_present_cron_names: []
+
+- name: Collect managed present cron names
+  ansible.builtin.set_fact:
+    managed_present_cron_names: "{{ managed_present_cron_names + [item.name] }}"
+  loop: "{{ managed_cron_jobs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (item.state | default('present')) != 'absent'
+
+- name: Remove unambiguous legacy cron jobs by name
   block:
-    # Write cron JSON to a temp file to avoid shell quoting issues.
-    # Cron messages can contain single quotes and parentheses that break
-    # inline echo '{{ ... }}' in bash.
-    - name: Write cron list to temp file
-      ansible.builtin.copy:
-        content: "{{ existing_cron.stdout }}"
-        dest: /tmp/ansible-cron-list.json
-        mode: "0600"
-      changed_when: false
-
-    - name: Remove legacy cron jobs by name
+    - name: Reconcile legacy cron names
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
-        IDS=$(jq -r --arg n "{{ item }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
-        for id in $IDS; do
-          output=$(openclaw cron remove "$id" 2>&1) || {
-              if echo "$output" | grep -qi "not found\|does not exist"; then
-                  true
-              else
-                  echo "ERROR: Failed to remove legacy cron job $id: $output" >&2
-                  exit 1
-              fi
-          }
-        done
+        ERR=/tmp/ansible-legacy-cron-error.txt
+        RAW_ERR=$(mktemp)
+        trap 'rm -f "$RAW_ERR"' EXIT
+        set +e
+        RAW=$(openclaw cron list --all --json 2>"$RAW_ERR")
+        RC=$?
+        set -e
+        if [ "$RC" -ne 0 ]; then
+            echo "ERROR: cron list failed during legacy cleanup for {{ item }} (exit $RC)" > "$ERR"
+            exit 1
+        fi
+        CURRENT=$(printf '%s\n' "$RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+        if ! jq -e '.jobs | type == "array"' >/dev/null 2>&1 <<< "$CURRENT"; then
+            echo "ERROR: cron list returned invalid JSON during legacy cleanup for {{ item }}" > "$ERR"
+            exit 1
+        fi
+        MATCHES=$(jq -r --arg n "{{ item }}" '[.jobs[] | select(.name == $n)] | length' <<< "$CURRENT")
+        if [ "$MATCHES" -gt 1 ]; then
+            echo "ERROR: legacy cron name {{ item }} matches $MATCHES jobs; refusing to guess" > "$ERR"
+            exit 1
+        elif [ "$MATCHES" -eq 1 ]; then
+            if ! ID=$(jq -er --arg n "{{ item }}" '.jobs[] | select(.name == $n) | .id | select(type == "string" and length > 0)' <<< "$CURRENT"); then
+                echo "ERROR: legacy cron job {{ item }} has no valid ID; refusing to remove it" > "$ERR"
+                exit 1
+            fi
+            set +e
+            openclaw cron remove "$ID" >/dev/null 2>"$RAW_ERR"
+            RC=$?
+            set -e
+            if [ "$RC" -ne 0 ]; then
+                echo "ERROR: cron remove failed during legacy cleanup for {{ item }} (exit $RC)" > "$ERR"
+                exit 1
+            fi
+            echo "UPDATED: removed legacy cron {{ item }}"
+        else
+            echo "OK"
+        fi
       args:
         executable: /bin/bash
+      environment:
+        OPENCLAW_GATEWAY_TOKEN: "{{ _gw_token.stdout }}"
       loop: "{{ openclaw_legacy_cron_names | default([]) }}"
       loop_control:
         label: "{{ item }}"
+      register: legacy_cron_cleanup
+      changed_when: "'UPDATED' in (legacy_cron_cleanup.stdout | default(''))"
+      no_log: true
+  rescue:
+    - name: Read redacted legacy cleanup error
+      ansible.builtin.command: cat /tmp/ansible-legacy-cron-error.txt
+      register: legacy_cron_error
+      changed_when: false
+      failed_when: false
+
+    - name: Re-fail after legacy cleanup error
+      ansible.builtin.fail:
+        msg: >-
+          {{ legacy_cron_error.stdout | default('Legacy cron cleanup failed without a captured error.', true) }}
+  always:
+    - name: Remove legacy cleanup error file
+      ansible.builtin.file:
+        path: /tmp/ansible-legacy-cron-error.txt
+        state: absent
       changed_when: false
 
-    # Build deliver_to and deliver_channel lookup maps from openclaw_agents
-    - name: Build agent delivery map
+- name: Reconcile cron jobs with stable IDs
+  block:
+    - name: Mark cron reconciliation preparation phase
       ansible.builtin.set_fact:
-        agent_deliver_map: >-
-          {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_to'))) }}
-        agent_channel_map: >-
-          {{ dict(openclaw_agents | map(attribute='id') | zip(openclaw_agents | map(attribute='deliver_channel', default='telegram'))) }}
+        _cron_reconcile_phase: reconciler installation
 
-    - name: Validate cron job agent IDs exist in openclaw_agents
-      ansible.builtin.assert:
-        that:
-          - item.agent in (openclaw_agents | map(attribute='id') | list)
-        fail_msg: >-
-          Cron job '{{ item.name }}' references unknown agent '{{ item.agent }}'.
-          Known agents: {{ openclaw_agents | map(attribute='id') | list }}.
-          Check for typos in openclaw_cron_jobs.
-      loop: "{{ openclaw_cron_jobs }}"
-      loop_control:
-        label: "{{ item.name }} (agent={{ item.agent }})"
-
-    - name: Filter cron jobs to agents with delivery targets
-      ansible.builtin.set_fact:
-        active_cron_jobs: >-
-          {{ openclaw_cron_jobs | selectattr('agent', 'in',
-             agent_deliver_map | dict2items | selectattr('value', 'ne', '') | map(attribute='key') | list) | list }}
-
-    - name: Show skipped cron jobs (agents without deliver_to)
-      ansible.builtin.debug:
-        msg: "Skipping {{ item.name }} — agent '{{ item.agent }}' has no deliver_to configured"
-      loop: "{{ openclaw_cron_jobs | difference(active_cron_jobs) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when: (openclaw_cron_jobs | difference(active_cron_jobs)) | length > 0
-
-    - name: Write cron message temp files
+    - name: Install cron reconciler
       ansible.builtin.copy:
-        content: "{{ item.message }}"
-        dest: "/tmp/ansible-cron-msg-{{ item.name | hash('md5') }}"
-        mode: "0600"
-      loop: "{{ active_cron_jobs }}"
-      loop_control:
-        label: "{{ item.name }}"
+        src: reconcile_openclaw_cron.py
+        dest: /tmp/ansible-reconcile-openclaw-cron.py
+        mode: "0700"
       changed_when: false
+      check_mode: false
 
-    # All-or-nothing cron comparison: build normalized desired vs existing,
-    # only delete+recreate if they differ.
-    - name: Sync cron jobs with temp file cleanup
-      block:
-        - name: Compare and sync cron jobs
-          ansible.builtin.shell: |
-            set -euo pipefail
-            export XDG_RUNTIME_DIR=/run/user/1000
-            # Route cron ops over the LOCAL gateway (OPENCLAW_GATEWAY_TOKEN), not
-            # the WSS route — no device pairing required (see the stabilize task
-            # above for why). The gateway was just restarted, so still retry
-            # transient cron CLI failures rather than aborting the provision on
-            # the first hiccup; on final failure persist the error with the token
-            # redacted so it stays diagnosable despite the no_log on this task.
-            export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
-            CRON_ERR_FILE=/tmp/ansible-cron-error.txt
-            : > "$CRON_ERR_FILE"
-            # Retry only transient failures (gateway briefly unready after the
-            # pre-sync restart). Deliberately does NOT auto-approve pending
-            # device/scope requests — approval is an operator authorization step,
-            # not something a provisioning retry loop should grant itself (it
-            # would let any UUID surfaced in gateway output be approved). On a
-            # genuinely unapproved fresh device the pending error is surfaced
-            # (redacted) for a human to authorize.
-            retry_cron() {
-                local n=0 max=5 out
-                while :; do
-                    if out=$("$@" 2>&1); then printf '%s' "$out"; return 0; fi
-                    n=$((n + 1))
-                    if [ "$n" -ge "$max" ]; then
-                        printf '%s\n' "${out//$OPENCLAW_GATEWAY_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
-                        return 1
-                    fi
-                    sleep $((n * 3))
-                done
-            }
+    - name: Mark cron manifest rendering phase
+      ansible.builtin.set_fact:
+        _cron_reconcile_phase: sensitive manifest rendering
 
-            # Build desired cron jobs as sorted JSON array (comparable fields only)
-            DESIRED=$(jq -n '[]')
-            {% for job in active_cron_jobs %}
-            MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}" | tr -d '\n')
-            DESIRED=$(echo "$DESIRED" | jq --arg name "{{ job.name }}" \
-                --arg agent "{{ job.agent }}" \
-                --arg schedule "{{ job.schedule }}" \
-                --arg tz "{{ openclaw_timezone }}" \
-                --arg message "$MSG" \
-                --arg delivery_to "{{ agent_deliver_map[job.agent] }}" \
-                --arg delivery_channel "{{ agent_channel_map[job.agent] | default('telegram') }}" \
-                '. + [{name: $name, agentId: $agent, schedule: $schedule, tz: $tz, message: $message, delivery_channel: $delivery_channel, delivery_to: $delivery_to}]')
-            {% endfor %}
-            DESIRED=$(echo "$DESIRED" | jq -cS 'sort_by(.name)')
-
-            # Extract comparable fields from existing cron jobs (filter to Ansible-managed names only)
-            EXISTING=$(jq '[.jobs[] | {name, agentId, schedule: .schedule.expr, tz: .schedule.tz, message: (.payload.message | gsub("\\n$"; "")), delivery_channel: .delivery.channel, delivery_to: .delivery.to}]' /tmp/ansible-cron-list.json)
-
-            # Filter existing to only Ansible-managed job names
-            EXISTING_FILTERED=$(echo "$EXISTING" | jq -cS --argjson desired "$DESIRED" \
-                '[.[] | select(.name as $n | $desired | map(.name) | index($n))] | sort_by(.name)')
-
-            if [ "$DESIRED" = "$EXISTING_FILTERED" ]; then
-                echo "OK"
-            else
-                echo "Cron jobs differ — recreating all managed jobs"
-
-                # Delete existing managed jobs (throttled to avoid overwhelming gateway)
-                {% for job in active_cron_jobs %}
-                IDS=$(jq -r --arg n "{{ job.name }}" '.jobs[] | select(.name == $n) | .id' /tmp/ansible-cron-list.json)
-                for id in $IDS; do
-                    output=$(openclaw cron remove "$id" 2>&1) || {
-                        echo "$output" | grep -qi "not found\|does not exist" || {
-                            # This task is no_log, so persist the (token-redacted)
-                            # error to the file the rescue surfaces — otherwise a
-                            # remove failure rescues with "(no captured error)".
-                            printf 'cron remove %s failed: %s\n' "$id" "${output//$OPENCLAW_GATEWAY_TOKEN/<REDACTED_TOKEN>}" >> "$CRON_ERR_FILE"
-                            echo "ERROR: $output" >&2
-                            exit 1
-                        }
-                    }
-                    sleep 1
-                done
-                {% endfor %}
-
-                # Recreate all managed jobs (throttled to avoid overwhelming gateway)
-                {% for job in active_cron_jobs %}
-                MSG=$(cat "/tmp/ansible-cron-msg-{{ job.name | hash('md5') }}")
-                retry_cron openclaw cron add \
-                    --name "{{ job.name }}" \
-                    --cron "{{ job.schedule }}" \
-                    --tz "{{ openclaw_timezone }}" \
-                    --session isolated \
-                    --agent "{{ job.agent }}" \
-                    --message "$MSG" \
-                    --deliver --channel {{ agent_channel_map[job.agent] | default('telegram') }} --to "{{ agent_deliver_map[job.agent] }}" \
-                    || { echo "ERROR: cron add failed for {{ job.name }} after retries" >&2; exit 1; }
-                sleep 1
-                {% endfor %}
-
-                echo "UPDATED"
-            fi
-          args:
-            executable: /bin/bash
-          register: cron_sync_result
-          changed_when: "'UPDATED' in cron_sync_result.stdout"
-          no_log: true
-      rescue:
-        # The sync task is no_log (it embeds the gateway token), so its failure
-        # is censored. Surface the token-redacted error file the retry wrapper
-        # wrote, then re-fail. Safe to display: the token is already redacted.
-        - name: Read redacted cron error
-          ansible.builtin.command: cat /tmp/ansible-cron-error.txt
-          register: cron_err_redacted
-          changed_when: false
-          failed_when: false
-        - name: Show redacted cron error
-          ansible.builtin.debug:
-            msg: "{{ cron_err_redacted.stdout_lines | default(['(no captured error — failure was outside the cron CLI calls)']) }}"
-        - name: Re-fail after surfacing cron error
-          ansible.builtin.fail:
-            msg: "cron sync failed; see redacted gateway error above"
-      always:
-        - name: Clean up cron temp files
-          ansible.builtin.shell: rm -f /tmp/ansible-cron-list.json /tmp/ansible-cron-msg-* /tmp/ansible-cron-error.txt
-          args:
-            executable: /bin/bash
-          changed_when: false
-
-    - name: Verify cron job count
-      ansible.builtin.shell: |
-        export XDG_RUNTIME_DIR=/run/user/1000
-        export OPENCLAW_GATEWAY_TOKEN="{{ _gw_token.stdout }}"
-        for attempt in 1 2 3; do
-            RESULT=$(openclaw cron list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d')
-            [ -n "$RESULT" ] && break
-            sleep 5
-        done
-        echo "$RESULT"
-      args:
-        executable: /bin/bash
-      register: final_cron
+    - name: Render cron reconciliation manifest
+      ansible.builtin.template:
+        src: cron-manifest.json.j2
+        dest: /tmp/ansible-cron-manifest.json
+        mode: "0600"
       changed_when: false
       check_mode: false
       no_log: true
+
+    - name: Mark cron apply phase
+      ansible.builtin.set_fact:
+        _cron_reconcile_phase: scheduler apply and verification
+
+    - name: Apply cron job state
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /tmp/ansible-reconcile-openclaw-cron.py
+          - --manifest
+          - /tmp/ansible-cron-manifest.json
+          - "{{ '--check' if ansible_check_mode else '--apply' }}"
+          - --error-file
+          - /tmp/ansible-cron-error.txt
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+        OPENCLAW_GATEWAY_TOKEN: "{{ _gw_token.stdout }}"
+      register: cron_sync_result
+      changed_when: >-
+        cron_sync_result.rc == 2 or
+        'UPDATED:' in (cron_sync_result.stdout | default(''))
+      failed_when: cron_sync_result.rc not in [0, 2]
+      check_mode: false
+      no_log: true
+  rescue:
+    - name: Read redacted cron error
+      ansible.builtin.command: cat /tmp/ansible-cron-error.txt
+      register: cron_err_redacted
+      changed_when: false
       failed_when: false
 
-    - name: Warn if cron verification failed
+    - name: Show redacted cron error
       ansible.builtin.debug:
-        msg: "WARNING: cron list verification returned empty — gateway CLI connection flaky. Cron sync task succeeded, jobs are likely correct."
-      when: final_cron.stdout | default('') | length == 0
+        msg: >-
+          {{ cron_err_redacted.stdout_lines
+             | default(['Cron reconciliation failed without a captured redacted error.'], true) }}
 
-    - name: Assert expected cron jobs are present
-      ansible.builtin.assert:
-        that:
-          - (final_cron.stdout | from_json).jobs | length >= active_cron_jobs | length
-          - (active_cron_jobs | map(attribute='name') | sort | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) | length == 0
-        fail_msg: >-
-          Missing Ansible-managed cron jobs.
-          Expected: {{ active_cron_jobs | map(attribute='name') | sort | list }}.
-          Missing: {{ (active_cron_jobs | map(attribute='name') | list) | difference((final_cron.stdout | from_json).jobs | map(attribute='name') | list) }}.
-          Server has {{ (final_cron.stdout | from_json).jobs | length }} total (including manually added).
-      when: final_cron.stdout | default('') | length > 0
+    - name: Re-fail after surfacing cron error
+      ansible.builtin.fail:
+        msg: >-
+          Cron reconciliation failed during {{ _cron_reconcile_phase | default('preparation') }} (exit
+          {{ cron_sync_result.rc | default('unknown', true) }}); see the redacted error above.
+  always:
+    - name: Remove cron reconciliation temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/ansible-reconcile-openclaw-cron.py
+        - /tmp/ansible-cron-manifest.json
+        - /tmp/ansible-cron-error.txt
+      changed_when: false
+      check_mode: false
+
+- name: Read final cron state including disabled jobs
+  block:
+    - name: Query final cron state
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        RAW_ERR=$(mktemp)
+        trap 'rm -f "$RAW_ERR"' EXIT
+        set +e
+        RAW=$(openclaw cron list --all --json 2>"$RAW_ERR")
+        RC=$?
+        set -e
+        if [ "$RC" -ne 0 ]; then
+            echo "ERROR: final cron list failed (exit $RC)" > /tmp/ansible-final-cron-error.txt
+            exit 1
+        fi
+        CLEAN=$(printf '%s\n' "$RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+        if ! jq -e '.jobs | type == "array"' >/dev/null 2>&1 <<< "$CLEAN"; then
+            echo "ERROR: final cron list returned invalid JSON" > /tmp/ansible-final-cron-error.txt
+            exit 1
+        fi
+        printf '%s\n' "$CLEAN"
+      args:
+        executable: /bin/bash
+      environment:
+        OPENCLAW_GATEWAY_TOKEN: "{{ _gw_token.stdout }}"
+      register: final_cron
+      changed_when: false
+      no_log: true
+  rescue:
+    - name: Read redacted final cron error
+      ansible.builtin.command: cat /tmp/ansible-final-cron-error.txt
+      register: final_cron_error
+      changed_when: false
+      failed_when: false
+
+    - name: Re-fail after final cron query error
+      ansible.builtin.fail:
+        msg: >-
+          {{ final_cron_error.stdout
+             | default('Final cron verification failed without a captured error.', true) }}
+  always:
+    - name: Remove final cron error file
+      ansible.builtin.file:
+        path: /tmp/ansible-final-cron-error.txt
+        state: absent
+      changed_when: false
+  when: not ansible_check_mode
+
+- name: Assert cron policy converged
+  ansible.builtin.assert:
+    that:
+      - _missing_managed_cron_names | length == 0
+      - _enabled_paused_cron_jobs | length == 0
+    fail_msg: >-
+      Cron policy did not converge. Missing managed names:
+      {{ _missing_managed_cron_names }}. Enabled jobs for paused agents:
+      {{ _enabled_paused_cron_jobs | map(attribute='name') | list }}.
+  vars:
+    _final_cron_jobs: "{{ (final_cron.stdout | from_json).jobs }}"
+    _missing_managed_cron_names: >-
+      {{ managed_present_cron_names | difference(_final_cron_jobs | map(attribute='name') | list) }}
+    _paused_agent_ids: >-
+      {{ _openclaw_scheduled_automation_by_agent | dict2items
+         | selectattr('value', 'equalto', false) | map(attribute='key') | list }}
+    _enabled_paused_cron_jobs: >-
+      {{ _final_cron_jobs | selectattr('agentId', 'in', _paused_agent_ids)
+         | selectattr('enabled', 'equalto', true) | list }}
+  when: not ansible_check_mode

@@ -24,7 +24,7 @@ trap 'rm -rf "$SECRETS_DIR"' EXIT
 
 # Read env var by name, defaulting to empty string (safe under set -u)
 read_env() {
-    eval "printf '%s' \"\${$1:-}\""
+    printf '%s' "${!1-}"
 }
 
 echo "=== Reading secrets ==="
@@ -40,64 +40,119 @@ else
     echo "Reading secrets from Pulumi CLI"
     cd "$PULUMI_DIR"
 
-    # Read agent IDs from Pulumi config if not in environment
-    if [ -z "$agent_ids_str" ]; then
-        agent_ids_str=$(pulumi config get agentIds 2>/dev/null || echo "")
+    # Read each complete snapshot once. A failed CLI read is never an absent
+    # optional setting, even if the failed command emitted plausible JSON.
+    if ! _config_json=$(pulumi config --json --show-secrets --non-interactive 2>/dev/null |
+        jq -ces 'if length == 1 and (.[0] | type == "object") then .[0] else error("Invalid config snapshot") end' 2>/dev/null); then
+        echo "ERROR: Could not read Pulumi config. Check login, backend and passphrase; raw output withheld."
+        exit 1
+    fi
+    if ! _outputs_json=$(pulumi stack output --json --show-secrets --non-interactive 2>/dev/null |
+        jq -ces 'if length == 1 and (.[0] | type == "object") then .[0] else error("Invalid output snapshot") end' 2>/dev/null); then
+        echo "ERROR: Could not read Pulumi stack outputs. Check the selected stack and backend; raw output withheld."
+        exit 1
     fi
 
-    # Required
-    export PROVISION_GATEWAY_TOKEN=$(pulumi stack output openclawGatewayToken --show-secrets) || {
-        echo "ERROR: Failed to read gateway token from Pulumi. Are you logged in? (pulumi login)"
+    config_value() {
+        printf '%s' "$_config_json" | jq -er --arg key "openclaw-infra:$1" '
+            if has($key) then
+                .[$key] | if type == "object" and (.value | type == "string")
+                    then .value else error("Invalid config value") end
+            else "" end' 2>/dev/null || {
+            echo "ERROR: Pulumi config $1 must contain a string value; raw output withheld." >&2
+            return 1
+        }
+    }
+    workspace_key() {
+        # Individual exports are supported only when the structured field is absent.
+        printf '%s' "$_outputs_json" | jq -er --arg id "$1" --arg legacy "$2" '
+            . as $outputs |
+            (if has("agentWorkspaceKeys") then .agentWorkspaceKeys else {} end) |
+            if type != "object" then error("Invalid workspace keys") else . end |
+            (if has($id) then .[$id] else {} end) |
+            if type != "object" then error("Invalid workspace key") else . end |
+            (if has("privateKey") then .privateKey
+             elif $outputs | has($legacy) then $outputs[$legacy] else "" end) |
+            if type == "string" then . else error("Invalid private key") end' 2>/dev/null || {
+            echo "ERROR: Invalid Pulumi workspace key for $1; raw output withheld." >&2
+            return 1
+        }
+    }
+
+    if [ -z "$agent_ids_str" ]; then
+        agent_ids_str=$(config_value agentIds)
+    fi
+    PROVISION_GATEWAY_TOKEN=$(printf '%s' "$_outputs_json" | jq -er '.openclawGatewayToken | strings | select(length > 0)') || {
+        echo "ERROR: Pulumi gateway token is missing or invalid."
         exit 1
     }
-    export PROVISION_CLAUDE_SETUP_TOKEN=$(pulumi config get claudeSetupToken 2>/dev/null || echo "")
-    export PROVISION_CLAUDE_OAUTH_CREDENTIALS=$(pulumi config get claudeOAuthCredentials 2>/dev/null || echo "")
+    PROVISION_TAILSCALE_HOSTNAME=$(printf '%s' "$_outputs_json" | jq -er '.tailscaleHostname | strings | select(length > 0)') || {
+        echo "ERROR: Pulumi provisioning hostname is missing or invalid. Refusing a default host."
+        exit 1
+    }
+    PROVISION_CLAUDE_SETUP_TOKEN=$(config_value claudeSetupToken)
+    PROVISION_CLAUDE_OAUTH_CREDENTIALS=$(config_value claudeOAuthCredentials)
+    PROVISION_TELEGRAM_BOT_TOKEN=$(config_value telegramBotToken)
+    PROVISION_TELEGRAM_USER_ID=$(config_value telegramUserId)
+    PROVISION_TELEGRAM_GROUP_ID=$(config_value telegramGroupId)
+    PROVISION_WORKSPACE_REPO_URL=$(config_value workspaceRepoUrl)
+    PROVISION_XAI_API_KEY=$(config_value xaiApiKey)
+    PROVISION_GROQ_API_KEY=$(config_value groqApiKey)
+    PROVISION_GEMINI_API_KEY=$(config_value geminiApiKey)
+    PROVISION_GITHUB_TOKEN=$(config_value githubToken)
+    PROVISION_OBSIDIAN_AUTH_TOKEN=$(config_value obsidianAuthToken)
+    PROVISION_OBSIDIAN_VAULT_PASSWORD=$(config_value obsidianVaultPassword)
+    PROVISION_DISCORD_BOT_TOKEN=$(config_value discordBotToken)
+    PROVISION_DISCORD_GUILD_ID=$(config_value discordGuildId)
+    PROVISION_DISCORD_USER_ID=$(config_value discordUserId)
+    PROVISION_WORKSPACE_DEPLOY_KEY=$(workspace_key main workspaceDeployPrivateKey)
+    export PROVISION_GATEWAY_TOKEN PROVISION_TAILSCALE_HOSTNAME \
+        PROVISION_CLAUDE_SETUP_TOKEN PROVISION_CLAUDE_OAUTH_CREDENTIALS \
+        PROVISION_TELEGRAM_BOT_TOKEN PROVISION_TELEGRAM_USER_ID PROVISION_TELEGRAM_GROUP_ID \
+        PROVISION_WORKSPACE_REPO_URL PROVISION_WORKSPACE_DEPLOY_KEY \
+        PROVISION_XAI_API_KEY PROVISION_GROQ_API_KEY PROVISION_GEMINI_API_KEY PROVISION_GITHUB_TOKEN \
+        PROVISION_OBSIDIAN_AUTH_TOKEN PROVISION_OBSIDIAN_VAULT_PASSWORD \
+        PROVISION_DISCORD_BOT_TOKEN PROVISION_DISCORD_GUILD_ID PROVISION_DISCORD_USER_ID
 
-    # Main agent config (no suffix in key names)
-    export PROVISION_TELEGRAM_BOT_TOKEN=$(pulumi config get telegramBotToken 2>/dev/null || echo "")
-    export PROVISION_TELEGRAM_USER_ID=$(pulumi config get telegramUserId 2>/dev/null || echo "")
-    export PROVISION_TELEGRAM_GROUP_ID=$(pulumi config get telegramGroupId 2>/dev/null || echo "")
-    export PROVISION_WORKSPACE_REPO_URL=$(pulumi config get workspaceRepoUrl 2>/dev/null || echo "")
-    export PROVISION_TAILSCALE_HOSTNAME=$(pulumi stack output tailscaleHostname 2>/dev/null || echo "openclaw-vps")
-    export PROVISION_XAI_API_KEY=$(pulumi config get xaiApiKey 2>/dev/null || echo "")
-    export PROVISION_GROQ_API_KEY=$(pulumi config get groqApiKey 2>/dev/null || echo "")
-    export PROVISION_GEMINI_API_KEY=$(pulumi config get geminiApiKey 2>/dev/null || echo "")
-    export PROVISION_GITHUB_TOKEN=$(pulumi config get githubToken 2>/dev/null || echo "")
-    export PROVISION_OBSIDIAN_AUTH_TOKEN=$(pulumi config get obsidianAuthToken 2>/dev/null || echo "")
-    export PROVISION_OBSIDIAN_VAULT_PASSWORD=$(pulumi config get obsidianVaultPassword 2>/dev/null || echo "")
-    export PROVISION_DISCORD_BOT_TOKEN=$(pulumi config get discordBotToken 2>/dev/null || echo "")
-    export PROVISION_DISCORD_GUILD_ID=$(pulumi config get discordGuildId 2>/dev/null || echo "")
-    export PROVISION_DISCORD_USER_ID=$(pulumi config get discordUserId 2>/dev/null || echo "")
-
-    # Read deploy keys: try structured export first, fall back to individual exports
-    # (individual exports exist until first `pulumi up` after migration)
-    _keys_json=$(pulumi stack output agentWorkspaceKeys --json --show-secrets 2>/dev/null || echo "{}")
-    _main_key=$(echo "$_keys_json" | jq -r '.main.privateKey // ""')
-    if [ -z "$_main_key" ]; then
-        _main_key=$(pulumi stack output workspaceDeployPrivateKey --show-secrets 2>/dev/null || echo "")
-    fi
-    export PROVISION_WORKSPACE_DEPLOY_KEY="$_main_key"
-
-    # Per-agent config (from Pulumi CLI)
     export PROVISION_AGENT_IDS="$agent_ids_str"
     IFS=',' read -ra _cli_agents <<< "$agent_ids_str"
     for _id in "${_cli_agents[@]}"; do
         [ -z "$_id" ] && continue
+        [[ "$_id" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]] || {
+            echo "ERROR: Agent IDs must be valid environment-variable suffixes."
+            exit 1
+        }
         _upper=$(echo "$_id" | tr '[:lower:]' '[:upper:]')
         _pascal=$(echo "$_id" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
-
-        export "PROVISION_GITHUB_TOKEN_${_upper}=$(pulumi config get "githubToken${_pascal}" 2>/dev/null || echo "")"
-        export "PROVISION_TELEGRAM_${_upper}_USER_ID=$(pulumi config get "telegram${_pascal}UserId" 2>/dev/null || echo "")"
-        export "PROVISION_TELEGRAM_${_upper}_GROUP_ID=$(pulumi config get "telegram${_pascal}GroupId" 2>/dev/null || echo "")"
-        export "PROVISION_WHATSAPP_${_upper}_PHONE=$(pulumi config get "whatsapp${_pascal}Phone" 2>/dev/null || echo "")"
-        export "PROVISION_WORKSPACE_${_upper}_REPO_URL=$(pulumi config get "workspace${_pascal}RepoUrl" 2>/dev/null || echo "")"
-        # Try structured export, fall back to individual export
-        _agent_key=$(echo "$_keys_json" | jq -r ".\"${_id}\".privateKey // \"\"")
-        if [ -z "$_agent_key" ]; then
-            _agent_key=$(pulumi stack output "workspace${_pascal}DeployPrivateKey" --show-secrets 2>/dev/null || echo "")
-        fi
-        export "PROVISION_WORKSPACE_${_upper}_DEPLOY_KEY=${_agent_key}"
+        _value=$(config_value "githubToken${_pascal}")
+        export "PROVISION_GITHUB_TOKEN_${_upper}=$_value"
+        _value=$(config_value "telegram${_pascal}UserId")
+        export "PROVISION_TELEGRAM_${_upper}_USER_ID=$_value"
+        _value=$(config_value "telegram${_pascal}GroupId")
+        export "PROVISION_TELEGRAM_${_upper}_GROUP_ID=$_value"
+        _value=$(config_value "whatsapp${_pascal}Phone")
+        export "PROVISION_WHATSAPP_${_upper}_PHONE=$_value"
+        _value=$(config_value "workspace${_pascal}RepoUrl")
+        export "PROVISION_WORKSPACE_${_upper}_REPO_URL=$_value"
+        _value=$(workspace_key "$_id" "workspace${_pascal}DeployPrivateKey")
+        export "PROVISION_WORKSPACE_${_upper}_DEPLOY_KEY=$_value"
     done
+    unset _config_json _outputs_json _value
+fi
+
+# Phoenix may never provision a default host or another run's Tailscale peer.
+if [[ -n "${PHOENIX_RESOURCE_NAME:-}" || -n "${STAGING_HOST:-}" ]]; then
+    if [[ ! "${PHOENIX_RESOURCE_NAME:-}" =~ ^openclaw-staging-[0-9]+-[0-9]+$ ]] ||
+       [[ "${PROVISION_TAILSCALE_HOSTNAME:-}" != "$PHOENIX_RESOURCE_NAME" ]]; then
+        echo "ERROR: Provisioning hostname does not match this Phoenix run."
+        exit 1
+    fi
+    if [[ -n "${STAGING_HOST:-}" ]] &&
+       { [[ ! "$STAGING_HOST" =~ ^openclaw-staging-[0-9]+-[0-9]+\.[a-zA-Z0-9.-]+$ ]] ||
+         [[ "${STAGING_HOST%%.*}" != "$PHOENIX_RESOURCE_NAME" ]]; }; then
+        echo "ERROR: STAGING_HOST does not match this Phoenix run."
+        exit 1
+    fi
 fi
 
 # Parse agent IDs into array (handles empty string → empty array)
@@ -174,25 +229,14 @@ if [ -n "$agent_ids_str" ]; then
     done
 fi
 
-# Read Codex auth credentials from local machine (optional)
-# Run `codex login` locally to create ~/.codex/auth.json before deploying.
-codex_auth_json=""
-CODEX_AUTH_FILE="${HOME}/.codex/auth.json"
-if [ -f "$CODEX_AUTH_FILE" ]; then
-    codex_auth_json=$(cat "$CODEX_AUTH_FILE")
-    if [ -n "$codex_auth_json" ] && ! echo "$codex_auth_json" | jq empty 2>/dev/null; then
-        echo "ERROR: ~/.codex/auth.json is not valid JSON. Run 'codex login' to regenerate."
-        exit 1
-    fi
-fi
-echo "  codex_auth: $([ -n "$codex_auth_json" ] && echo "found (~/.codex/auth.json)" || echo "skipped (run 'codex login' to enable)")"
-
-# Write secrets to temp YAML file using Python for safe escaping
-SECRETS_FILE="$SECRETS_DIR/secrets.yml"
+# Ansible accepts JSON extra-vars; one serializer handles all credentials.
+SECRETS_FILE="$SECRETS_DIR/secrets.json"
+install -m 600 /dev/null "$SECRETS_FILE"
 python3 -c "
 import json, sys, os
+from pathlib import Path
 
-# Static keys: (yaml_key, env_var) — main agent + global config
+# Static keys: (variable, env_var) — main agent + global config
 static = [
     ('gateway_token', 'PROVISION_GATEWAY_TOKEN'),
     ('claude_setup_token', 'PROVISION_CLAUDE_SETUP_TOKEN'),
@@ -201,6 +245,7 @@ static = [
     ('telegram_user_id', 'PROVISION_TELEGRAM_USER_ID'),
     ('telegram_group_id', 'PROVISION_TELEGRAM_GROUP_ID'),
     ('workspace_repo_url', 'PROVISION_WORKSPACE_REPO_URL'),
+    ('workspace_deploy_key', 'PROVISION_WORKSPACE_DEPLOY_KEY'),
     ('xai_api_key', 'PROVISION_XAI_API_KEY'),
     ('groq_api_key', 'PROVISION_GROQ_API_KEY'),
     ('gemini_api_key', 'PROVISION_GEMINI_API_KEY'),
@@ -212,121 +257,86 @@ static = [
     ('discord_user_id', 'PROVISION_DISCORD_USER_ID'),
 ]
 
-with open(sys.argv[1], 'w') as f:
-    f.write('---\n')
-    for yaml_key, env_var in static:
-        v = os.environ.get(env_var, '')
-        f.write(f'{yaml_key}: {json.dumps(v)}\n')
+# Per-agent keys (derived from PROVISION_AGENT_IDS)
+agent_ids = [a.strip() for a in os.environ.get('PROVISION_AGENT_IDS', '').split(',') if a.strip()]
+for aid in agent_ids:
+    upper = aid.upper()
+    static.extend([
+        (f'github_token_{aid}', f'PROVISION_GITHUB_TOKEN_{upper}'),
+        (f'telegram_{aid}_user_id', f'PROVISION_TELEGRAM_{upper}_USER_ID'),
+        (f'telegram_{aid}_group_id', f'PROVISION_TELEGRAM_{upper}_GROUP_ID'),
+        (f'whatsapp_{aid}_phone', f'PROVISION_WHATSAPP_{upper}_PHONE'),
+        (f'workspace_{aid}_repo_url', f'PROVISION_WORKSPACE_{upper}_REPO_URL'),
+        (f'workspace_{aid}_deploy_key', f'PROVISION_WORKSPACE_{upper}_DEPLOY_KEY'),
+    ])
+secrets = {key: os.environ.get(env_var, '') for key, env_var in static}
 
-    # Per-agent keys (derived from PROVISION_AGENT_IDS)
-    agent_ids = [a.strip() for a in os.environ.get('PROVISION_AGENT_IDS', '').split(',') if a.strip()]
-    for aid in agent_ids:
-        upper = aid.upper()
-        per_agent = [
-            (f'github_token_{aid}', f'PROVISION_GITHUB_TOKEN_{upper}'),
-            (f'telegram_{aid}_user_id', f'PROVISION_TELEGRAM_{upper}_USER_ID'),
-            (f'telegram_{aid}_group_id', f'PROVISION_TELEGRAM_{upper}_GROUP_ID'),
-            (f'whatsapp_{aid}_phone', f'PROVISION_WHATSAPP_{upper}_PHONE'),
-            (f'workspace_{aid}_repo_url', f'PROVISION_WORKSPACE_{upper}_REPO_URL'),
-        ]
-        for yaml_key, env_var in per_agent:
-            v = os.environ.get(env_var, '')
-            f.write(f'{yaml_key}: {json.dumps(v)}\n')
+# Run codex login locally to provide these optional credentials.
+codex_path = Path.home() / '.codex/auth.json'
+secrets['codex_auth_json'] = codex_path.read_text() if codex_path.exists() else ''
+if codex_path.exists():
+    try:
+        json.loads(secrets['codex_auth_json'])
+    except ValueError:
+        sys.exit('ERROR: ~/.codex/auth.json is not valid JSON. Run codex login to regenerate.')
+print('  codex_auth: ' + ('found (~/.codex/auth.json)' if codex_path.exists() else 'skipped (run codex login to enable)'))
+with open(sys.argv[1], 'w') as f:
+    json.dump(secrets, f)
+    f.write('\n')
 " "$SECRETS_FILE"
 
-# Append deploy keys (block scalar when non-empty, explicit empty string otherwise)
-append_deploy_key() {
-    local name="$1" value="$2" file="$3"
-    if [ -n "$value" ]; then
-        printf '%s: |\n' "$name" >> "$file"
-        echo "$value" | sed 's/^/  /' >> "$file"
-    else
-        printf '%s: ""\n' "$name" >> "$file"
-    fi
-}
-append_deploy_key "workspace_deploy_key" "$(read_env PROVISION_WORKSPACE_DEPLOY_KEY)" "$SECRETS_FILE"
-if [ -n "$agent_ids_str" ]; then
-    for id in "${agent_ids[@]}"; do
-        [ -z "$id" ] && continue
-        upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
-        append_deploy_key "workspace_${id}_deploy_key" \
-            "$(read_env "PROVISION_WORKSPACE_${upper}_DEPLOY_KEY")" "$SECRETS_FILE"
-    done
-fi
-
-# Append Codex auth credentials (block scalar preserves JSON structure)
-append_deploy_key "codex_auth_json" "$codex_auth_json" "$SECRETS_FILE"
-chmod 600 "$SECRETS_FILE"
-
-echo "=== Waiting for Tailscale SSH connectivity ==="
+echo "=== Resolving authenticated Tailscale peer ==="
 
 tailscale_hostname=$(read_env PROVISION_TAILSCALE_HOSTNAME)
-tailscale_hostname="${tailscale_hostname:-openclaw-vps}"
-
-resolve_tailscale_ips() {
-    # Returns ALL IPv4 addresses for peers whose HostName starts with the
-    # given tailscale_hostname (handles Tailscale's numeric suffix for
-    # duplicate hostnames, e.g. openclaw-vps, openclaw-vps-1, openclaw-vps-2).
-    if ! command -v tailscale &>/dev/null; then
-        return 1
-    fi
-    local raw
-    raw=$(tailscale status --json 2>/dev/null) || return 1
-    echo "$raw" | python3 -c "
-import json, sys, re
-data = json.load(sys.stdin)
-base = '${tailscale_hostname}'.lower()
-pattern = re.compile(r'^' + re.escape(base) + r'(-\d+)?$')
-for peer in (data.get('Peer') or {}).values():
-    if pattern.match(peer.get('HostName','').lower()):
-        for a in peer.get('TailscaleIPs', []):
-            if '.' in a:
-                print(a)
-                break
-" 2>/dev/null
+[[ "$tailscale_hostname" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]] || {
+    echo "ERROR: Missing or invalid provisioning hostname; refusing a default host."
+    exit 1
 }
 
-# Retry loop: resolve Tailscale IPs and attempt SSH to each candidate
+# Resolve exactly one peer for production and staging alike. Only an absent or
+# offline peer may still be booting; malformed/ambiguous data fails immediately.
+# SSH readiness itself belongs to the playbook's wait_for_connection task.
 MAX_RETRIES=30
-RETRY_DELAY=10
-HOST=""
-SSH_ERR=""
-for i in $(seq 1 $MAX_RETRIES); do
-    # Re-resolve all candidate IPs each attempt (new server may appear mid-loop)
-    CANDIDATES=$(resolve_tailscale_ips) || true
-
-    # Fall back to hostname (MagicDNS may resolve before tailscale status learns the peer)
-    if [ -z "$CANDIDATES" ]; then
-        CANDIDATES="$tailscale_hostname"
-    fi
-
-    if [ -z "$HOST" ]; then
-        echo "Tailscale candidates: $(echo $CANDIDATES | tr '\n' ' ')"
-    fi
-
-    # Try each candidate via SSH
-    for TARGET in $CANDIDATES; do
-        SSH_ERR=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-           -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \
-           ubuntu@"$TARGET" true 2>&1) && {
-            HOST="$TARGET"
-            echo "SSH connectivity established (via $HOST)"
-            break 2
-        }
-    done
-
-    if [ "$i" -eq "$MAX_RETRIES" ]; then
-        echo "ERROR: Could not establish SSH connection after $MAX_RETRIES attempts"
-        echo "Tried candidates: $(echo $CANDIDATES | tr '\n' ' ')"
-        echo "Last SSH error: $SSH_ERR"
+for i in $(seq 1 "$MAX_RETRIES"); do
+    PEER=$(tailscale status --json | jq -ces --arg name "$tailscale_hostname" '
+        if length != 1 then error("Expected one Tailscale status") else .[0] end |
+        if type != "object" or (.Peer | type != "object") or
+           (.MagicDNSSuffix | type != "string" or length == 0)
+        then error("Invalid Tailscale status") else . end |
+        .MagicDNSSuffix as $suffix | [.Peer[] | select(.HostName == $name)] |
+        if length == 0 then {} elif length != 1 then error("Ambiguous peer")
+        elif .[0].DNSName != ($name + "." + $suffix + ".") then error("Peer identity mismatch")
+        elif .[0].Online == false then {}
+        elif .[0].Online == true then
+            if .[0].sshHostKeys == null or .[0].sshHostKeys == [] then {} else .[0] end
+        else error("Missing peer online state") end') || {
+        echo "ERROR: Could not resolve the exact authenticated Tailscale peer."
+        exit 1
+    }
+    if [[ "$PEER" != '{}' ]]; then break; fi
+    if [[ "$i" -eq "$MAX_RETRIES" ]]; then
+        echo "ERROR: Exact Tailscale peer did not come online after $MAX_RETRIES attempts."
         exit 1
     fi
-    echo "Waiting for Tailscale SSH... (attempt $i/$MAX_RETRIES)"
-    sleep "$RETRY_DELAY"
+    echo "Waiting for Tailscale peer... (attempt $i/$MAX_RETRIES)"
+    sleep 10
 done
-
-# Export for Ansible inventory
-export OPENCLAW_SSH_HOST="$HOST"
+OPENCLAW_SSH_HOST=$(jq -er '.DNSName | rtrimstr(".")' <<< "$PEER")
+if [[ -n "${STAGING_HOST:-}" && "$OPENCLAW_SSH_HOST" != "$STAGING_HOST" ]]; then
+    echo "ERROR: Resolved peer differs from the pinned staging host."
+    exit 1
+fi
+OPENCLAW_SSH_KNOWN_HOSTS="$SECRETS_DIR/known_hosts"
+install -m 600 /dev/null "$OPENCLAW_SSH_KNOWN_HOSTS"
+jq -er --arg host "$OPENCLAW_SSH_HOST" '
+    .sshHostKeys | if type == "array" and length > 0 and
+       all(.[]; type == "string" and test("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[a-zA-Z0-9-]+) [A-Za-z0-9+/=]+$"))
+    then .[] | $host + " " + . else error("Missing or invalid authenticated SSH host keys") end
+' <<< "$PEER" > "$OPENCLAW_SSH_KNOWN_HOSTS" || {
+    echo "ERROR: Could not authenticate Ansible SSH host keys; provisioning was not started."
+    exit 1
+}
+export OPENCLAW_SSH_HOST OPENCLAW_SSH_KNOWN_HOSTS
 
 echo "=== Running Ansible playbook ==="
 
@@ -356,32 +366,14 @@ if ! command -v ansible-galaxy &>/dev/null || ! command -v ansible-playbook &>/d
     fi
 fi
 
-# Install required Ansible collections
-ansible-galaxy collection install -r requirements.yml --upgrade || {
+# Collection installation must not inherit deployment or backend credentials.
+env -i HOME="$HOME" PATH="$PATH" ansible-galaxy collection install -r requirements.yml --upgrade || {
     echo "ERROR: Failed to install Ansible Galaxy collections."
     exit 1
 }
-
-# Clean up any stale cron-skipped marker from previous runs
-rm -f /tmp/ansible-cron-skipped
 
 ansible-playbook playbook.yml \
     -e "@$SECRETS_FILE" \
     "$@"
 
-# Check if cron setup was skipped (gateway not healthy, e.g. first install)
-if [ -f /tmp/ansible-cron-skipped ]; then
-    rm -f /tmp/ansible-cron-skipped
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║  WARNING: Cron job setup was SKIPPED (gateway not healthy).    ║"
-    echo "║  This is expected on first install (device pairing pending).   ║"
-    echo "║  After approving devices, re-run:                             ║"
-    echo "║    ./scripts/provision.sh --tags telegram,whatsapp,discord   ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "=== Provisioning complete (with warnings) ==="
-    exit 2
-else
-    echo "=== Provisioning complete ==="
-fi
+echo "=== Provisioning complete ==="

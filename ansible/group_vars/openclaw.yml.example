@@ -17,6 +17,27 @@
 # Show error replies in Telegram (default true = errors silently swallowed)
 # openclaw_telegram_silent_error_replies: false
 
+# --- Read-only tool policy (optional; staging uses this) ---
+# An explicit global allowlist replaces the default "all groups + plugins"
+# policy for every session, heartbeats and cron included, and clears
+# tools.alsoAllow so the plugin profile cannot widen it. Extra Claude CLI
+# arguments disable native tools at the provider boundary as well.
+#
+# openclaw_tools_allow:
+#   - github_get_file_contents
+# openclaw_cli_backends:
+#   claude-cli:
+#     args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config"]
+#     resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--resume", "{sessionId}"]
+
+# --- Scheduled automation ---
+# Agent creation does not enable autonomous work. The checked-in default is off;
+# opt in per agent below. heartbeat_every remains the latent cadence used when
+# the switch is true. The switch pauses heartbeats and every cron job for the
+# agent without disabling normal chat.
+#
+# openclaw_scheduled_automation_default: false
+
 # --- Heartbeat quiet hours (optional) ---
 # Suppress heartbeats outside a time window (uses openclaw_timezone).
 # Omit entirely to allow heartbeats 24/7.
@@ -38,6 +59,7 @@
 # openclaw_agents:
 #   - id: "main"
 #     is_default: true
+#     scheduled_automation_enabled: false
 #     deliver_to: "{{ telegram_user_id | default('') }}"
 #     deliver_type: "dm"
 #     deliver_channel: "telegram"      # telegram (default), whatsapp, or discord
@@ -46,6 +68,7 @@
 #     sandbox_mode: "off"  # override default sandbox mode (also sets exec.host=gateway)
 #   - id: "second-agent"
 #     is_default: false
+#     scheduled_automation_enabled: true
 #     deliver_to: "{{ telegram_second_user_id | default('') }}"
 #     deliver_type: "dm"
 #     deliver_channel: "telegram"
@@ -88,6 +111,7 @@
 # openclaw_cron_jobs:
 #   - name: "main: Daily Standup"
 #     agent: "main"
+#     enabled: true  # defaults true; the agent switch still wins
 #     schedule: "30 9 * * *"
 #     message: "Good morning! Summarize what needs attention today."
 #   - name: "main: Night Shift"

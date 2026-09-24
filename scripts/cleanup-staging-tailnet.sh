@@ -1,90 +1,102 @@
 #!/usr/bin/env bash
-#
-# Delete stale openclaw-staging* devices from the Tailscale tailnet.
-#
-# The staging phoenix creates a throwaway VPS each run and destroys it, but
-# unless the device joined with an ephemeral auth key its tailnet record
-# lingers offline forever — and each leftover collides the hostname, pushing
-# the next run to openclaw-staging-2, -3, … (suffixes the deploy tolerates but
-# that clutter the admin console). staging-cleanup.yml prunes orphaned Hetzner
-# resources but not these device records; this fills that gap.
-#
-# Safety: only removes devices whose hostname matches openclaw-staging(-N) AND
-# are currently offline, so an in-flight run's box is never touched.
-#
-# Auth (either, both need the devices:core write scope):
-#   - TAILSCALE_API_KEY=tskey-api-...                      (a direct API key), or
-#   - TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET=tskey-client-... (an OAuth client,
-#     exchanged here for a short-lived token — what CI already has).
-#
-# Usage:
-#   TAILSCALE_API_KEY=tskey-api-... ./scripts/cleanup-staging-tailnet.sh [--dry-run]
-#   TS_OAUTH_CLIENT_ID=... TS_OAUTH_SECRET=... ./scripts/cleanup-staging-tailnet.sh [--dry-run]
-
+# Inventory by default. --owned-node removes only the node proven by Phoenix's
+# authenticated host/IP check; a prefix or offline timestamp is not ownership.
+# Auth: TAILSCALE_API_KEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET in the environment.
 set -euo pipefail
-
-TAILNET="${TAILNET:--}"   # '-' means "the tailnet that owns the credential"
-DRY_RUN=false
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=true
-
-API="https://api.tailscale.com/api/v2"
-
-# Auth: a direct API key (tskey-api-…), or an OAuth client (id + secret) we
-# exchange for a short-lived access token. CI already holds the OAuth client
-# (TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET, used to join the tailnet), so no extra
-# secret is needed there as long as that client has the devices:core scope.
-TOKEN="${TAILSCALE_API_KEY:-}"
-if [ -z "$TOKEN" ] && [ -n "${TS_OAUTH_CLIENT_ID:-}" ] && [ -n "${TS_OAUTH_SECRET:-}" ]; then
-    TOKEN=$(curl -fsSL -X POST "${API}/oauth/token" \
-        -d "client_id=${TS_OAUTH_CLIENT_ID}" \
-        -d "client_secret=${TS_OAUTH_SECRET}" | jq -r '.access_token // empty') || true
+if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --dry-run && "$1" != --owned-node ) ]]; then
+    echo 'Usage: cleanup-staging-tailnet.sh [--dry-run|--owned-node]' >&2
+    exit 2
 fi
-if [ -z "$TOKEN" ]; then
-    echo "ERROR: provide TAILSCALE_API_KEY (tskey-api-… with devices write), or" >&2
-    echo "       TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET for an OAuth client with that scope." >&2
-    exit 1
-fi
-AUTH=(-H "Authorization: Bearer ${TOKEN}")
+python3 - "${1:---dry-run}" <<'PY'
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
-devices_json=$(curl -fsSL "${AUTH[@]}" "${API}/tailnet/${TAILNET}/devices") || {
-    echo "ERROR: could not list devices (check credential scope/tailnet)" >&2
-    exit 1
-}
+api = 'https://api.tailscale.com/api/v2'
 
-# Offline = lastSeen more than 5 minutes ago. Match openclaw-staging or -N.
-# Guard .hostname against null (a single null-hostname device in the tailnet
-# would otherwise make `test()` error and abort the whole filter — leaving
-# targets empty and silently skipping every stale device). Strip any fractional
-# seconds before fromdateiso8601, which only accepts %Y-%m-%dT%H:%M:%SZ.
-mapfile -t targets < <(echo "$devices_json" | jq -r --arg now "$(date -u +%s)" '
-    .devices[]
-    | select((.hostname // "") | test("^openclaw-staging(-[0-9]+)?$"))
-    | select(((($now | tonumber) - ((.lastSeen // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+";"") | fromdateiso8601)) > 300))
-    | "\(.id)\t\(.hostname)\t\(.lastSeen)"')
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file, code, message, headers, new_url):
+        return None
 
-if [ "${#targets[@]}" -eq 0 ]; then
-    echo "No stale openclaw-staging* devices to remove."
-    exit 0
-fi
+opener = urllib.request.build_opener(NoRedirect())
+owned = sys.argv[1] == '--owned-node'
+name = os.environ.get('PHOENIX_RESOURCE_NAME', '')
+node_id = os.environ.get('PHOENIX_TAILSCALE_NODE_ID', '')
+if owned and (not re.fullmatch(r'openclaw-staging-[0-9]+-[0-9]+', name)
+              or not re.fullmatch(r'[A-Za-z0-9]+', node_id)):
+    sys.exit('Owned-node cleanup requires the unique Phoenix run name and proven node ID')
+phase = 'authentication'
+try:
+    token = os.environ.get('TAILSCALE_API_KEY', '')
+    if not token:
+        client_id = os.environ.get('TS_OAUTH_CLIENT_ID', '')
+        client_secret = os.environ.get('TS_OAUTH_SECRET', '')
+        if not client_id or not client_secret:
+            raise ValueError('Missing Tailscale credentials')
+        data = urllib.parse.urlencode({'client_id': client_id, 'client_secret': client_secret,
+                                       'grant_type': 'client_credentials'}).encode()
+        request = urllib.request.Request(api + '/oauth/token', data=data)
+        with opener.open(request, timeout=30) as response:
+            token = json.load(response)['access_token']
+    if not isinstance(token, str) or not token:
+        raise ValueError('Empty Tailscale token')
+    tailnet = urllib.parse.quote(os.environ.get('TAILNET', '-'), safe='')
+    def inventory():
+        request = urllib.request.Request(api + '/tailnet/' + tailnet + '/devices',
+                                         headers={'Authorization': 'Bearer ' + token})
+        with opener.open(request, timeout=30) as response:
+            devices = json.load(response)['devices']
+        if not isinstance(devices, list) or any(
+            not isinstance(d, dict) or not isinstance(d.get('hostname'), str)
+            or not isinstance(d.get('id'), str) or not d['id']
+            or not isinstance(d.get('nodeId'), str) or not d['nodeId'] for d in devices
+        ):
+            raise ValueError('Invalid device inventory')
+        return devices
 
-echo "Stale openclaw-staging* devices (offline > 5m):"
-printf '  %s\n' "${targets[@]}"
+    phase = 'device inventory'
+    devices = inventory()
+    selected = [{'id': d['id'], 'hostname': d['hostname'], 'lastSeen': d.get('lastSeen')}
+                for d in devices if d['hostname'].startswith('openclaw-staging')]
+    if owned:
+        phase = 'ownership validation'
+        matching = [d for d in devices if d['nodeId'] == node_id]
+        if not matching:
+            if any(d['hostname'] == name for d in devices):
+                raise ValueError('Run device exists but its ownership was not proven')
+            print(json.dumps({'owned_node_absent': True, 'deleted': 0}))
+            sys.exit(0)
+        if len(matching) != 1 or matching[0]['hostname'] != name:
+            raise ValueError('Owned node identity changed')
+        device_id = matching[0]['id']
+        request = urllib.request.Request(api + '/device/' + urllib.parse.quote(device_id, safe=''),
+                                         method='DELETE', headers={'Authorization': 'Bearer ' + token})
+        delete_error = None
+        phase = 'owned-device deletion'
+        try:
+            with opener.open(request, timeout=30) as response:
+                response.read()
+        except (urllib.error.URLError, TimeoutError) as error:
+            delete_error = type(error).__name__
+        phase = 'owned-device absence check'
+        remaining = inventory()
+        if any(d['id'] == device_id or d['nodeId'] == node_id for d in remaining):
+            raise ValueError('Owned device still present after deletion')
+        if delete_error:
+            raise RuntimeError('Deletion reported failure; readback found the device absent')
+        print(json.dumps({'owned_node_absent': True, 'deleted': 1, 'device_id': device_id}))
+        sys.exit(0)
+except (urllib.error.URLError, TimeoutError, ValueError, KeyError, TypeError, RuntimeError) as error:
+    print('Tailscale cleanup failed during ' + phase + ' (' + type(error).__name__ +
+          '); check API permissions and run ownership. Private diagnostics withheld.', file=sys.stderr)
+    sys.exit(1)
 
-removed=0
-for row in "${targets[@]}"; do
-    id="${row%%$'\t'*}"
-    rest="${row#*$'\t'}"
-    name="${rest%%$'\t'*}"
-    if [ "$DRY_RUN" = true ]; then
-        echo "DRY-RUN: would delete $name ($id)"
-        continue
-    fi
-    if curl -fsSL -X DELETE "${AUTH[@]}" "${API}/device/${id}" >/dev/null; then
-        echo "Deleted $name ($id)"
-        removed=$((removed + 1))
-    else
-        echo "WARNING: failed to delete $name ($id)" >&2
-    fi
-done
-
-[ "$DRY_RUN" = true ] || echo "Removed ${removed}/${#targets[@]} stale device(s)."
+print(json.dumps({'inventory_only': True, 'devices': selected, 'deleted': 0}))
+if selected:
+    print('Staging device records need an ownership check. No devices were deleted.', file=sys.stderr)
+    sys.exit(1)
+PY

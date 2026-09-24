@@ -52,6 +52,13 @@ openclaw_custom_models:
           maxTokens: 128000
 nodejs_major_version: 25
 openclaw_version: "2026.6.6"
+# Bump only after reviewing the versioned heartbeat + cron contracts documented
+# in docs/DOCS-REVIEW.md. Provisioning refuses scheduler changes on a mismatch.
+openclaw_docs_reviewed_version: "2026.6.6"
+# Agent existence never opts into autonomous work. Deployments must explicitly
+# enable scheduled automation per agent in group_vars/openclaw.yml.
+openclaw_scheduled_automation_default: false
+# Latent cadence used only after an agent opts into scheduled automation.
 openclaw_heartbeat_interval: "30m"
 openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
 openclaw_cooldown_failure_window_hours: 1  # reset cooldown error count after 1h (default: 24)
@@ -189,7 +196,7 @@ openclaw_cron_jobs:
 
 # MCP plugin configuration
 openclaw_mcp_adapter:
-  npm_package: "@pandysp/openclaw-mcp-adapter"
+  npm_package: "@pandysp/openclaw-mcp-adapter@0.1.7"
   npm_packages:
     - "@modelcontextprotocol/server-github"
     - "@openai/codex"
