@@ -52,7 +52,9 @@ class PluginConfigTransportTests(unittest.TestCase):
         tasks, cls.defaults = json.loads(result.stdout)
         cls.all_tasks = tasks
         cls.tasks = [task for task in tasks if any(t.get("name") in SELECTED for t in walk_tasks([task]))]
-        cls.python = python[-1]
+        # The shebang may carry interpreter flags; ask that interpreter for its own path.
+        cls.python = subprocess.run([*python, "-c", "import sys; print(sys.executable)"],
+                                    capture_output=True, text=True, check=True).stdout.strip()
         cls.real_jq = shutil.which("jq")
         if not cls.real_jq:
             raise RuntimeError("jq is required")
