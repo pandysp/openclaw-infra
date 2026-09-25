@@ -206,7 +206,7 @@
             current=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || current=""
             if [ "$current" != "$desired" ]; then
                 openclaw config set "$key" "$desired"
-                CHANGED="yes"
+                CHANGED="$CHANGED $key"
             fi
         }
 
@@ -214,7 +214,7 @@
         check_unset() {
             local key="$1" output
             output=$(openclaw config unset "$key" 2>&1) && {
-                CHANGED="yes"
+                CHANGED="$CHANGED $key"
             } || {
                 if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
                     true
@@ -234,7 +234,7 @@
             d_norm=$(echo "$desired" | jq -cS '.')
             if [ "$c_norm" = "PARSE_FAIL" ] || [ "$c_norm" != "$d_norm" ]; then
                 openclaw config set "$key" --json "$desired"
-                CHANGED="yes"
+                CHANGED="$CHANGED $key"
             fi
         }
 
@@ -274,7 +274,7 @@
             # authoritative — a full replace is the intent.
             openclaw config set models --json "$DESIRED_MODELS" --replace
             echo "$DESIRED_HASH" > "$HASH_DIR/custom-models"
-            CHANGED="yes"
+            CHANGED="$CHANGED models"
         fi
 
         # Sandbox tool allowlist (all groups + plugins)
@@ -450,12 +450,18 @@
         {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
         check_set_json channels.whatsapp.healthMonitor.enabled 'false'
 
-        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
+        # Key names only (never values), so drift is visible in public CI logs.
+        if [ -n "$CHANGED" ]; then echo "UPDATED:$CHANGED"; else echo "OK"; fi
       args:
         executable: /bin/bash
       register: config_settings
       changed_when: "'UPDATED' in config_settings.stdout"
       notify: restart openclaw-gateway
+
+    - name: Show which gateway settings were updated
+      ansible.builtin.debug:
+        msg: "{{ config_settings.stdout_lines | select('match', '^UPDATED:') | list }}"
+      when: config_settings is changed
 
     - name: Auto-discover connected system node for exec
       when: node_exec_enabled | default(false)

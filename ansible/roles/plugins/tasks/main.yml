@@ -1421,16 +1421,8 @@
              else ['openclaw', 'config', 'unset', 'plugins.enabled'] }}
       no_log: true
 
-    - name: Ensure MCP tools are allowed in the sandbox
-      ansible.builtin.shell: |
-        set -euo pipefail
-        jq '{tools: {sandbox: {tools: {allow:
-            ((.tools.sandbox.tools.allow // []) + ["group:plugins", "openclaw-mcp-adapter"] | unique)
-        }}}}' /home/ubuntu/.openclaw/openclaw.json |
-            openclaw config patch --stdin --replace-path tools.sandbox.tools.allow
-      args:
-        executable: /bin/bash
-      no_log: true
+    # tools.sandbox.tools.allow has one writer, the config role, which lists the
+    # adapter whenever it is declared. A second writer here re-sorted it every run.
 
     - name: Verify plugin config was applied
       ansible.builtin.shell: |

@@ -162,9 +162,6 @@ elif args[:3]==['config','set','plugins.enabled']:
  cfg['plugins']['enabled']=json.loads(args[3])
 elif args==['config','unset','plugins.enabled']:
  del cfg['plugins']['enabled']
-elif args==['config','patch','--stdin','--replace-path','tools.sandbox.tools.allow']:
- patch=json.load(sys.stdin)
- cfg['tools'].setdefault('sandbox',{}).setdefault('tools',{})['allow']=patch['tools']['sandbox']['tools']['allow']
 elif args==['config','patch','--stdin','--replace-path','plugins.entries.openclaw-mcp-adapter.config']:
  assert (root/'prepared').exists(), 'Enabled plugin before preparing its cache'
  patch=json.load(sys.stdin)

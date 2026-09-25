@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TASKS = ROOT / 'ansible/roles/config/tasks/main.yml'
 CONFIGURE = 'Configure gateway settings'
 TEMP_FILES = 'Write secrets and config to temp files'
+REPORT = 'Show which gateway settings were updated'
 MIGRATE = 'Migrate session model provider to match primary model'
 FAKE_OPENCLAW = '''#!/usr/bin/env python3
 # config get: nothing configured yet; config set/unset: record the exact argv.
@@ -57,8 +58,9 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             capture_output=True, text=True, check=True).stdout)
         cls.temp_files = find_task(tasks, TEMP_FILES)
         cls.configure = find_task(tasks, CONFIGURE)
+        cls.report = find_task(tasks, REPORT)
         cls.migrate = find_task(tasks, MIGRATE)
-        assert cls.temp_files and cls.configure and cls.migrate, 'Config role tasks moved'
+        assert cls.temp_files and cls.configure and cls.report and cls.migrate, 'Config role tasks moved'
 
     def run_task(self, tasks, root, extra_vars=None):
         (root / 'bin').mkdir(exist_ok=True)
@@ -95,8 +97,12 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         # install location (OpenClaw 2026.6 only warns about a missing allowed plugin).
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
             root = Path(tmp)
-            result = self.run_task([self.temp_files, self.configure], root, {'openclaw_mcp_adapter': self.defaults['openclaw_mcp_adapter']})
+            result = self.run_task([self.temp_files, self.configure, self.report], root,
+                                   {'openclaw_mcp_adapter': self.defaults['openclaw_mcp_adapter']})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # The run names the keys it wrote, never their values.
+            self.assertRegex(result.stdout, r'UPDATED:.* plugins\.allow')
+            self.assertNotIn('fixture-gateway', result.stdout + result.stderr)
             writes = self.json_writes(root)
             self.assertIn('openclaw-mcp-adapter', writes['plugins.allow'])
             self.assertIn('openclaw-mcp-adapter', writes['tools.sandbox.tools.allow'])
