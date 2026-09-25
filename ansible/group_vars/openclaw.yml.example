@@ -21,14 +21,18 @@
 # An explicit global allowlist replaces the default "all groups + plugins"
 # policy for every session, heartbeats and cron included, and clears
 # tools.alsoAllow so the plugin profile cannot widen it. Extra Claude CLI
-# arguments disable native tools at the provider boundary as well.
+# arguments disable native tools at the provider boundary as well. A backend
+# override replaces OpenClaw's defaults and requires `command`, so it repeats
+# the pinned version's defaults (extensions/anthropic/cli-backend.ts) plus
+# `--tools "" --strict-mcp-config`; staging.yml holds the tested copy.
 #
 # openclaw_tools_allow:
 #   - github_get_file_contents
 # openclaw_cli_backends:
 #   claude-cli:
-#     args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config"]
-#     resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--resume", "{sessionId}"]
+#     command: "claude"
+#     args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*"]
+#     resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*", "--resume", "{sessionId}"]
 
 # --- Scheduled automation ---
 # Agent creation does not enable autonomous work. The checked-in default is off;

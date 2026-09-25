@@ -53,7 +53,8 @@ class TailnetCleanupTests(unittest.TestCase):
             env = {'PATH': os.environ['PATH'], 'HOME': tmp, 'PYTHONPATH': tmp,
                    'FIXTURE_ROOT': tmp, 'FIXTURE_OPTIONS': json.dumps(options),
                    'TS_OAUTH_CLIENT_ID': 'fixture-client', 'TS_OAUTH_SECRET': 'fixture-secret',
-                   'PHOENIX_RESOURCE_NAME': NAME, 'PHOENIX_TAILSCALE_NODE_ID': node}
+                   'PHOENIX_RESOURCE_NAME': NAME, 'PHOENIX_TAILSCALE_NODE_ID': node,
+                   'PHOENIX_TAILSCALE_TAG': 'tag:openclaw-staging'}
             result = subprocess.run(['bash', str(SCRIPT), '--owned-node' if owned else '--dry-run'],
                                     env=env, text=True, capture_output=True, timeout=10)
             self.assertNotIn('fixture-', result.stdout + result.stderr)
@@ -95,6 +96,21 @@ class TailnetCleanupTests(unittest.TestCase):
                               ('nOwned', [OWN | {'hostname': OTHER['hostname']}])):
             with self.subTest(node=node, devices=devices):
                 result, calls = self.run_cleaner(owned=True, node=node, devices=devices)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c['method'] == 'DELETE' for c in calls))
+
+    def test_the_exclusive_run_tag_proves_ownership_when_no_node_id_was_proven(self):
+        # Deploy failed after the server joined: no node ID, but the device carries
+        # this run's unique name and the tag only the CI OAuth client can mint.
+        tagged = OWN | {'tags': ['tag:openclaw-staging']}
+        result, calls = self.run_cleaner(owned=True, node='', devices=[tagged, OTHER])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c['method'] for c in calls], ['POST', 'GET', 'DELETE', 'GET'])
+        self.assertTrue(json.loads(result.stdout)['owned_node_absent'])
+        for devices in ([OWN | {'tags': ['tag:server']}], [OWN | {'tags': ['tag:openclaw-staging', 'tag:ci']}],
+                        [OWN | {'tags': 'tag:openclaw-staging'}], [tagged, tagged | {'id': '44', 'nodeId': 'nTwin'}]):
+            with self.subTest(devices=devices):
+                result, calls = self.run_cleaner(owned=True, node='', devices=devices)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(any(c['method'] == 'DELETE' for c in calls))
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Inventory by default. --owned-node removes only the node proven by Phoenix's
 # authenticated host/IP check; a prefix or offline timestamp is not ownership.
-# An empty PHOENIX_TAILSCALE_NODE_ID means the run never proved a node (deploy
-# failed first): then only the absence of a device with the run name counts as
-# clean, and a device carrying that name is an unproven leftover, not ours to delete.
+# Without a proven PHOENIX_TAILSCALE_NODE_ID (deploy failed before host
+# resolution), a device is ours only if it carries this run's unique name AND
+# exactly PHOENIX_TAILSCALE_TAG. The tailnet policy makes tag:ci that tag's only
+# owner, so no member device can claim it; a name alone is never ownership.
 # Auth: TAILSCALE_API_KEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_SECRET in the environment.
 set -euo pipefail
 if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --dry-run && "$1" != --owned-node ) ]]; then
@@ -29,9 +30,11 @@ opener = urllib.request.build_opener(NoRedirect())
 owned = sys.argv[1] == '--owned-node'
 name = os.environ.get('PHOENIX_RESOURCE_NAME', '')
 node_id = os.environ.get('PHOENIX_TAILSCALE_NODE_ID', '')
+run_tag = os.environ.get('PHOENIX_TAILSCALE_TAG', '')
 if owned and (not re.fullmatch(r'openclaw-staging-[0-9]+-[0-9]+', name)
-              or not re.fullmatch(r'[A-Za-z0-9]*', node_id)):
-    sys.exit('Owned-node cleanup requires the unique Phoenix run name and a well-formed node ID')
+              or not re.fullmatch(r'[A-Za-z0-9]*', node_id)
+              or not re.fullmatch(r'tag:[a-z0-9-]+', run_tag)):
+    sys.exit('Owned-node cleanup requires the unique Phoenix run name, its tag and a well-formed node ID')
 phase = 'authentication'
 try:
     token = os.environ.get('TAILSCALE_API_KEY', '')
@@ -68,6 +71,8 @@ try:
     if owned:
         phase = 'ownership validation'
         matching = [d for d in devices if node_id and d['nodeId'] == node_id]
+        if not matching and not node_id:
+            matching = [d for d in devices if d['hostname'] == name and d.get('tags') == [run_tag]]
         if not matching:
             if any(d['hostname'] == name for d in devices):
                 raise ValueError('Run device exists but its ownership was not proven')

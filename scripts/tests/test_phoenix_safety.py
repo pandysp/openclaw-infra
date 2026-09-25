@@ -305,6 +305,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             'RUNNER_TEMP': str(self.root), 'GITHUB_OUTPUT': str(self.root / 'output'),
             'GITHUB_ENV': str(self.root / 'env'), 'PHOENIX_RESOURCE_NAME': NAME,
             'STAGING_MODEL': self.workflow['env']['STAGING_MODEL'],
+            'PHOENIX_TAILSCALE_TAG': self.workflow['env']['PHOENIX_TAILSCALE_TAG'],
             'FIXTURE_ROOT': str(self.root), 'TELEGRAM_USER_ID': '123456', 'STAGING_HOST': HOST,
             'INVENTORY_SCRIPT': str(WORKFLOW.parents[2] / 'ansible/inventory/pulumi_inventory.py'),
         }
@@ -454,6 +455,18 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.assertEqual(config['openclaw_model_primary'], 'anthropic/claude-sonnet-4-6')
         self.assertEqual(config['openclaw_model_fallbacks'], [])
 
+        # An override replaces OpenClaw's defaults (openclaw 2026.6.6,
+        # extensions/anthropic/cli-backend.ts), and its schema requires `command`.
+        # Staging must run production's exact Claude CLI invocation plus only the
+        # two lockdown flags; anything else makes Phoenix test a different runtime.
+        upstream = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
+                    '--setting-sources', 'user', '--allowedTools', 'mcp__openclaw__*']
+        lockdown = ['--tools', '', '--strict-mcp-config']
+        backend = config['openclaw_cli_backends']['claude-cli']
+        self.assertEqual(backend['command'], 'claude')
+        self.assertEqual(backend['args'], upstream[:5] + lockdown + upstream[5:])
+        self.assertEqual(backend['resumeArgs'], upstream[:5] + lockdown + upstream[5:] + ['--resume', '{sessionId}'])
+
     def test_existing_stack_rejection_never_claims_ownership_or_removes_state(self):
         result = self.run_step('Initialize Pulumi staging stack', init_exit=71)
         self.assertEqual(result.returncode, 71)
@@ -501,6 +514,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         minted = [call for call in secret_calls if call['args'][2] == 'tailscaleAuthKey']
         self.assertEqual([call['stdin'] for call in minted], ['fixture-tskey-auth-minted'])
         self.assertNotIn('secrets.TS_AUTHKEY', json.dumps(self.workflow))
+        self.assertEqual(self.workflow['env']['PHOENIX_TAILSCALE_TAG'], 'tag:openclaw-staging')
 
     def test_auth_key_minting_failures_stop_before_stack_init(self):
         for options in ({'oauth_exit': 22}, {'oauth_body': '{}'}, {'oauth_body': '{"access_token":""}'},
