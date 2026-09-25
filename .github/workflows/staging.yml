@@ -303,8 +303,25 @@ jobs:
         run: |
           set -euo pipefail
           cd pulumi
-          # A failed update (including a checkpoint write) must never turn green.
-          pulumi up --yes --stack staging --non-interactive 2>&1 | tee "$RUNNER_TEMP/pulumi-up.log"
+          # Hetzner rejects placements when a location is out of the requested
+          # server type. Only that error moves on to the next location; the
+          # placement fails before the server exists, so nothing partial to
+          # keep. Any other failure stops here.
+          for location in nbg1 fsn1 hel1; do
+            pulumi config set serverLocation "$location" --stack staging
+            # A failed update (including a checkpoint write) must never turn green.
+            if pulumi up --yes --stack staging --non-interactive 2>&1 | tee "$RUNNER_TEMP/pulumi-up.log"; then
+              break
+            fi
+            if ! grep -q 'resource_unavailable' "$RUNNER_TEMP/pulumi-up.log"; then
+              exit 1
+            fi
+            echo "::warning::Hetzner has no capacity in $location; trying the next location"
+            if [[ "$location" == hel1 ]]; then
+              echo '::error::Hetzner has no capacity in every configured location'
+              exit 1
+            fi
+          done
           if ! awk '
             { gsub(/\033\[[0-9;]*m/, "") }
             /PLAY RECAP/ { recap = 1; hosts = 0; failed = 0; completed = 0; next }

@@ -75,6 +75,15 @@ if cmd == 'pulumi':
         if '--target' in args:
             print(opts.get('key_up_log', ''))
             sys.exit(opts.get('key_up_exit', 0))
+        # up_sequence answers successive full updates in order (capacity retries).
+        attempt = sum(1 for line in (root / 'calls.jsonl').read_text().splitlines()
+                      if json.loads(line)['cmd'] == 'pulumi' and json.loads(line)['args'][:1] == ['up']
+                      and '--target' not in json.loads(line)['args']) - 1
+        sequence = opts.get('up_sequence')
+        if sequence is not None:
+            if attempt >= len(sequence): sys.exit('Unexpected extra pulumi up')
+            print(sequence[attempt]['log'])
+            sys.exit(sequence[attempt]['exit'])
         print(opts.get('up_log', ''))
         sys.exit(opts.get('up_exit', 0))
     if args[:2] == ['stack', 'export']:
@@ -506,6 +515,24 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
                             (CLEAN_RECAP + 'PLAY RECAP **\n', 0)):
             with self.subTest(status=status, log=log):
                 self.assertNotEqual(self.run_step('Deploy staging infrastructure', up_log=log, up_exit=status).returncode, 0)
+
+    def test_capacity_errors_retry_at_the_next_location_only(self):
+        capacity = {'log': 'error during placement (resource_unavailable, abc)', 'exit': 255}
+        result = self.run_step('Deploy staging infrastructure', up_sequence=[capacity, {'log': CLEAN_RECAP, 'exit': 0}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        locations = [call['args'][3] for call in self.calls()
+                     if call['cmd'] == 'pulumi' and call['args'][:3] == ['config', 'set', 'serverLocation']]
+        self.assertEqual(locations, ['nbg1', 'fsn1'])
+        (self.root / 'calls.jsonl').unlink()
+        exhausted = self.run_step('Deploy staging infrastructure', up_sequence=[capacity, capacity, capacity])
+        self.assertNotEqual(exhausted.returncode, 0)
+        self.assertIn('every configured location', exhausted.stdout + exhausted.stderr)
+        other = {'log': 'error: update failed (fixture unrelated)', 'exit': 255}
+        (self.root / 'calls.jsonl').unlink()
+        result = self.run_step('Deploy staging infrastructure', up_sequence=[other, {'log': CLEAN_RECAP, 'exit': 0}])
+        self.assertNotEqual(result.returncode, 0)
+        ups = [call for call in self.calls() if call['cmd'] == 'pulumi' and call['args'][:1] == ['up']]
+        self.assertEqual(len(ups), 1, 'A non-capacity failure must not retry')
 
     def test_ansi_recaps_are_parsed_and_all_hosts_must_succeed(self):
         colored = CLEAN_RECAP.replace('server :', '\033[0;32mserver :').replace('skipped=7', '\033[0mskipped=7')

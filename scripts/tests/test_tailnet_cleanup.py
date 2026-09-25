@@ -81,9 +81,14 @@ class TailnetCleanupTests(unittest.TestCase):
         self.assertEqual([c['method'] for c in calls], ['POST', 'GET', 'DELETE', 'GET'])
 
     def test_an_already_absent_owned_node_needs_no_delete(self):
-        result, calls = self.run_cleaner(owned=True, devices=[OTHER])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(c['method'] == 'DELETE' for c in calls))
+        # A run whose deploy failed never proved a node (empty ID); it still
+        # has to confirm that no device carries its run name.
+        for node in ('nOwned', ''):
+            with self.subTest(node=node):
+                result, calls = self.run_cleaner(owned=True, node=node, devices=[OTHER])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(any(c['method'] == 'DELETE' for c in calls))
+                self.assertTrue(json.loads(result.stdout)['owned_node_absent'])
 
     def test_a_name_or_offline_timestamp_is_not_ownership(self):
         for node, devices in (('', [OWN]), ('nDifferent', [OWN]),
