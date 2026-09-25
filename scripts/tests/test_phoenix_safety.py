@@ -163,7 +163,7 @@ elif cmd == 'ansible-playbook':
     secret_files = [pathlib.Path(arg[1:]) for arg in args if arg.startswith('@')]
     if len(secret_files) != 1 or secret_files[0].stat().st_mode & 0o777 != 0o600:
         sys.exit('Provisioning secrets file is not private')
-    if args[0] != 'playbook.yml' or args[-2:] != ['--tags', 'agents,telegram']: sys.exit('Unexpected provisioning scope')
+    if args[0] != 'playbook.yml' or args[-2:] != ['--tags', 'config,agents,telegram']: sys.exit('Unexpected provisioning scope')
     assert os.environ['OPENCLAW_SSH_HOST'] == name + '.example.ts.net', 'Ansible did not receive the pinned host'
     known_hosts = pathlib.Path(os.environ['OPENCLAW_SSH_KNOWN_HOSTS'])
     assert known_hosts.stat().st_mode & 0o777 == 0o600

@@ -493,7 +493,9 @@ jobs:
           # The manual provisioner reads the selected stack. Pin it here rather
           # than inheriting CLI metadata; its staging-host guard checks the result.
           (cd pulumi && pulumi stack select staging --non-interactive)
-          ./scripts/provision.sh --tags agents,telegram | tee "$RUNNER_TEMP/scheduled-automation-idempotence.log" \
+          # config is included because it only converges if it neither drops the MCP
+          # adapter nor rewrites Claude CLI sessions (both happened on a live re-provision).
+          ./scripts/provision.sh --tags config,agents,telegram | tee "$RUNNER_TEMP/scheduled-automation-idempotence.log" \
             || die "Second scoped provisioning run failed"
           if ! awk '
             { gsub(/\033\[[0-9;]*m/, "") }

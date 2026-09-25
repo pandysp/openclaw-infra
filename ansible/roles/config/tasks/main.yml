@@ -193,11 +193,6 @@
       when: (xai_dropin is defined and xai_dropin.changed) or (xai_dropin_absent is defined and xai_dropin_absent.changed)
       notify: restart openclaw-gateway
 
-    - name: Check if MCP adapter plugin is installed
-      ansible.builtin.stat:
-        path: /home/ubuntu/.openclaw/extensions/openclaw-mcp-adapter/index.ts
-      register: mcp_adapter_installed
-
     - name: Configure gateway settings
       ansible.builtin.shell: |
         set -euo pipefail
@@ -284,7 +279,9 @@
 
         # Sandbox tool allowlist (all groups + plugins)
         {% set tool_allow = ["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"] %}
-        {% if openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
+        {# The adapter is policy when declared, installed or not: OpenClaw 2026.6 only #}
+        {# warns about an allowed plugin that is not installed yet (validation.ts). #}
+        {% if openclaw_mcp_adapter is defined %}
         {%   set _ = tool_allow.append("group:plugins") %}
         {%   set _ = tool_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
@@ -294,7 +291,7 @@
         {% if openclaw_tools_allow is defined %}
         check_set_json tools.allow '{{ openclaw_tools_allow | to_json }}'
         check_set_json tools.alsoAllow '[]'
-        {% elif openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
+        {% elif openclaw_mcp_adapter is defined %}
         check_set_json tools.alsoAllow '["group:plugins"]'
         {% endif %}
 
@@ -316,7 +313,7 @@
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("google") %}
         {% endif %}
-        {% if openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
+        {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
         {% if openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
@@ -652,6 +649,9 @@
     if "/" not in primary:
         raise ValueError(f"openclaw_model_primary must be provider/model format, got: {primary}")
     target_provider, target_model = primary.split("/", 1)
+    # Sessions record the runtime that ran them: with agentRuntime claude-cli the
+    # turns of the primary model are stored as provider "claude-cli", not a foreign one.
+    accepted_providers = set(filter(None, [target_provider, "{{ openclaw_agent_models[openclaw_model_primary].agentRuntime.id | default('') }}"]))
 
     changed_agents = []
     for sessions_file in sorted(glob.glob("/home/ubuntu/.openclaw/agents/*/sessions/sessions.json")):
@@ -667,7 +667,7 @@
                 continue
             current_provider = val.get("modelProvider", "")
             # Only migrate sessions pinned to a different provider
-            if current_provider and current_provider != target_provider:
+            if current_provider and current_provider not in accepted_providers:
                 val["modelProvider"] = target_provider
                 val["model"] = target_model
                 modified = True
