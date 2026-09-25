@@ -171,7 +171,8 @@ jobs:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
           GH_TOKEN: ${{ secrets.STAGING_GITHUB_TOKEN }}
-          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
           CLAUDE_SETUP_TOKEN: ${{ secrets.CLAUDE_SETUP_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.STAGING_TELEGRAM_BOT_TOKEN }}
           TELEGRAM_USER_ID: ${{ secrets.TELEGRAM_USER_ID }}
@@ -181,8 +182,8 @@ jobs:
           set -euo pipefail
           [[ "$PHOENIX_RESOURCE_NAME" =~ ^openclaw-staging-[0-9]+-[0-9]+$ ]]
           for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY PULUMI_BACKEND_URL \
-            PULUMI_CONFIG_PASSPHRASE HCLOUD_TOKEN GH_TOKEN TS_AUTHKEY CLAUDE_SETUP_TOKEN \
-            TELEGRAM_BOT_TOKEN TELEGRAM_USER_ID XAI_API_KEY GITHUB_TOKEN_PAT \
+            PULUMI_CONFIG_PASSPHRASE HCLOUD_TOKEN GH_TOKEN TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET \
+            CLAUDE_SETUP_TOKEN TELEGRAM_BOT_TOKEN TELEGRAM_USER_ID XAI_API_KEY GITHUB_TOKEN_PAT \
             STAGING_PRIVATE_REPOSITORY; do
             if [[ -z "${!key:-}" ]]; then
               echo "::error::Required Phoenix input $key is missing or empty"
@@ -206,6 +207,41 @@ jobs:
             echo '::error::Private repository did not reject anonymous access'
             exit 1
           }
+          # The server joins the tailnet with a key minted for this run only:
+          # single use, ephemeral (the device removes itself when offline),
+          # pre-authorized, tag:server, valid for one hour. A stored auth key
+          # expires after at most 90 days; this cannot. Credentials travel on
+          # stdin or in a private file, never in argv.
+          [[ "$TS_OAUTH_CLIENT_ID$TS_OAUTH_SECRET" =~ ^[A-Za-z0-9_-]+$ ]] || {
+            echo '::error::Tailscale OAuth credentials contain characters that need URL encoding'
+            exit 1
+          }
+          OAUTH_TOKEN=$(printf 'client_id=%s&client_secret=%s&grant_type=client_credentials' \
+              "$TS_OAUTH_CLIENT_ID" "$TS_OAUTH_SECRET" |
+            curl -q --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              --data @- https://api.tailscale.com/api/v2/oauth/token |
+            jq -er '.access_token | select(type == "string" and length > 0)') || {
+            echo '::error::Could not obtain a Tailscale OAuth token'
+            exit 1
+          }
+          AUTH_HEADER=$(umask 077 && mktemp "$RUNNER_TEMP/ts-auth-header.XXXXXX")
+          printf 'Authorization: Bearer %s\n' "$OAUTH_TOKEN" > "$AUTH_HEADER"
+          RUN_AUTHKEY=$(jq -cn --arg description "$PHOENIX_RESOURCE_NAME" '{
+              description: $description, expirySeconds: 3600,
+              capabilities: {devices: {create: {
+                reusable: false, ephemeral: true, preauthorized: true, tags: ["tag:server"]}}}}' |
+            curl -q --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              --header "@$AUTH_HEADER" --header 'Content-Type: application/json' \
+              --data @- https://api.tailscale.com/api/v2/tailnet/-/keys |
+            jq -er '.key | select(type == "string" and length > 0)') || {
+            rm -f "$AUTH_HEADER"
+            echo '::error::Could not mint a run-scoped Tailscale auth key (does the OAuth client own tag:server with auth_keys scope?)'
+            exit 1
+          }
+          rm -f "$AUTH_HEADER"
+          # No add-mask: the key goes to Pulumi as requireSecret config, which
+          # taints the derived user-data, and stack exports are only piped to jq.
+          # Step output must stay credential-free (the safety tests enforce it).
           cd pulumi
           # An existing stack belongs to an earlier run: never adopt or erase it.
           pulumi stack init staging --non-interactive
@@ -221,7 +257,7 @@ jobs:
 
           # Required secrets
           printf '%s' "$HCLOUD_TOKEN" | pulumi config set hcloud:token --secret --stack staging --non-interactive
-          printf '%s' "$TS_AUTHKEY" | pulumi config set tailscaleAuthKey --secret --stack staging --non-interactive
+          printf '%s' "$RUN_AUTHKEY" | pulumi config set tailscaleAuthKey --secret --stack staging --non-interactive
           printf '%s' "$CLAUDE_SETUP_TOKEN" | pulumi config set claudeSetupToken --secret --stack staging --non-interactive
 
           # Telegram

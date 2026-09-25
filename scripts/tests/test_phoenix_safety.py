@@ -26,7 +26,7 @@ BACKEND_ENV = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'PULUMI_BACKEND_URL
 # vault by agent ID, so a staging run would attach the public staging backup to
 # the real vault. Keep this list equal to the workflow's required-input loop.
 REQUIRED_INPUTS = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'PULUMI_BACKEND_URL',
-                   'PULUMI_CONFIG_PASSPHRASE', 'HCLOUD_TOKEN', 'GH_TOKEN', 'TS_AUTHKEY',
+                   'PULUMI_CONFIG_PASSPHRASE', 'HCLOUD_TOKEN', 'GH_TOKEN', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET',
                    'CLAUDE_SETUP_TOKEN', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_USER_ID',
                    'XAI_API_KEY', 'GITHUB_TOKEN_PAT', 'STAGING_PRIVATE_REPOSITORY')
 SECRET_CONFIG_KEYS = ('hcloud:token', 'tailscaleAuthKey', 'claudeSetupToken', 'telegramBotToken',
@@ -45,7 +45,7 @@ else:
     root = pathlib.Path(os.environ['FIXTURE_ROOT'])
     opts = json.loads(os.environ['FIXTURE_OPTIONS'])
     name = os.environ['PHOENIX_RESOURCE_NAME']
-stdin = sys.stdin.read() if (cmd == 'pulumi' and '--secret' in args) or (cmd == 'gh' and args[:3] == ['repo', 'deploy-key', 'add']) else ''
+stdin = sys.stdin.read() if (cmd == 'pulumi' and '--secret' in args) or (cmd == 'gh' and args[:3] == ['repo', 'deploy-key', 'add']) or (cmd == 'curl' and '@-' in args) else ''
 with (root / 'calls.jsonl').open('a') as f:
     f.write(json.dumps({'cmd': cmd, 'args': args, 'stdin': stdin}) + '\n')
 if any('fixture-' in arg for arg in args):
@@ -225,6 +225,24 @@ elif cmd == 'curl':
     if url.startswith('https://github.com/hetznercloud/cli/releases/download/'):
         (root / 'hcloud.tar.gz').write_text('fake release archive')
         sys.exit(opts.get('download_exit', 0))
+    if url == 'https://api.tailscale.com/api/v2/oauth/token':
+        # The OAuth client secret travels on stdin, never in argv.
+        assert '--fail' in args and '--max-time' in args, 'OAuth call must fail loudly and time out'
+        assert stdin == 'client_id=fixture-ts-client&client_secret=fixture-ts-secret&grant_type=client_credentials', stdin
+        print(opts.get('oauth_body', '{"access_token":"fixture-oauth-token"}'))
+        sys.exit(opts.get('oauth_exit', 0))
+    if url == 'https://api.tailscale.com/api/v2/tailnet/-/keys':
+        assert '--fail' in args and '--max-time' in args, 'Key minting must fail loudly and time out'
+        header_file = args[args.index('--header') + 1]
+        assert header_file.startswith('@'), 'Bearer token must come from a file'
+        header_path = pathlib.Path(header_file[1:])
+        assert header_path.stat().st_mode & 0o077 == 0, 'Bearer token file must be private'
+        assert header_path.read_text().strip() == 'Authorization: Bearer fixture-oauth-token'
+        body = json.loads(stdin)
+        assert body == {'description': name, 'expirySeconds': 3600, 'capabilities': {'devices': {'create': {
+            'reusable': False, 'ephemeral': True, 'preauthorized': True, 'tags': ['tag:server']}}}}, body
+        print(opts.get('mint_body', '{"key":"fixture-tskey-auth-minted"}'))
+        sys.exit(opts.get('mint_exit', 0))
     assert args[0] == '-q' and args[-1] == 'https://api.github.com/repos/pandysp/private-phoenix-probe'
     assert '--max-time' in args and '--connect-timeout' in args
     print(opts.get('anonymous_status', '404'), end='')
@@ -288,8 +306,10 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             'FIXTURE_ROOT': str(self.root), 'TELEGRAM_USER_ID': '123456', 'STAGING_HOST': HOST,
             'INVENTORY_SCRIPT': str(WORKFLOW.parents[2] / 'ansible/inventory/pulumi_inventory.py'),
         }
+        self.env['TS_OAUTH_CLIENT_ID'] = 'fixture-ts-client'
+        self.env['TS_OAUTH_SECRET'] = 'fixture-ts-secret'
         for name in REQUIRED_INPUTS:
-            if name not in ('TELEGRAM_USER_ID', 'STAGING_PRIVATE_REPOSITORY'):
+            if name not in ('TELEGRAM_USER_ID', 'STAGING_PRIVATE_REPOSITORY', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET'):
                 self.env[name] = 'fixture-' + name.lower()
         self.env['STAGING_PRIVATE_REPOSITORY'] = 'pandysp/private-phoenix-probe'
 
@@ -472,6 +492,22 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.assertTrue(all(call['stdin'].startswith('fixture-') for call in secret_calls))
         self.assertTrue(any(call['args'][:4] == ['config', 'set', 'serverName', NAME] for call in calls))
         self.assertNotIn('fixture-', json.dumps([call['args'] for call in calls]))
+        # The server joins with a key minted for this run only: ephemeral,
+        # single use, pre-authorized, tag:server, short-lived. No stored key can expire.
+        minted = [call for call in secret_calls if call['args'][2] == 'tailscaleAuthKey']
+        self.assertEqual([call['stdin'] for call in minted], ['fixture-tskey-auth-minted'])
+        self.assertNotIn('secrets.TS_AUTHKEY', json.dumps(self.workflow))
+
+    def test_auth_key_minting_failures_stop_before_stack_init(self):
+        for options in ({'oauth_exit': 22}, {'oauth_body': '{}'}, {'oauth_body': '{"access_token":""}'},
+                        {'oauth_body': 'not json'}, {'mint_exit': 22}, {'mint_body': '{}'},
+                        {'mint_body': '{"key":""}'}, {'mint_body': '{"key":7}'}):
+            with self.subTest(options=options):
+                result = self.run_step('Initialize Pulumi staging stack', **options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.root / 'output').exists())
+                self.assertFalse(any(call['cmd'] == 'pulumi' and call['args'][:2] == ['stack', 'init'] for call in self.calls()))
+                self.assertNotIn('fixture-', result.stdout + result.stderr)
 
     def test_private_fixture_must_be_supplied_and_validated_before_stack_init(self):
         self.assertEqual(self.workflow['env'].get('STAGING_PRIVATE_REPOSITORY'), '${{ vars.STAGING_PRIVATE_REPOSITORY }}')
