@@ -209,7 +209,7 @@ jobs:
           }
           # The server joins the tailnet with a key minted for this run only:
           # single use, ephemeral (the device removes itself when offline),
-          # pre-authorized, tag:server, valid for one hour. A stored auth key
+          # pre-authorized, tag:openclaw-staging, valid for one hour. A stored auth key
           # expires after at most 90 days; this cannot. Credentials travel on
           # stdin or in a private file, never in argv.
           [[ "$TS_OAUTH_CLIENT_ID$TS_OAUTH_SECRET" =~ ^[A-Za-z0-9_-]+$ ]] || {
@@ -230,7 +230,7 @@ jobs:
           jq -cn --arg description "$PHOENIX_RESOURCE_NAME" '{
               description: $description, expirySeconds: 3600,
               capabilities: {devices: {create: {
-                reusable: false, ephemeral: true, preauthorized: true, tags: ["tag:server"]}}}}' |
+                reusable: false, ephemeral: true, preauthorized: true, tags: ["tag:openclaw-staging"]}}}}' |
             curl -q --silent --show-error --connect-timeout 10 --max-time 30 \
               --header "@$AUTH_HEADER" --header 'Content-Type: application/json' \
               --data @- --output "$MINT_RESPONSE" https://api.tailscale.com/api/v2/tailnet/-/keys || {
@@ -241,7 +241,7 @@ jobs:
           rm -f "$AUTH_HEADER"
           # Surface only the API's own error message (it never contains a key).
           RUN_AUTHKEY=$(jq -er '.key | select(type == "string" and length > 0)' "$MINT_RESPONSE" 2>/dev/null) || {
-            echo "::error::Tailscale refused to mint a run-scoped auth key: $(jq -r '.message // "unexpected response"' "$MINT_RESPONSE" 2>/dev/null || echo 'unexpected response'). The OAuth client must own tag:server with the auth_keys scope."
+            echo "::error::Tailscale refused to mint a run-scoped auth key: $(jq -r '.message // "unexpected response"' "$MINT_RESPONSE" 2>/dev/null || echo 'unexpected response'). The tailnet policy must make tag:ci the owner of tag:openclaw-staging."
             rm -f "$MINT_RESPONSE"
             exit 1
           }
@@ -257,7 +257,7 @@ jobs:
           # Server config
           pulumi config set serverName "$PHOENIX_RESOURCE_NAME" --stack staging
           pulumi config set serverType cx43 --stack staging
-          pulumi config set tailscaleTags "tag:server" --stack staging
+          pulumi config set tailscaleTags "tag:openclaw-staging" --stack staging
 
           # Agent IDs (main is always present; "test" is the additional agent)
           pulumi config set agentIds "test" --stack staging

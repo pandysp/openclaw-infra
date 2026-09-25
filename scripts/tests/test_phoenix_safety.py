@@ -242,7 +242,7 @@ elif cmd == 'curl':
         assert header_path.read_text().strip() == 'Authorization: Bearer fixture-oauth-token'
         body = json.loads(stdin)
         assert body == {'description': name, 'expirySeconds': 3600, 'capabilities': {'devices': {'create': {
-            'reusable': False, 'ephemeral': True, 'preauthorized': True, 'tags': ['tag:server']}}}}, body
+            'reusable': False, 'ephemeral': True, 'preauthorized': True, 'tags': ['tag:openclaw-staging']}}}}, body
         output.write_text(opts.get('mint_body', '{"key":"fixture-tskey-auth-minted"}'))
         sys.exit(opts.get('mint_exit', 0))
     assert args[0] == '-q' and args[-1] == 'https://api.github.com/repos/pandysp/private-phoenix-probe'
@@ -493,6 +493,8 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.assertCountEqual([call['args'][2] for call in secret_calls], SECRET_CONFIG_KEYS)
         self.assertTrue(all(call['stdin'].startswith('fixture-') for call in secret_calls))
         self.assertTrue(any(call['args'][:4] == ['config', 'set', 'serverName', NAME] for call in calls))
+        # The server's tag is owned by tag:ci and has no source rights on the tailnet.
+        self.assertTrue(any(call['args'][:4] == ['config', 'set', 'tailscaleTags', 'tag:openclaw-staging'] for call in calls))
         self.assertNotIn('fixture-', json.dumps([call['args'] for call in calls]))
         # The server joins with a key minted for this run only: ephemeral,
         # single use, pre-authorized, tag:server, short-lived. No stored key can expire.
