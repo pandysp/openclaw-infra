@@ -226,19 +226,26 @@ jobs:
           }
           AUTH_HEADER=$(umask 077 && mktemp "$RUNNER_TEMP/ts-auth-header.XXXXXX")
           printf 'Authorization: Bearer %s\n' "$OAUTH_TOKEN" > "$AUTH_HEADER"
-          RUN_AUTHKEY=$(jq -cn --arg description "$PHOENIX_RESOURCE_NAME" '{
+          MINT_RESPONSE=$(umask 077 && mktemp "$RUNNER_TEMP/ts-mint-response.XXXXXX")
+          jq -cn --arg description "$PHOENIX_RESOURCE_NAME" '{
               description: $description, expirySeconds: 3600,
               capabilities: {devices: {create: {
                 reusable: false, ephemeral: true, preauthorized: true, tags: ["tag:server"]}}}}' |
-            curl -q --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            curl -q --silent --show-error --connect-timeout 10 --max-time 30 \
               --header "@$AUTH_HEADER" --header 'Content-Type: application/json' \
-              --data @- https://api.tailscale.com/api/v2/tailnet/-/keys |
-            jq -er '.key | select(type == "string" and length > 0)') || {
-            rm -f "$AUTH_HEADER"
-            echo '::error::Could not mint a run-scoped Tailscale auth key (does the OAuth client own tag:server with auth_keys scope?)'
+              --data @- --output "$MINT_RESPONSE" https://api.tailscale.com/api/v2/tailnet/-/keys || {
+            rm -f "$AUTH_HEADER" "$MINT_RESPONSE"
+            echo '::error::Could not reach the Tailscale API to mint a run-scoped auth key'
             exit 1
           }
           rm -f "$AUTH_HEADER"
+          # Surface only the API's own error message (it never contains a key).
+          RUN_AUTHKEY=$(jq -er '.key | select(type == "string" and length > 0)' "$MINT_RESPONSE" 2>/dev/null) || {
+            echo "::error::Tailscale refused to mint a run-scoped auth key: $(jq -r '.message // "unexpected response"' "$MINT_RESPONSE" 2>/dev/null || echo 'unexpected response'). The OAuth client must own tag:server with the auth_keys scope."
+            rm -f "$MINT_RESPONSE"
+            exit 1
+          }
+          rm -f "$MINT_RESPONSE"
           # No add-mask: the key goes to Pulumi as requireSecret config, which
           # taints the derived user-data, and stack exports are only piped to jq.
           # Step output must stay credential-free (the safety tests enforce it).

@@ -232,7 +232,9 @@ elif cmd == 'curl':
         print(opts.get('oauth_body', '{"access_token":"fixture-oauth-token"}'))
         sys.exit(opts.get('oauth_exit', 0))
     if url == 'https://api.tailscale.com/api/v2/tailnet/-/keys':
-        assert '--fail' in args and '--max-time' in args, 'Key minting must fail loudly and time out'
+        assert '--max-time' in args, 'Key minting must time out'
+        output = pathlib.Path(args[args.index('--output') + 1])
+        assert output.stat().st_mode & 0o077 == 0, 'Mint response file must be private'
         header_file = args[args.index('--header') + 1]
         assert header_file.startswith('@'), 'Bearer token must come from a file'
         header_path = pathlib.Path(header_file[1:])
@@ -241,7 +243,7 @@ elif cmd == 'curl':
         body = json.loads(stdin)
         assert body == {'description': name, 'expirySeconds': 3600, 'capabilities': {'devices': {'create': {
             'reusable': False, 'ephemeral': True, 'preauthorized': True, 'tags': ['tag:server']}}}}, body
-        print(opts.get('mint_body', '{"key":"fixture-tskey-auth-minted"}'))
+        output.write_text(opts.get('mint_body', '{"key":"fixture-tskey-auth-minted"}'))
         sys.exit(opts.get('mint_exit', 0))
     assert args[0] == '-q' and args[-1] == 'https://api.github.com/repos/pandysp/private-phoenix-probe'
     assert '--max-time' in args and '--connect-timeout' in args
@@ -500,11 +502,14 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 
     def test_auth_key_minting_failures_stop_before_stack_init(self):
         for options in ({'oauth_exit': 22}, {'oauth_body': '{}'}, {'oauth_body': '{"access_token":""}'},
-                        {'oauth_body': 'not json'}, {'mint_exit': 22}, {'mint_body': '{}'},
-                        {'mint_body': '{"key":""}'}, {'mint_body': '{"key":7}'}):
+                        {'oauth_body': 'not json'}, {'mint_exit': 7}, {'mint_body': '{}'},
+                        {'mint_body': '{"key":""}'}, {'mint_body': '{"key":7}'}, {'mint_body': 'not json'},
+                        {'mint_body': '{"message":"requested tags [tag:server] are invalid or not permitted"}'}):
             with self.subTest(options=options):
                 result = self.run_step('Initialize Pulumi staging stack', **options)
                 self.assertNotEqual(result.returncode, 0)
+                if 'message' in options.get('mint_body', ''):
+                    self.assertIn('not permitted', result.stdout)
                 self.assertFalse((self.root / 'output').exists())
                 self.assertFalse(any(call['cmd'] == 'pulumi' and call['args'][:2] == ['stack', 'init'] for call in self.calls()))
                 self.assertNotIn('fixture-', result.stdout + result.stderr)
