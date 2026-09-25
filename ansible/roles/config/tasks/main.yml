@@ -675,12 +675,14 @@
             continue
 
         modified = False
+        old_providers = set()
         for key, val in data.items():
             if not isinstance(val, dict):
                 continue
             current_provider = val.get("modelProvider", "")
             # Only migrate sessions pinned to a different provider
             if current_provider and current_provider not in accepted_providers:
+                old_providers.add(current_provider)
                 val["modelProvider"] = target_provider
                 val["model"] = target_model
                 modified = True
@@ -689,15 +691,21 @@
             with open(sessions_file, "w") as f:
                 json.dump(data, f, indent=2)
             agent = sessions_file.split("/agents/")[1].split("/")[0]
-            changed_agents.append(agent)
+            changed_agents.append(agent + " (" + ", ".join(sorted(old_providers)) + ")")
 
+    # Agent and old provider names only (never session content).
     if changed_agents:
-        print("CHANGED: " + ", ".join(changed_agents))
+        print("MIGRATED: " + "; ".join(changed_agents))
     else:
         print("OK")
     PYEOF
   args:
     executable: /bin/bash
   register: session_migration_result
-  changed_when: "'CHANGED:' in session_migration_result.stdout"
+  changed_when: "'MIGRATED:' in session_migration_result.stdout"
   notify: restart openclaw-gateway
+
+- name: Show which sessions were moved to the primary model
+  ansible.builtin.debug:
+    msg: "{{ session_migration_result.stdout_lines | select('match', '^MIGRATED:') | list }}"
+  when: session_migration_result is changed

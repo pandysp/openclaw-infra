@@ -20,6 +20,7 @@ TASKS = ROOT / 'ansible/roles/config/tasks/main.yml'
 CONFIGURE = 'Configure gateway settings'
 TEMP_FILES = 'Write secrets and config to temp files'
 REPORT = 'Show which gateway settings were updated'
+MIGRATE_REPORT = 'Show which sessions were moved to the primary model'
 MIGRATE = 'Migrate session model provider to match primary model'
 FAKE_OPENCLAW = '''#!/usr/bin/env python3
 # A stateful stand-in for the OpenClaw config CLI: get/set/unset on a JSON
@@ -84,7 +85,8 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         cls.configure = find_task(tasks, CONFIGURE)
         cls.report = find_task(tasks, REPORT)
         cls.migrate = find_task(tasks, MIGRATE)
-        assert cls.temp_files and cls.configure and cls.report and cls.migrate, 'Config role tasks moved'
+        cls.migrate_report = find_task(tasks, MIGRATE_REPORT)
+        assert cls.temp_files and cls.configure and cls.report and cls.migrate and cls.migrate_report, 'Config role tasks moved'
 
     def run_task(self, tasks, root, extra_vars=None):
         (root / 'bin').mkdir(exist_ok=True)
@@ -176,16 +178,18 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 'foreign': {'modelProvider': 'openai', 'model': 'gpt-5'},
             }
             sessions.write_text(json.dumps(original))
-            result = self.run_task([self.migrate], root)
+            result = self.run_task([self.migrate, self.migrate_report], root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             migrated = json.loads(sessions.read_text())
             primary_provider, primary_model = self.defaults['openclaw_model_primary'].split('/', 1)
             self.assertEqual(migrated['runtime'], original['runtime'])
             self.assertEqual(migrated['canonical'], original['canonical'])
             self.assertEqual(migrated['foreign'], {'modelProvider': primary_provider, 'model': primary_model})
-            self.assertRegex(result.stdout, r'localhost\s+: ok=1\s+changed=1 ')
+            self.assertRegex(result.stdout, r'localhost\s+: ok=2\s+changed=1 ')
+            # The run names what it moved (agent and old provider), never content.
+            self.assertIn('MIGRATED: main (openai)', result.stdout)
             # A second pass has nothing left to migrate.
-            result = self.run_task([self.migrate], root)
+            result = self.run_task([self.migrate, self.migrate_report], root)
             self.assertRegex(result.stdout, r'localhost\s+: ok=1\s+changed=0 ')
 
 
