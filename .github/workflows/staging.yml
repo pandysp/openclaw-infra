@@ -138,15 +138,18 @@ jobs:
               deliver_type: "dm"
               deliver_channel: "telegram"
 
+          # OpenClaw rejects schedules with no next run (e.g. 30 February), so
+          # the fixtures use a real but rare minute: 29 February 04:00, next in
+          # 2028. They exist to be reconciled, not to fire during a run.
           openclaw_cron_jobs:
             - name: "main: Staging Test Cron"
               agent: "main"
-              schedule: "0 0 30 2 *"
-              message: "Staging test cron — this should never fire."
+              schedule: "0 4 29 2 *"
+              message: "Staging test cron. Must not fire during a Phoenix run."
             - name: "test: Staging Test Cron"
               agent: "test"
-              schedule: "0 0 30 2 *"
-              message: "Staging test cron — this should never fire."
+              schedule: "0 4 29 2 *"
+              message: "Staging test cron. Must not fire during a Phoenix run."
 
           # All MCP server types except node-exec
           openclaw_mcp_server_types:
