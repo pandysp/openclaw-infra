@@ -266,7 +266,6 @@ jobs:
 
           # Server config
           pulumi config set serverName "$PHOENIX_RESOURCE_NAME" --stack staging
-          pulumi config set serverType cx43 --stack staging
           pulumi config set tailscaleTags "$PHOENIX_TAILSCALE_TAG" --stack staging
 
           # Agent IDs (main is always present; "test" is the additional agent)
@@ -357,24 +356,28 @@ jobs:
           set -euo pipefail
           cd pulumi
           # Hetzner rejects placements when a location is out of the requested
-          # server type. Only that error moves on to the next location; the
-          # placement fails before the server exists, so nothing partial to
-          # keep. Any other failure stops here.
-          for location in nbg1 fsn1 hel1; do
-            pulumi config set serverLocation "$location" --stack staging
+          # server type (CX43 was sold out everywhere on 2026-09-25). Only that
+          # error moves on: production's type in every location first, then the
+          # same-class CPX42 (8 vCPU, 16 GB, x86). The placement fails before the
+          # server exists, so nothing partial to keep. Any other failure stops here.
+          deployed=false
+          for placement in cx43:nbg1 cx43:fsn1 cx43:hel1 cpx42:nbg1 cpx42:fsn1 cpx42:hel1; do
+            pulumi config set serverType "${placement%%:*}" --stack staging
+            pulumi config set serverLocation "${placement#*:}" --stack staging
             # A failed update (including a checkpoint write) must never turn green.
             if pulumi up --yes --stack staging --non-interactive 2>&1 | tee "$RUNNER_TEMP/pulumi-up.log"; then
+              deployed=true
               break
             fi
             if ! grep -q 'resource_unavailable' "$RUNNER_TEMP/pulumi-up.log"; then
               exit 1
             fi
-            echo "::warning::Hetzner has no capacity in $location; trying the next location"
-            if [[ "$location" == hel1 ]]; then
-              echo '::error::Hetzner has no capacity in every configured location'
-              exit 1
-            fi
+            echo "::warning::Hetzner has no ${placement%%:*} capacity in ${placement#*:}; trying the next placement"
           done
+          if [[ "$deployed" != true ]]; then
+            echo '::error::Hetzner has no capacity for every configured server type and location'
+            exit 1
+          fi
           if ! awk '
             { gsub(/\033\[[0-9;]*m/, "") }
             /PLAY RECAP/ { recap = 1; hosts = 0; failed = 0; completed = 0; next }

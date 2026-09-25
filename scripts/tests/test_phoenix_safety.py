@@ -577,13 +577,21 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         capacity = {'log': 'error during placement (resource_unavailable, abc)', 'exit': 255}
         result = self.run_step('Deploy staging infrastructure', up_sequence=[capacity, {'log': CLEAN_RECAP, 'exit': 0}])
         self.assertEqual(result.returncode, 0, result.stderr)
-        locations = [call['args'][3] for call in self.calls()
-                     if call['cmd'] == 'pulumi' and call['args'][:3] == ['config', 'set', 'serverLocation']]
-        self.assertEqual(locations, ['nbg1', 'fsn1'])
+        placements = [call['args'][3] for call in self.calls() if call['cmd'] == 'pulumi'
+                      and call['args'][:3] in (['config', 'set', 'serverType'], ['config', 'set', 'serverLocation'])]
+        self.assertEqual(placements, ['cx43', 'nbg1', 'cx43', 'fsn1'])
+        # Production's type first everywhere, then the equivalent second-choice type.
         (self.root / 'calls.jsonl').unlink()
-        exhausted = self.run_step('Deploy staging infrastructure', up_sequence=[capacity, capacity, capacity])
+        result = self.run_step('Deploy staging infrastructure',
+                               up_sequence=[capacity] * 3 + [{'log': CLEAN_RECAP, 'exit': 0}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        placements = [call['args'][3] for call in self.calls() if call['cmd'] == 'pulumi'
+                      and call['args'][:3] in (['config', 'set', 'serverType'], ['config', 'set', 'serverLocation'])]
+        self.assertEqual(placements[-2:], ['cpx42', 'nbg1'])
+        (self.root / 'calls.jsonl').unlink()
+        exhausted = self.run_step('Deploy staging infrastructure', up_sequence=[capacity] * 6)
         self.assertNotEqual(exhausted.returncode, 0)
-        self.assertIn('every configured location', exhausted.stdout + exhausted.stderr)
+        self.assertIn('every configured server type and location', exhausted.stdout + exhausted.stderr)
         other = {'log': 'error: update failed (fixture unrelated)', 'exit': 255}
         (self.root / 'calls.jsonl').unlink()
         result = self.run_step('Deploy staging infrastructure', up_sequence=[other, {'log': CLEAN_RECAP, 'exit': 0}])
