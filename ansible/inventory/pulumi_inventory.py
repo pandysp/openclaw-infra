@@ -1,128 +1,56 @@
 #!/usr/bin/env python3
-"""Dynamic Ansible inventory that reads the Tailscale hostname from Pulumi
-and resolves it to a Tailscale IP via `tailscale status --json`.
+"""Consume the exact peer and authenticated host keys prepared by provision.sh."""
 
-Falls back to MagicDNS FQDN if the IP cannot be resolved.
-"""
-
+import argparse
 import json
 import os
-import subprocess
+from pathlib import Path
+import re
+import shlex
+import stat
 import sys
 
 
-def run(cmd):
-    """Run a command and return stdout, or None on failure.
-
-    Logs errors to stderr with the failed command and error details.
-    """
-    cmd_str = " ".join(cmd)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        stderr_msg = e.stderr.strip() if e.stderr else "(no stderr)"
-        print(f"Inventory error: '{cmd_str}' failed (exit {e.returncode}): {stderr_msg}", file=sys.stderr)
-        return None
-    except subprocess.TimeoutExpired:
-        print(f"Inventory error: '{cmd_str}' timed out after 15s", file=sys.stderr)
-        return None
-    except FileNotFoundError:
-        print(f"Inventory error: {cmd[0]} not found (FileNotFoundError). Is {cmd[0]} installed and on PATH?", file=sys.stderr)
-        return None
-
-
-def get_tailscale_hostname():
-    """Read tailscaleHostname from Pulumi stack output."""
-    raw = run(["pulumi", "stack", "output", "tailscaleHostname", "-C", os.path.join(os.path.dirname(__file__), "..", "..", "pulumi")])
-    if raw:
-        return raw.strip().strip('"')
-    return None
-
-
-def resolve_tailscale_ip(hostname):
-    """Resolve a Tailscale hostname to its IP via `tailscale status --json`."""
-    raw = run(["tailscale", "status", "--json"])
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-        for peer in (data.get("Peer") or {}).values():
-            if peer.get("HostName", "").lower() == hostname.lower():
-                addrs = peer.get("TailscaleIPs", [])
-                # Prefer IPv4
-                for addr in addrs:
-                    if "." in addr:
-                        return addr
-                if addrs:
-                    return addrs[0]
-    except (json.JSONDecodeError, KeyError):
-        pass
-    return None
-
-
-def get_magic_dns_suffix():
-    """Get the MagicDNS suffix from tailscale status."""
-    raw = run(["tailscale", "status", "--json"])
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-        suffix = data.get("MagicDNSSuffix", "")
-        if suffix:
-            return suffix
-    except (json.JSONDecodeError, KeyError):
-        pass
-    return None
-
-
 def main():
-    if len(sys.argv) == 2 and sys.argv[1] == "--list":
-        # Use pre-resolved host from provision.sh if available.
-        # Skip the Pulumi lookup entirely — it fails mid-`pulumi up`
-        # (stack outputs aren't committed yet) and is unnecessary.
-        override = os.environ.get("OPENCLAW_SSH_HOST", "")
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--list', action='store_true')
+    mode.add_argument('--host')
+    args = parser.parse_args()
+    if args.host:
+        print('{}')
+        return
 
-        if override:
-            ansible_host = override
-        else:
-            hostname = get_tailscale_hostname()
-            if not hostname:
-                print(json.dumps({"_meta": {"hostvars": {}}}))
-                return
-            # Try to resolve to Tailscale IP
-            ip = resolve_tailscale_ip(hostname)
+    host = os.environ.get('OPENCLAW_SSH_HOST', '')
+    keys = os.environ.get('OPENCLAW_SSH_KNOWN_HOSTS', '')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*', host) or not keys:
+        sys.exit('Inventory error: run scripts/provision.sh to resolve the host and authenticated SSH keys')
+    path = Path(keys)
+    try:
+        info = path.lstat()
+        valid = stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600
+        lines = path.read_text().splitlines() if valid else []
+    except OSError:
+        sys.exit('Inventory error: authenticated SSH host-key file is unreadable')
+    if not lines or not all(re.fullmatch(re.escape(host) + r' (ssh-ed25519|ssh-rsa|ecdsa-sha2-[A-Za-z0-9-]+) [A-Za-z0-9+/=]+', line) for line in lines):
+        sys.exit('Inventory error: expected a private host-key file containing only the resolved peer')
 
-            if ip:
-                ansible_host = ip
-            else:
-                # Fallback to MagicDNS FQDN
-                suffix = get_magic_dns_suffix()
-                if suffix:
-                    ansible_host = f"{hostname}.{suffix}"
-                else:
-                    ansible_host = hostname
-
-        inventory = {
-            "openclaw": {
-                "hosts": [ansible_host],
-            },
-            "_meta": {
-                "hostvars": {
-                    ansible_host: {
-                        "ansible_user": "ubuntu",
-                        "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null",
-                    }
-                }
-            },
-        }
-        print(json.dumps(inventory, indent=2))
-
-    elif len(sys.argv) == 2 and sys.argv[1] == "--host":
-        print(json.dumps({}))
-    else:
-        print(json.dumps({"_meta": {"hostvars": {}}}))
+    # The filename crosses both shell splitting and OpenSSH's option parser.
+    ssh_args = '-o StrictHostKeyChecking=yes -o ' + shlex.quote(
+        'UserKnownHostsFile=' + json.dumps(str(path), ensure_ascii=False))
+    ssh_args += ' -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no'
+    ssh_args += ' -o ProxyCommand=' + shlex.quote('tailscale nc %h %p')
+    print(json.dumps({
+        'openclaw': {'hosts': [host]},
+        '_meta': {'hostvars': {host: {
+            'ansible_user': 'ubuntu',
+            'ansible_host_key_checking': True,
+            'ansible_ssh_common_args': ssh_args,
+            # Never reuse a connection authenticated under a different policy.
+            'ansible_ssh_args': '-o ControlMaster=no -o ControlPath=none',
+        }}},
+    }, indent=2))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -22,6 +22,112 @@
 
   pre_tasks:
 
+    # Scheduled automation is intentionally opt-in. Validate the entire policy
+    # before any role can create agents or mutate heartbeat/cron state.
+    - name: Validate OpenClaw scheduler contract version
+      ansible.builtin.assert:
+        that:
+          - openclaw_docs_reviewed_version | default('') == openclaw_version
+          - (openclaw_scheduled_automation_default | type_debug) == 'bool'
+        fail_msg: >-
+          Scheduler contract review {{ openclaw_docs_reviewed_version | default('missing') }}
+          does not match the OpenClaw pin {{ openclaw_version }}, or
+          openclaw_scheduled_automation_default is not a boolean. Review the
+          pinned heartbeat and cron contracts in docs/DOCS-REVIEW.md before provisioning.
+      tags: [always]
+
+    - name: Validate scheduled automation collection shapes
+      ansible.builtin.assert:
+        that:
+          - (openclaw_agents | type_debug) == 'list'
+          - (openclaw_cron_jobs | type_debug) == 'list'
+        fail_msg: openclaw_agents and openclaw_cron_jobs must both be lists.
+      tags: [always]
+
+    - name: Validate agent object shapes
+      ansible.builtin.assert:
+        that:
+          - (item | type_debug) == 'dict'
+          - item.id is defined
+          - item.is_default is defined
+        fail_msg: Every openclaw_agents entry must be an object with id and is_default fields.
+      loop: "{{ openclaw_agents }}"
+      loop_control:
+        label: "{{ item.id | default('(missing id)') if (item | type_debug) == 'dict' else '(non-object)' }}"
+      tags: [always]
+
+    - name: Validate agent identity and default selection
+      ansible.builtin.assert:
+        that:
+          - openclaw_agents | length > 0
+          - (openclaw_agents | map(attribute='id') | list | unique | length) == (openclaw_agents | length)
+          - openclaw_agents | selectattr('is_default', 'defined') | selectattr('is_default', 'equalto', true) | list | length == 1
+        fail_msg: >-
+          openclaw_agents must contain unique IDs and exactly one is_default=true agent.
+      tags: [always]
+
+    - name: Validate scheduled automation agent fields
+      ansible.builtin.assert:
+        that:
+          - (item.id | type_debug) == 'str'
+          - item.id | length > 0
+          - ((item.scheduled_automation_enabled | default(openclaw_scheduled_automation_default)) | type_debug) == 'bool'
+          - not (item.scheduled_automation_enabled | default(openclaw_scheduled_automation_default)) or (item.deliver_to | default('') | string | length > 0)
+        fail_msg: >-
+          Agent '{{ item.id | default('(missing id)') }}' has invalid scheduled
+          automation settings. The switch must be a boolean, and enabled agents
+          need a delivery target.
+      loop: "{{ openclaw_agents }}"
+      loop_control:
+        label: "{{ item.id | default('(missing id)') }}"
+      tags: [always]
+
+    - name: Validate cron job object shapes
+      ansible.builtin.assert:
+        that:
+          - (item | type_debug) == 'dict'
+          - item.name is defined
+          - item.agent is defined
+        fail_msg: Every openclaw_cron_jobs entry must be an object with name and agent fields.
+      loop: "{{ openclaw_cron_jobs }}"
+      loop_control:
+        label: "{{ item.name | default('(missing name)') if (item | type_debug) == 'dict' else '(non-object)' }}"
+      tags: [always]
+
+    - name: Validate cron job identity
+      ansible.builtin.assert:
+        that:
+          - (openclaw_cron_jobs | map(attribute='name') | list | unique | length) == (openclaw_cron_jobs | length)
+        fail_msg: >-
+          openclaw_cron_jobs names must be globally unique; duplicate names make
+          live job identity and history ambiguous.
+      tags: [always]
+
+    - name: Validate cron job fields
+      ansible.builtin.assert:
+        that:
+          - (item.name | type_debug) == 'str'
+          - item.name | length > 0
+          - item.agent in (openclaw_agents | map(attribute='id') | list)
+          - (item.state | default('present')) in ['present', 'absent']
+          - ((item.enabled | default(true)) | type_debug) == 'bool'
+          - (item.state | default('present')) == 'absent' or (item.schedule is defined and item.schedule | string | length > 0)
+          - (item.state | default('present')) == 'absent' or (item.message is defined and (item.message | type_debug) == 'str')
+        fail_msg: >-
+          Cron job '{{ item.name | default('(missing name)') }}' has invalid
+          state, agent, enabled, schedule, or message fields.
+      loop: "{{ openclaw_cron_jobs }}"
+      loop_control:
+        label: "{{ item.name | default('(missing name)') }}"
+      tags: [always]
+
+    - name: Derive scheduled automation policy by agent
+      ansible.builtin.set_fact:
+        _openclaw_scheduled_automation_by_agent: >-
+          {{ dict(openclaw_agents | map(attribute='id') | zip(
+             openclaw_agents | map(attribute='scheduled_automation_enabled', default=openclaw_scheduled_automation_default))) }}
+      tags: [always]
+
     # --- Derived config: auto-generate from openclaw_agents × openclaw_mcp_server_types ---
     # These computed variables (_openclaw_*) replace the manual per-agent lists that were
     # previously in all.yml. Override by defining openclaw_mcp_servers or openclaw_workspaces
@@ -58,22 +164,30 @@
       tags: [always]
 
     # Workspaces: one per agent with mechanical naming
+    - name: Initialize workspace metadata
+      ansible.builtin.set_fact:
+        _openclaw_workspaces: []
+      tags: [always]
+
     - name: Use manually defined workspaces (override)
       ansible.builtin.set_fact:
-        _openclaw_workspaces: "{{ openclaw_workspaces }}"
+        _openclaw_workspaces: >-
+          {{ _openclaw_workspaces + [item | dict2items | rejectattr('key', 'eq', 'deploy_key') | items2dict] }}
+      loop: "{{ openclaw_workspaces | default([]) }}"
+      no_log: true
       when: openclaw_workspaces is defined
       tags: [always]
 
     - name: Auto-generate workspaces from agents
       ansible.builtin.set_fact:
-        _openclaw_workspaces: "{{ (_openclaw_workspaces | default([])) + [_entry] }}"
+        _openclaw_workspaces: "{{ _openclaw_workspaces + [_entry] }}"
       vars:
         _repo_var: "{{ 'workspace_repo_url' if item.id == 'main' else 'workspace_' ~ item.id ~ '_repo_url' }}"
         _key_var: "{{ 'workspace_deploy_key' if item.id == 'main' else 'workspace_' ~ item.id ~ '_deploy_key' }}"
         _entry:
           agent_id: "{{ item.id }}"
           repo_url: "{{ lookup('vars', _repo_var, default='') }}"
-          deploy_key: "{{ lookup('vars', _key_var, default='') }}"
+          deploy_key_var: "{{ _key_var }}"
           workspace_dir: "{{ '/home/ubuntu/.openclaw/workspace' if item.id == 'main' else '/home/ubuntu/.openclaw/workspace-' ~ item.id }}"
           ssh_alias: "github-workspace-{{ item.id }}"
           key_file: "{{ 'workspace-deploy-key' if item.id == 'main' else 'workspace-deploy-key-' ~ item.id }}"
@@ -159,6 +273,10 @@
     - { role: system,    tags: [system],    become: true }
     - { role: docker,    tags: [docker],    become: true }
     - { role: ufw,       tags: [ufw],       become: true }
+    # Restore fresh workspaces before onboarding and agent services create files.
+    - role: workspace
+      tags: [workspace]
+      when: _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list | length > 0
     - { role: openclaw,  tags: [openclaw] }
     - { role: config,    tags: [config] }
     - role: agents
@@ -188,9 +306,6 @@
     # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
-    - role: workspace
-      tags: [workspace]
-      when: _openclaw_workspaces | selectattr('repo_url', 'ne', '') | selectattr('deploy_key', 'ne', '') | list | length > 0
 
   post_tasks:
     # Workaround for openclaw/openclaw#6070: `openclaw config set` strips nested
@@ -198,87 +313,91 @@
     # on subsequent writes. Inject these keys directly into the JSON file AFTER all
     # roles have finished their `openclaw config set` calls, so nothing can strip them.
     # Runs before handlers (which restart the gateway).
-    - name: Write sensitive keys to temp file for JSON injection
-      ansible.builtin.copy:
-        content: "{{ _sensitive_keys | to_json }}"
-        dest: /tmp/ansible-sensitive-keys.json
-        mode: "0600"
-      vars:
-        _sensitive_keys:
-          - path: ["plugins", "entries", "xai", "config", "webSearch", "apiKey"]
-            value: "{{ xai_api_key | default('') }}"
-            hash_name: "xai-api-key"
-          - path: ["channels", "discord", "token"]
-            value: "{{ discord_bot_token | default('') }}"
-            hash_name: "discord-bot-token"
-      no_log: true
-      changed_when: false
-      tags: [config, discord]
+    - name: Preserve sensitive nested config keys
+      block:
+        - name: Write sensitive keys to temp file for JSON injection
+          ansible.builtin.copy:
+            content: "{{ _sensitive_keys | to_json }}"
+            dest: /tmp/ansible-sensitive-keys.json
+            mode: "0600"
+          vars:
+            _sensitive_keys:
+              - path: ["plugins", "entries", "xai", "config", "webSearch", "apiKey"]
+                value: "{{ xai_api_key | default('') }}"
+                hash_name: "xai-api-key"
+              - path: ["channels", "discord", "token"]
+                value: "{{ discord_bot_token | default('') }}"
+                hash_name: "discord-bot-token"
+          no_log: true
+          changed_when: false
 
-    - name: Inject sensitive nested keys into config JSON (openclaw#6070 workaround)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        python3 << 'PYEOF'
-        import json, hashlib, os
+        - name: Inject sensitive nested keys into config JSON (openclaw#6070 workaround)
+          ansible.builtin.shell: |
+            set -euo pipefail
+            python3 << 'PYEOF'
+            import json, hashlib, os
 
-        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
-        hash_dir = os.path.expanduser("~/.openclaw/.ansible-hashes")
-        keys_path = "/tmp/ansible-sensitive-keys.json"
-        os.makedirs(hash_dir, exist_ok=True)
+            config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+            hash_dir = os.path.expanduser("~/.openclaw/.ansible-hashes")
+            keys_path = "/tmp/ansible-sensitive-keys.json"
+            os.makedirs(hash_dir, exist_ok=True)
 
-        d = json.load(open(config_path))
-        keys = json.load(open(keys_path))
-        changed = []
+            d = json.load(open(config_path))
+            keys = json.load(open(keys_path))
+            changed = []
 
-        for entry in keys:
-            value = entry["value"]
-            if not value:
-                continue
-            path_parts = entry["path"]
-            hash_name = entry["hash_name"]
+            for entry in keys:
+                value = entry["value"]
+                if not value:
+                    continue
+                path_parts = entry["path"]
+                hash_name = entry["hash_name"]
 
-            obj = d
-            for part in path_parts[:-1]:
-                obj = obj.setdefault(part, {})
-            leaf = path_parts[-1]
+                obj = d
+                for part in path_parts[:-1]:
+                    obj = obj.setdefault(part, {})
+                leaf = path_parts[-1]
 
-            desired_hash = hashlib.sha256(value.encode()).hexdigest()
-            hash_path = os.path.join(hash_dir, hash_name)
-            try:
-                current_hash = open(hash_path).read().strip()
-            except FileNotFoundError:
-                current_hash = ""
+                desired_hash = hashlib.sha256(value.encode()).hexdigest()
+                hash_path = os.path.join(hash_dir, hash_name)
+                try:
+                    current_hash = open(hash_path).read().strip()
+                except FileNotFoundError:
+                    current_hash = ""
 
-            if obj.get(leaf, "") == value and desired_hash == current_hash:
-                continue
+                if obj.get(leaf, "") == value and desired_hash == current_hash:
+                    continue
 
-            obj[leaf] = value
-            with open(hash_path, "w") as f:
-                f.write(desired_hash + "\n")
-            changed.append(".".join(path_parts))
+                obj[leaf] = value
+                with open(hash_path, "w") as f:
+                    f.write(desired_hash + "\n")
+                changed.append(".".join(path_parts))
 
-        if changed:
-            with open(config_path, "w") as f:
-                json.dump(d, f, indent=2)
-                f.write("\n")
-            print("INJECTED: " + ", ".join(changed))
-        else:
-            print("OK")
-        PYEOF
-      args:
-        executable: /bin/bash
-      no_log: true
-      register: sensitive_inject
-      changed_when: "'INJECTED' in sensitive_inject.stdout"
-      notify: restart openclaw-gateway
-      tags: [config, discord]
-
-    - name: Clean up sensitive keys temp file
-      ansible.builtin.file:
-        path: /tmp/ansible-sensitive-keys.json
-        state: absent
-      changed_when: false
-      tags: [config, discord]
+            if changed:
+                with open(config_path, "w") as f:
+                    json.dump(d, f, indent=2)
+                    f.write("\n")
+                print("INJECTED: " + ", ".join(changed))
+            else:
+                print("OK")
+            PYEOF
+          args:
+            executable: /bin/bash
+          no_log: true
+          register: sensitive_inject
+          changed_when: "'INJECTED' in sensitive_inject.stdout"
+          notify: restart openclaw-gateway
+      rescue:
+        - name: Report sensitive-key injection failure
+          ansible.builtin.fail:
+            msg: Sensitive-key injection failed. Check openclaw.json and file permissions; private diagnostics are withheld.
+      always:
+        - name: Clean up sensitive key temp file
+          ansible.builtin.file:
+            path: /tmp/ansible-sensitive-keys.json
+            state: absent
+          changed_when: false
+      tags: [config, agents, discord]
 
     - name: Ensure openclaw-gateway is started and enabled
       ansible.builtin.systemd:
@@ -290,57 +409,24 @@
         XDG_RUNTIME_DIR: "/run/user/1000"
       tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
 
-    - name: Wait for gateway to stabilize
-      ansible.builtin.pause:
-        seconds: 5
+    - name: Apply pending gateway restarts before verification
+      ansible.builtin.meta: flush_handlers
       tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
 
-    - name: Verify gateway is active
-      ansible.builtin.command: systemctl --user is-active openclaw-gateway
+    - name: Verify restarted gateway health
+      ansible.builtin.command: openclaw health --json
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
+      register: gateway_final_health
       changed_when: false
+      until: >-
+        gateway_final_health.rc == 0 and
+        (gateway_final_health.stdout | from_json).ok | default(false) | bool
+      retries: 12
+      delay: 5
+      no_log: true
+      when: not ansible_check_mode
       tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
 
-    # After a gateway upgrade, security changes may invalidate device tokens.
-    # Devices that reconnect will appear as pending pairing requests.
-    # Since provisioning is already an admin action (requires SSH + Pulumi secrets),
-    # auto-approving pending requests is not a privilege escalation — it completes
-    # the upgrade by restoring connectivity that was already authorized.
-    - name: Re-approve pending device pairing requests
-      when: gateway_token is defined and gateway_token | length > 0
-      tags: [openclaw]
-      block:
-        - name: Wait for devices to reconnect after gateway restart
-          ansible.builtin.pause:
-            seconds: 10
-
-        - name: Read pending pairing requests
-          ansible.builtin.slurp:
-            src: /home/ubuntu/.openclaw/devices/pending.json
-          register: pending_pairings_raw
-          failed_when: false
-
-        - name: Parse pending pairing requests
-          ansible.builtin.set_fact:
-            pending_devices: >-
-              {{ (pending_pairings_raw.content | default('e30=') | b64decode | from_json | default({})) | dict2items }}
-
-        - name: Approve pending pairing requests
-          ansible.builtin.command:
-            argv:
-              - openclaw
-              - devices
-              - approve
-              - "{{ item.value.requestId }}"
-          environment:
-            XDG_RUNTIME_DIR: "/run/user/1000"
-            PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-            # 2026.6.1 honours OPENCLAW_GATEWAY_TOKEN for SDK-level token
-            # injection; the old OPENCLAW_TOKEN is ignored (device approve then
-            # runs unauthenticated and silently no-ops).
-            OPENCLAW_GATEWAY_TOKEN: "{{ gateway_token }}"
-          loop: "{{ pending_devices }}"
-          loop_control:
-            label: "{{ item.value.displayName | default(item.value.deviceId[:16]) }}"
-          no_log: true
+    # Device approvals require an operator to verify the matching request.
+    # Provisioning authority does not authorize arbitrary pending clients.

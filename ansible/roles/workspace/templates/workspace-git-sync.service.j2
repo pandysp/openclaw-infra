@@ -3,5 +3,19 @@ Description=Sync OpenClaw workspace ({{ item.agent_id }}) to git
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/workspace-git-sync-{{ item.agent_id }}.sh
+TimeoutStartSec=600
 Environment=SSH_AUTH_SOCK=
+ExecStart=/usr/bin/docker run --rm --init \
+    --name workspace-git-sync-{{ item.agent_id }} \
+    --network bridge --read-only --security-opt no-new-privileges \
+    --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --cap-add KILL \
+    --pids-limit 256 --memory 1g --cpus 1 \
+    --tmpfs /tmp:rw,noexec,nosuid,size=128m \
+    --tmpfs /run/workspace-sync:rw,noexec,nosuid,size=1m,mode=0755 \
+    --mount type=bind,source={{ item.workspace_dir }},target=/workspace \
+    --mount type=bind,source=/home/ubuntu/.ssh/{{ item.key_file }},target=/run/credentials/key,readonly \
+    --mount type=bind,source=/home/ubuntu/.ssh/workspace-github-known-hosts,target=/run/credentials/known_hosts,readonly \
+    --env WORKSPACE_AGENT_ID={{ item.agent_id }} \
+    --env WORKSPACE_REPOSITORY={{ item.repo_url | replace('github.com', item.ssh_alias) }} \
+    --env WORKSPACE_INITIALIZE={{ '1' if workspace_initializing | default(false) else '0' }} \
+    openclaw-workspace-sync:latest

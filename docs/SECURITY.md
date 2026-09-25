@@ -115,7 +115,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - `tools.elevated.allowFrom.<channel>` — restricts elevated tools to additional channels beyond Telegram
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
-**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers run on the default Docker bridge network, which is isolated from the `codex-proxy-net` network where MCP containers (Codex, Claude Code, Pi) and the credential-injecting proxy run — a sandbox session cannot reach the proxy to obtain API tokens. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
+**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers use the default Docker bridge; the plugins role explicitly permits access to the credential proxy for workspace Git operations. Do not treat the network name alone as a credential boundary. The separate workspace-sync containers block proxy access with their own outbound firewall. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
 
 **Prompt injection guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
 - Lock down inbound DMs (we use allowlist — done)
@@ -130,13 +130,13 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Attack**: OpenClaw accesses your infrastructure management machine through a connected node.
 
-**Scenario**: If your Mac is added as an OpenClaw node and has Pulumi Cloud access, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets. Commands run with your user's full permissions — there is no sandbox.
+**Scenario**: If your Mac is added as an OpenClaw node and has access to the Pulumi backend, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets. The obsolete plaintext passphrase fields were removed from the current production checkpoint on 2026-09-18. Historical checkpoints, the backend backup, and earlier private exports still expose the same unrotated passphrase. Current-state repair does not contain that exposure; rotation and historical cleanup are outside this reconciliation's scope; the exposure remains. Exports without `--show-secrets` are also sensitive. Commands run with your user's full permissions — there is no sandbox.
 
 **Default state**: Node exec is **disabled by default** (`node_exec_enabled: false` in `ansible/group_vars/all.yml`). When disabled, no `tools.exec.*` gateway config is set, no node ID is pinned, no `node-exec-mcp` binary is installed, and no MCP servers are wired — the feature is completely inert.
 
 **Mitigations** (when enabled):
 - Don't add your infrastructure management machine as an OpenClaw node
-- Use scoped Pulumi Cloud access tokens (not org-wide)
+- Scope R2 access keys to the state bucket; do not expose backend credentials or the stack passphrase to the node
 - Use `tools.exec.host: sandbox` (default) so agents must explicitly switch per-session
 - Consider `tools.exec.security: allowlist` to restrict which commands can run
 
@@ -206,14 +206,17 @@ Plugins run in-process — they have the same access as the gateway itself (conf
 
 ### 11. Workspace Git Sync Compromise
 
-**Attack**: Deploy key is used to push malicious content to the workspace repo, or workspace data is exfiltrated.
+**Attack**: Agent-writable Git hooks or configuration execute during backup, or a deploy key is used to alter the workspace repository.
 
 **Mitigations**:
-- Deploy key is scoped to a single repo (ED25519, write access)
-- SSH config uses a host alias to avoid conflicts with other keys
-- Workspace repo should be private
+- Initial and scheduled Git operations run in a one-shot container through the existing per-agent systemd service.
+- Only that workspace and its repository-scoped key are mounted; no host home directory, gateway state, or Docker socket.
+- Git runs as UID 1000 without capabilities, with privilege escalation disabled and a read-only container root.
+- Container networking permits only the selected public GitHub SSH address. Host services and the shared credential proxy are not permitted destinations.
+- SSH uses container-specific aliases and official GitHub host keys with strict verification.
+- Normal merges remain supported. Conflicts fail rather than force-pushing over remote history.
 
-**Residual Risk**: Low. Deploy key scope is narrow, but a compromised server could push arbitrary content to the workspace repo.
+**Residual risk**: Untrusted hooks can still read their own repository's deploy key and change that workspace. Isolation does not make concurrent edits during two-way Git synchronization atomic. Workspace repositories should remain private.
 
 ### Writable Rootfs Rationale
 

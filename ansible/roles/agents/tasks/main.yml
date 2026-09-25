@@ -1,12 +1,43 @@
 ---
+- name: Verify installed OpenClaw heartbeat contract
+  ansible.builtin.shell: |
+    set -euo pipefail
+    INSTALLED=$(openclaw --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ "$INSTALLED" != "{{ openclaw_version }}" ]; then
+      echo "ERROR: installed OpenClaw $INSTALLED does not match IaC pin {{ openclaw_version }}" >&2
+      exit 1
+    fi
+    openclaw config validate --help >/dev/null || {
+      echo "ERROR: OpenClaw {{ openclaw_version }} lacks required config validate" >&2
+      exit 1
+    }
+  args:
+    executable: /bin/bash
+  changed_when: false
+  check_mode: false
+
 - name: Get existing agents
   ansible.builtin.shell: |
+    set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw agents list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
+    if RAW=$(openclaw agents list --json 2>/dev/null); then
+        :
+    else
+        RC=$?
+        echo "ERROR: openclaw agents list failed with exit $RC; raw output withheld" >&2
+        exit "$RC"
+    fi
+    CLEAN=$(printf '%s\n' "$RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+    if ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "$CLEAN"; then
+        echo "ERROR: openclaw agents list returned invalid JSON (expected an array)" >&2
+        exit 1
+    fi
+    printf '%s\n' "$CLEAN"
   args:
     executable: /bin/bash
   register: existing_agents
   changed_when: false
+  check_mode: false
 
 - block:
     - name: Write existing agents JSON to temp file
@@ -15,15 +46,25 @@
         dest: /tmp/ansible_existing_agents.json
         mode: '0600'
       changed_when: false
+      check_mode: false
 
     - name: Create non-default agents
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        if jq -e --arg id {{ item.id | quote }} '.[] | select(.id == $id)' /tmp/ansible_existing_agents.json > /dev/null 2>&1; then
+        set +e
+        # any() answers true/false: exit 0 = exists, 1 = absent, other = error.
+        # (A select() that matches nothing exits 4, not 1, on a fresh server.)
+        jq -e --arg id {{ item.id | quote }} 'any(.[]; .id == $id)' /tmp/ansible_existing_agents.json > /dev/null 2>&1
+        JQ_RC=$?
+        set -e
+        if [ "$JQ_RC" -eq 0 ]; then
             echo "Agent {{ item.id }} already exists"
-        else
+        elif [ "$JQ_RC" -eq 1 ]; then
             openclaw agents add {{ item.id | quote }} --non-interactive --workspace "/home/ubuntu/.openclaw/workspace-{{ item.id }}"
+        else
+            echo "ERROR: could not query validated agents JSON for {{ item.id }} (jq exit $JQ_RC)" >&2
+            exit 1
         fi
       args:
         executable: /bin/bash
@@ -39,80 +80,72 @@
         path: /tmp/ansible_existing_agents.json
         state: absent
       changed_when: false
+      check_mode: false
 
 - name: Refresh agent list for config targeting
   ansible.builtin.shell: |
+    set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw agents list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d'
+    if RAW=$(openclaw agents list --json 2>/dev/null); then
+        :
+    else
+        RC=$?
+        echo "ERROR: openclaw agents list failed with exit $RC; raw output withheld" >&2
+        exit "$RC"
+    fi
+    CLEAN=$(printf '%s\n' "$RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+    if ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "$CLEAN"; then
+        echo "ERROR: openclaw agents list returned invalid JSON (expected an array)" >&2
+        exit 1
+    fi
+    printf '%s\n' "$CLEAN"
   args:
     executable: /bin/bash
   register: agents_current
   changed_when: false
+  check_mode: false
 
-# Default agent uses agents.defaults.* (implicit, not in agents.list)
-- name: Set default agent heartbeat targeting
+# The agents role is the only heartbeat writer. A safe 0m global default means
+# omission can never opt an agent into OpenClaw's upstream 30m default.
+- name: Set safe global heartbeat defaults
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    DESIRED='{"target":"{{ _default_agent.deliver_channel | default('telegram') }}","to":"{{ _default_agent.deliver_to }}","every":"{{ _default_agent.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if _default_agent.heartbeat_model is defined %},"model":"{{ _default_agent.heartbeat_model }}"{% endif %}}'
+    DESIRED='{{ _heartbeat_defaults | to_json }}'
     CURRENT=$(openclaw config get "agents.defaults.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-        if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+        if echo "$CURRENT" | grep -qiE '^Config path not found:'; then
             CURRENT="{}"
         else
-            echo "ERROR reading heartbeat config for default agent: $CURRENT" >&2
+            echo "ERROR: could not read agents.defaults.heartbeat" >&2
             exit 1
         fi
     }
-    D_NORM=$(echo "$DESIRED" | jq -cS '.')
-    C_FILTERED=$(echo "$CURRENT" | jq -cS --argjson d "$DESIRED" 'with_entries(select(.key | IN($d | keys[])))' 2>/dev/null || echo "PARSE_FAIL")
-    if [ "$C_FILTERED" = "$D_NORM" ]; then
+    if ! D_NORM=$(echo "$DESIRED" | jq -e -cS 'select(type == "object")'); then
+        echo "ERROR: generated agents.defaults.heartbeat is not a JSON object" >&2
+        exit 1
+    fi
+    if ! C_NORM=$(echo "$CURRENT" | jq -e -cS 'select(type == "object")' 2>/dev/null); then
+        echo "ERROR: existing agents.defaults.heartbeat is unreadable; refusing to overwrite it" >&2
+        exit 1
+    fi
+    if [ "$C_NORM" = "$D_NORM" ]; then
         echo "OK"
     else
+        {% if not ansible_check_mode %}
         openclaw config set "agents.defaults.heartbeat" --json "$DESIRED"
-        echo "UPDATED: default agent heartbeat → {{ _default_agent.deliver_channel | default('telegram') }}:{{ _default_agent.deliver_to }}"
+        {% endif %}
+        echo "UPDATED: safe global heartbeat defaults"
     fi
   args:
     executable: /bin/bash
   vars:
-    _default_agent: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
-  when: (_default_agent.deliver_to | default('')) != ''
-  register: default_heartbeat_result
-  changed_when: "'UPDATED' in (default_heartbeat_result.stdout | default(''))"
-  notify: restart openclaw-gateway
-
-# The default agent's heartbeat is owned by agents.defaults.heartbeat (above). But the
-# gateway merges a per-agent list entry OVER defaults ({...defaults, ...entry}), so a
-# stale agents.list.<default>.heartbeat (legacy drift) silently shadows it — pinning an
-# outdated model/cadence and, worse, a model no longer in the allowlist. Remove it so
-# agents.defaults.heartbeat stays authoritative for the default agent.
-- name: Drop shadowing heartbeat from default agent's list entry
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    IDX=$(openclaw agents list --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d' \
-          | jq -r --arg id {{ _default_agent.id | quote }} 'to_entries[] | select(.value.id == $id) | .key') || IDX=""
-    if [ -z "$IDX" ]; then
-        echo "OK: default agent not in agents.list"
-        exit 0
-    fi
-    # `config get` exits non-zero when the key is unset (the steady, no-shadow state);
-    # under `set -euo pipefail` an unguarded assignment would abort the task there,
-    # before the grep. `|| HB="not set"` lets the unset case fall through to the
-    # "no shadowing heartbeat" branch (mirrors the sibling config-get guards).
-    HB=$(openclaw config get "agents.list.${IDX}.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || HB="not set"
-    if echo "$HB" | grep -qi "not set\|not found\|does not exist\|undefined"; then
-        echo "OK: no shadowing heartbeat"
-    else
-        openclaw config unset "agents.list.${IDX}.heartbeat"
-        echo "UPDATED: removed shadowing list heartbeat for {{ _default_agent.id }} (defaults now authoritative)"
-    fi
-  args:
-    executable: /bin/bash
-  vars:
-    _default_agent: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
-  when: (_default_agent.deliver_to | default('')) != ''
-  register: default_list_hb_cleanup
-  changed_when: "'UPDATED' in (default_list_hb_cleanup.stdout | default(''))"
+    _heartbeat_defaults: >-
+      {{ {'every': '0m', 'model': 'anthropic/claude-sonnet-4-6', 'directPolicy': 'allow'}
+         | combine({'activeHours': openclaw_heartbeat_active_hours}
+           if openclaw_heartbeat_active_hours is defined and openclaw_heartbeat_active_hours else {}) }}
+  register: heartbeat_defaults_result
+  changed_when: "'UPDATED' in (heartbeat_defaults_result.stdout | default(''))"
+  check_mode: false
   notify: restart openclaw-gateway
 
 - name: Set default agent sandbox mode
@@ -136,7 +169,9 @@
   changed_when: "'UPDATED' in (default_sandbox_result.stdout | default(''))"
   notify: restart openclaw-gateway
 
-# Non-default agents use agents.list.N.* (explicit entries)
+# Every agent, including main, uses an explicit list heartbeat block only when
+# scheduled automation is enabled. This follows the v2026.6.6 heartbeat
+# allowlist rule and removes the old default-agent special case.
 - block:
     - name: Write current agents JSON to temp file
       ansible.builtin.copy:
@@ -144,43 +179,14 @@
         dest: /tmp/ansible_agents_current.json
         mode: '0600'
       changed_when: false
+      check_mode: false
 
-    - name: Set non-default agent heartbeat targeting
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
-        if [ -z "$AGENT_INDEX" ]; then
-            echo "ERROR: Agent {{ item.id | quote }} not found in agents list after creation step" >&2
-            cat /tmp/ansible_agents_current.json >&2
-            exit 1
-        fi
-        DESIRED='{"target":"{{ item.deliver_channel | default('telegram') }}","to":"{{ item.deliver_to }}","every":"{{ item.heartbeat_every | default(openclaw_heartbeat_interval) }}"{% if item.heartbeat_model is defined %},"model":"{{ item.heartbeat_model }}"{% endif %}}'
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-            if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
-                CURRENT="{}"
-            else
-                echo "ERROR reading heartbeat config for {{ item.id }}: $CURRENT" >&2
-                exit 1
-            fi
-        }
-        # Compare only the fields we set — gateway may enrich with extra fields (e.g. model)
-        D_NORM=$(echo "$DESIRED" | jq -cS '.')
-        C_FILTERED=$(echo "$CURRENT" | jq -cS --argjson d "$DESIRED" 'with_entries(select(.key | IN($d | keys[])))' 2>/dev/null || echo "PARSE_FAIL")
-        if [ "$C_FILTERED" = "$D_NORM" ]; then
-            echo "OK"
-        else
-            openclaw config set "agents.list.${AGENT_INDEX}.heartbeat" --json "$DESIRED"
-            echo "UPDATED: {{ item.id }} heartbeat → {{ item.deliver_channel | default('telegram') }}:{{ item.deliver_to }}"
-        fi
-      args:
-        executable: /bin/bash
-      loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | selectattr('deliver_to', 'ne', '') | list }}"
+    - name: Reconcile per-agent heartbeat targeting
+      ansible.builtin.include_tasks: heartbeat.yml
+      loop: "{{ openclaw_agents }}"
       loop_control:
-        label: "{{ item.id }} → {{ item.deliver_to }}"
-      register: heartbeat_result
-      changed_when: "'UPDATED' in heartbeat_result.stdout"
-      notify: restart openclaw-gateway
+        loop_var: _heartbeat_agent
+        label: "{{ _heartbeat_agent.id }}"
 
     - name: Set non-default agent sandbox mode override
       ansible.builtin.shell: |
@@ -214,3 +220,11 @@
         path: /tmp/ansible_agents_current.json
         state: absent
       changed_when: false
+      check_mode: false
+
+- name: Validate OpenClaw config after agent reconciliation
+  ansible.builtin.command: openclaw config validate --json
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  changed_when: false
+  check_mode: false

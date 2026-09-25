@@ -14,7 +14,7 @@ pulumi/Pulumi.staging.yaml
 .env
 .env.*
 !.env.template
-.envrc
+!.env.example
 docker/.env
 
 # TypeScript
@@ -22,6 +22,10 @@ docker/.env
 *.js.map
 *.d.ts
 !pulumi/*.ts
+
+# Python
+__pycache__/
+*.py[cod]
 
 # OS
 .DS_Store
@@ -49,7 +53,6 @@ backups/
 
 # Ansible
 ansible/*.retry
-ansible/inventory/__pycache__/
 ansible/group_vars/openclaw.yml
 
 # Dolt database files (added by bd init)

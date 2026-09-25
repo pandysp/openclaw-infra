@@ -1,0 +1,85 @@
+---
+- name: Check workspace directory before initialization
+  ansible.builtin.stat:
+    path: "{{ workspace.workspace_dir }}"
+  register: workspace_directory
+
+- name: Refuse symlink workspace mounts
+  ansible.builtin.assert:
+    that:
+      - not workspace_directory.stat.exists or workspace_directory.stat.isdir | default(false)
+      - not workspace_directory.stat.islnk | default(false)
+    fail_msg: Workspace mounts must be directories, not symlinks or other files.
+
+# Initialization is permitted only into an absent or empty directory: a failed
+# first clone leaves an empty directory behind and must stay retryable, while a
+# workspace that already holds files is never restored over (git clone refuses
+# a nonempty destination and the recurring path refuses a missing .git).
+- name: Find existing workspace contents
+  ansible.builtin.find:
+    paths: "{{ workspace.workspace_dir }}"
+    hidden: true
+    file_type: any
+  register: workspace_contents
+  when: workspace_directory.stat.exists
+
+- name: Create workspace directory
+  ansible.builtin.file:
+    path: "{{ workspace.workspace_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Install workspace sync service
+  ansible.builtin.template:
+    src: workspace-git-sync.service.j2
+    dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ workspace.agent_id }}.service"
+    mode: "0644"
+  vars:
+    item: "{{ workspace }}"
+    workspace_initializing: "{{ not workspace_directory.stat.exists or workspace_contents.matched == 0 }}"
+
+- name: Install workspace sync timer
+  ansible.builtin.template:
+    src: workspace-git-sync.timer.j2
+    dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ workspace.agent_id }}.timer"
+    mode: "0644"
+  vars:
+    item: "{{ workspace }}"
+
+- name: Synchronize workspace through its systemd unit
+  block:
+    - name: Reload workspace units
+      ansible.builtin.systemd:
+        daemon_reload: true
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+
+    - name: Run workspace synchronization
+      ansible.builtin.systemd:
+        name: "workspace-git-sync-{{ workspace.agent_id }}.service"
+        state: started
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+  always:
+    - name: Restrict subsequent runs to existing repositories
+      ansible.builtin.template:
+        src: workspace-git-sync.service.j2
+        dest: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ workspace.agent_id }}.service"
+        mode: "0644"
+      vars:
+        item: "{{ workspace }}"
+        workspace_initializing: false
+
+    - name: Reload recurring sync units
+      ansible.builtin.systemd:
+        daemon_reload: true
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+
+- name: Remove superseded host-side Git script
+  ansible.builtin.file:
+    path: "/home/ubuntu/.local/bin/workspace-git-sync-{{ workspace.agent_id }}.sh"
+    state: absent

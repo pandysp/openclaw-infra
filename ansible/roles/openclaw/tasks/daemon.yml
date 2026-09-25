@@ -12,7 +12,7 @@
     executable: /bin/bash
   when: not daemon_service.stat.exists
 
-- name: Check daemon service file version matches installed binary
+- name: Check daemon service file version matches target version
   when: daemon_service.stat.exists
   block:
     - name: Extract version from daemon service file
@@ -23,30 +23,20 @@
       register: daemon_service_version
       changed_when: false
 
-    - name: Get installed openclaw version
-      ansible.builtin.command: openclaw --version
-      register: openclaw_binary_version
-      changed_when: false
-
-    - name: Extract binary semver
-      ansible.builtin.set_fact:
-        openclaw_binary_semver: >-
-          {{ openclaw_binary_version.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+') | default('') }}
-
     - name: Regenerate daemon service file if version drifted
       ansible.builtin.shell: |
+        set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
         openclaw daemon install --force
         systemctl --user daemon-reload
-        echo "REGENERATED: service={{ daemon_service_version.stdout | trim }} binary={{ openclaw_binary_semver }}"
+        echo "REGENERATED: service={{ daemon_service_version.stdout | trim }} target={{ openclaw_version }}"
       args:
         executable: /bin/bash
       register: daemon_version_regen
       changed_when: true
       notify: restart openclaw-gateway
       when: >-
-        daemon_service_version.stdout | trim == "" or
-        daemon_service_version.stdout | trim != openclaw_binary_semver
+        daemon_service_version.stdout | trim != openclaw_version
 
 # The WS handshake timeout drop-in is no longer needed — 10s is the upstream
 # default since 2026.3.22 (PR #49262). Clean up the orphan file.

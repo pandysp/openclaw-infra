@@ -290,10 +290,16 @@
         {% endif %}
         check_set_json tools.sandbox.tools.allow '{{ tool_allow | to_json }}'
 
-        # Profile extension: v2026.3.13 made coding profile strict — plugin tools
-        # are blocked unless explicitly added via tools.alsoAllow
-        {% if openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
+        # Explicit allowlists must not be widened by the plugin profile extension.
+        {% if openclaw_tools_allow is defined %}
+        check_set_json tools.allow '{{ openclaw_tools_allow | to_json }}'
+        check_set_json tools.alsoAllow '[]'
+        {% elif openclaw_mcp_adapter is defined and mcp_adapter_installed.stat.exists %}
         check_set_json tools.alsoAllow '["group:plugins"]'
+        {% endif %}
+
+        {% if openclaw_cli_backends is defined %}
+        check_set_json agents.defaults.cliBackends '{{ openclaw_cli_backends | to_json }}'
         {% endif %}
 
         # Plugin loading allowlist — only trusted plugins can load into gateway
@@ -357,14 +363,6 @@
 
         # Agent timeout: max seconds per conversation turn (default 600 = 10min)
         check_set agents.defaults.timeoutSeconds "{{ openclaw_agent_timeout_seconds }}"
-
-        # Heartbeat interval
-        check_set agents.defaults.heartbeat.every "{{ openclaw_heartbeat_interval }}"
-        check_set agents.defaults.heartbeat.model "anthropic/claude-sonnet-4-6"
-        {% if openclaw_heartbeat_active_hours is defined and openclaw_heartbeat_active_hours %}
-        check_set_json agents.defaults.heartbeat.activeHours '{{ openclaw_heartbeat_active_hours | to_json }}'
-        {% endif %}
-        check_set agents.defaults.heartbeat.directPolicy allow
 
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
         check_set messages.queue.mode collect

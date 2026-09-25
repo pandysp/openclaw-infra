@@ -2,6 +2,11 @@
 .DS_Store
 Thumbs.db
 
+# Local credentials
+.env
+.env.*
+!.env.example
+
 # Temp files
 *.tmp
 *.swp

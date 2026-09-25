@@ -1,0 +1,71 @@
+---
+- name: Reconcile heartbeat for {{ _heartbeat_agent.id }}
+  block:
+    - name: Apply heartbeat state for {{ _heartbeat_agent.id }}
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR=/run/user/1000
+        AGENT_INDEX=$(jq -r --arg id {{ _heartbeat_agent.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
+        if [ -z "$AGENT_INDEX" ]; then
+            echo "ERROR: agent {{ _heartbeat_agent.id }} is missing from the validated agent list" >&2
+            exit 1
+        fi
+        KEY="agents.list.${AGENT_INDEX}.heartbeat"
+        CURRENT=$(openclaw config get "$KEY" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
+            if echo "$CURRENT" | grep -qiE '^Config path not found:'; then
+                CURRENT="{}"
+            else
+                echo "ERROR: could not read heartbeat config for {{ _heartbeat_agent.id }}" >&2
+                exit 1
+            fi
+        }
+        if ! C_NORM=$(echo "$CURRENT" | jq -e -cS 'select(type == "object")' 2>/dev/null); then
+            echo "ERROR: existing heartbeat config for {{ _heartbeat_agent.id }} is unreadable; refusing to overwrite it" >&2
+            exit 1
+        fi
+        {% if _openclaw_scheduled_automation_by_agent[_heartbeat_agent.id] %}
+        DESIRED='{{ _desired_agent_heartbeat | to_json }}'
+        if ! D_NORM=$(echo "$DESIRED" | jq -e -cS 'select(type == "object")'); then
+            echo "ERROR: generated heartbeat config for {{ _heartbeat_agent.id }} is invalid" >&2
+            exit 1
+        fi
+        if [ "$C_NORM" = "$D_NORM" ]; then
+            echo "OK"
+        else
+            {% if not ansible_check_mode %}
+            openclaw config set "$KEY" --json "$DESIRED"
+            {% endif %}
+            echo "UPDATED: enabled {{ _heartbeat_agent.id }} heartbeat"
+        fi
+        {% else %}
+        if [ "$C_NORM" = "{}" ]; then
+            echo "OK"
+        else
+            {% if not ansible_check_mode %}
+            openclaw config unset "$KEY"
+            {% endif %}
+            echo "UPDATED: disabled {{ _heartbeat_agent.id }} heartbeat"
+        fi
+        {% endif %}
+      args:
+        executable: /bin/bash
+      vars:
+        _desired_agent_heartbeat: >-
+          {{ {'target': _heartbeat_agent.deliver_channel | default('telegram'),
+              'to': _heartbeat_agent.deliver_to,
+              'every': _heartbeat_agent.heartbeat_every | default(openclaw_heartbeat_interval)}
+             | combine({'model': _heartbeat_agent.heartbeat_model}
+               if _heartbeat_agent.heartbeat_model is defined else {}) }}
+      register: heartbeat_result
+      changed_when: "'UPDATED' in (heartbeat_result.stdout | default(''))"
+      check_mode: false
+      no_log: true
+      notify: restart openclaw-gateway
+  rescue:
+    - name: Stop after heartbeat reconciliation error
+      ansible.builtin.fail:
+        msg: >-
+          Heartbeat {{ 'enable' if _openclaw_scheduled_automation_by_agent[_heartbeat_agent.id] else 'disable' }}
+          failed for agent {{ _heartbeat_agent.id }} (exit
+          {{ heartbeat_result.rc | default('unknown', true) }}). Provisioning stopped before
+          later agents; inspect this config key for a partial CLI write before retrying.

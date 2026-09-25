@@ -1,105 +1,73 @@
-# Staging Orphan Cleanup
-#
-# Safety net: deletes any openclaw-staging* servers and SSH keys
-# left behind by failed or interrupted staging runs.
-# Runs daily at 06:00 UTC and on manual trigger.
-#
-# Security: No untrusted inputs used in shell contexts.
-
-name: Staging Orphan Cleanup
+# Inventory only: prefixes and age cannot establish resource ownership.
+# Phoenix tears down its own stack. Leftovers require explicit investigation.
+name: Staging Resource Inventory
 
 on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-phoenix
+  cancel-in-progress: false
+
 jobs:
-  cleanup:
+  inventory:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install hcloud CLI
         run: |
-          VERSION=$(curl -s https://api.github.com/repos/hetznercloud/cli/releases/latest | jq -r .tag_name)
-          curl -sL "https://github.com/hetznercloud/cli/releases/download/${VERSION}/hcloud-linux-amd64.tar.gz" -o hcloud.tar.gz
+          set -euo pipefail
+          VERSION=$(curl --fail --silent --show-error https://api.github.com/repos/hetznercloud/cli/releases/latest |
+            jq -ers 'if length == 1 and (.[0].tag_name | type == "string" and length > 0)
+              then .[0].tag_name else error("Invalid hcloud release metadata") end')
+          curl --fail --silent --show-error --location "https://github.com/hetznercloud/cli/releases/download/${VERSION}/hcloud-linux-amd64.tar.gz" -o hcloud.tar.gz
           tar xzf hcloud.tar.gz
           sudo mv hcloud /usr/local/bin/
           rm hcloud.tar.gz
 
-      - name: Delete orphaned staging servers
+      - name: Inventory staging cloud resources and deploy keys
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-        run: |
-          SERVERS=$(hcloud server list -o noheader -o columns=id,name 2>/dev/null | grep "openclaw-staging" || true)
-          if [ -z "$SERVERS" ]; then
-            echo "No orphaned staging servers found."
-          else
-            echo "$SERVERS" | while read -r id name; do
-              echo "Deleting server: $name ($id)"
-              hcloud server delete "$id" || true
-            done
-          fi
-
-      - name: Delete orphaned staging SSH keys
-        env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-        run: |
-          KEYS=$(hcloud ssh-key list -o noheader -o columns=id,name 2>/dev/null | grep "openclaw-staging" || true)
-          if [ -z "$KEYS" ]; then
-            echo "No orphaned staging SSH keys found."
-          else
-            echo "$KEYS" | while read -r id name; do
-              echo "Deleting SSH key: $name ($id)"
-              hcloud ssh-key delete "$id" || true
-            done
-          fi
-
-      - name: Delete orphaned staging firewalls
-        env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-        run: |
-          FWS=$(hcloud firewall list -o noheader -o columns=id,name 2>/dev/null | grep "openclaw-staging" || true)
-          if [ -z "$FWS" ]; then
-            echo "No orphaned staging firewalls found."
-          else
-            echo "$FWS" | while read -r id name; do
-              echo "Deleting firewall: $name ($id)"
-              hcloud firewall delete "$id" || true
-            done
-          fi
-
-      - name: Delete orphaned staging deploy keys
-        env:
           GH_TOKEN: ${{ secrets.STAGING_GITHUB_TOKEN }}
         run: |
-          for repo in pandysp/openclaw-staging-workspace pandysp/openclaw-staging-workspace-test; do
-            echo "Checking $repo..."
-            KEYS=$(gh api "repos/${repo}/keys" \
-              --jq '.[] | select(.title | startswith("staging-")) | "\(.id) \(.title)"' 2>/dev/null || true)
-            if [ -z "$KEYS" ]; then
-              echo "  No orphaned deploy keys."
-            else
-              echo "$KEYS" | while read -r id title; do
-                echo "  Removing deploy key: $title ($id)"
-                gh api -X DELETE "repos/${repo}/keys/${id}" || true
-              done
-            fi
+          set -euo pipefail
+          TOTAL=0
+          for kind in server ssh-key firewall; do
+            ITEMS=$(hcloud "$kind" list -o json | jq -ces '
+              if length == 1 and (.[0] | type == "array" and
+                all(.[]; (.id | type) == "number" and (.name | type) == "string"))
+              then [.[0][] | select(.name | startswith("openclaw-staging")) | {id,name}]
+              else error("Invalid cloud inventory") end')
+            printf '%s: %s\n' "$kind" "$ITEMS"
+            TOTAL=$((TOTAL + $(jq 'length' <<< "$ITEMS")))
           done
+          for repo in pandysp/openclaw-staging-workspace pandysp/openclaw-staging-workspace-test; do
+            ITEMS=$(gh api --paginate --slurp "repos/$repo/keys" | jq -ces '
+              if length == 1 and (.[0] | type == "array" and length > 0 and
+                all(.[]; type == "array") and
+                all(.[][]; (.id | type) == "number" and (.title | type) == "string"))
+              then [.[0][][] | select(.title | test("^(staging-|openclaw-staging-)")) | {id,title}]
+              else error("Invalid deploy-key inventory") end')
+            printf '%s: %s\n' "$repo" "$ITEMS"
+            TOTAL=$((TOTAL + $(jq 'length' <<< "$ITEMS")))
+          done
+          if [[ "$TOTAL" != 0 ]]; then
+            echo "::error::$TOTAL staging resources or deploy keys need an ownership check. Nothing was deleted."
+            exit 1
+          fi
 
-      # Prune leftover openclaw-staging* tailnet devices. Non-ephemeral records
-      # linger after the box is destroyed and collide hostnames (-2, -3, …).
-      # Reuses the OAuth client already used to join the tailnet — no new secret
-      # — as long as that client has the devices:core scope. No-op if absent.
-      - name: Delete stale staging tailnet devices
+      - name: Inventory staging tailnet devices
+        if: always()
         env:
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-        run: |
-          if [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; then
-            echo "TS_OAUTH_* secrets not set — skipping tailnet device cleanup."
-            exit 0
-          fi
-          ./scripts/cleanup-staging-tailnet.sh
+        run: ./scripts/cleanup-staging-tailnet.sh

@@ -1,9 +1,12 @@
 ---
 # Install and authenticate the Claude CLI for the claude-cli backend.
 #
-# The claude CLI (@anthropic-ai/claude-code) is installed as a global npm
-# dependency of OpenClaw. This task ensures:
-#   1. The binary is accessible via /usr/local/bin/claude
+# The claude CLI (@anthropic-ai/claude-code) is not an OpenClaw dependency: this
+# role installs it, pinned to claude_code_version, before the credential check.
+# (A fresh Phoenix server previously failed here with rc=2 because the plugins
+# role installs the CLI later, and only when Claude Code plugins are declared.)
+# This task ensures:
+#   1. The pinned CLI is installed and accessible via /usr/local/bin/claude
 #   2. Anthropic credentials are written to ~/.claude/.credentials.json
 #
 # The claude-cli backend authenticates ONLY from ~/.claude/.credentials.json.
@@ -17,20 +20,31 @@
 #   2. claude_setup_token — a long-lived setup token (`claude setup-token`,
 #      sk-ant-oat01-…). Default path: we synthesise the credentials file from it.
 
-- name: Check if claude CLI is available
-  ansible.builtin.stat:
-    path: /home/ubuntu/.npm-global/bin/claude
-  register: claude_cli_binary
+- name: Determine whether the claude-cli runtime is configured
+  ansible.builtin.set_fact:
+    _claude_cli_configured: >-
+      {{ (claude_oauth_credentials | default('') | length > 0)
+         or (claude_setup_token | default('') | length > 0) }}
 
-- name: Verify claude CLI works
+- name: Install the pinned Claude Code CLI
+  community.general.npm:
+    name: "@anthropic-ai/claude-code"
+    version: "{{ claude_code_version }}"
+    global: true
+    state: present
+  environment:
+    PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
+  when: _claude_cli_configured
+
+- name: Verify the pinned claude CLI runs
   ansible.builtin.command: claude --version
   check_mode: false
   register: claude_cli_version
   changed_when: false
-  failed_when: claude_cli_version.rc != 0
+  failed_when: claude_cli_version.rc != 0 or claude_code_version not in claude_cli_version.stdout
   environment:
     PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-  when: claude_cli_binary.stat.exists
+  when: _claude_cli_configured
 
 - name: Symlink claude to /usr/local/bin
   become: true
@@ -39,7 +53,7 @@
     dest: /usr/local/bin/claude
     state: link
     force: true
-  when: claude_cli_binary.stat.exists
+  when: _claude_cli_configured
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
@@ -100,6 +114,4 @@
     or (claude_auth_check.rc != 0)
   environment:
     PATH: "/usr/local/bin:/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-  when: >-
-    (claude_oauth_credentials | default('') | length > 0)
-    or (claude_setup_token | default('') | length > 0)
+  when: _claude_cli_configured

@@ -9,8 +9,9 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - **Cheap**: Hetzner CX43 x86 (8 vCPU, 16 GB) ~€9.49/mo + backups (~€11.39/mo total)
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
-- **Telegram**: Optional scheduled tasks (configurable cron jobs)
-- **Workspace sync**: Optional hourly git backup of the agent's workspace to GitHub
+- **Safe automation**: Heartbeats and cron jobs are off until explicitly enabled per agent
+- **Telegram**: Optional scheduled tasks with reversible, ID-preserving pause/resume
+- **Workspace sync**: Optional hourly Git synchronization through per-agent one-shot containers; existing timers remain in charge
 
 ## Prerequisites
 
@@ -62,12 +63,27 @@ To enable optional Telegram notifications:
 
 3. **Configure**: See [Quick Start](#quick-start) below for the Pulumi commands.
 
+## Pulumi Backend
+
+The current deployment and CI use Cloudflare R2, not Pulumi Cloud. Keep these values in the project's ignored `.env` (mode `0600`); use `.env.example` for initial setup. Run `direnv allow` once, then `direnv exec . <command>` from this repository. The hook clears inherited deployment credentials before loading this project's file. Routine commands do not query 1Password.
+
+| Variable | Purpose |
+|----------|---------|
+| `PULUMI_BACKEND_URL` | `s3://<bucket>?endpoint=https://<account-id>.r2.cloudflarestorage.com&region=auto` |
+| `AWS_ACCESS_KEY_ID` | R2 access key ID, scoped to the state bucket |
+| `AWS_SECRET_ACCESS_KEY` | R2 secret access key |
+| `PULUMI_CONFIG_PASSPHRASE` | Passphrase used to encrypt this stack's secrets |
+
+Pulumi encrypts values marked as secrets. The current production checkpoint's obsolete plaintext passphrase fields were removed and independently checked on 2026-09-18, without provisioning or changing other resource values. Historical checkpoints, the backend backup, and earlier private exports still contain that passphrase; it has not been rotated. Do not treat bucket access and secret decryption as separate protections. Rotation and historical cleanup are outside this reconciliation's scope; the exposure remains. Exports, including those without `--show-secrets`, must stay private.
+
+A Pulumi Cloud access token is not needed for this backend. Require non-empty values; do not print them or fall back to interactive credential lookups. Production PATs remain in encrypted `pulumi/Pulumi.prod.yaml`. Keep `PULUMI_BACKEND_URL` explicit so another project's cached backend does not get selected.
+
 ## Quick Start
 
 ```bash
 npm install
 cd pulumi
-pulumi login             # Authenticate with Pulumi Cloud
+pulumi login "${PULUMI_BACKEND_URL:?Load the backend environment first}"
 pulumi stack init prod
 
 # Required
@@ -93,7 +109,7 @@ cd ..
 > After verifying, clean up the cloud-init log (contains secrets):
 > `ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"`
 
-State and secrets are managed by [Pulumi Cloud](https://app.pulumi.com) — no local passphrase needed.
+Stack state is stored in R2; secret decryption requires the stack's passphrase. See [Pulumi Backend](#pulumi-backend).
 
 ## Access
 
@@ -106,19 +122,15 @@ https://openclaw-vps.<tailnet>.ts.net/chat
 
 OpenClaw requires **device pairing** for all connections — including the server's own CLI. On a fresh install:
 
-1. **Use the tokenized URL** to access the web UI without pairing:
-   ```bash
-   cd pulumi && pulumi stack output tailscaleUrlWithToken --show-secrets
-   ```
-   Open that URL in your browser. This bypasses pairing for initial setup.
+1. **Open the chat URL above** over Tailscale. Do not print or share token-bearing URLs.
 
-2. **Approve devices** that need pairing. The server's CLI (used by Ansible) may show as pending:
+2. **Approve only the matching device request** over Tailscale SSH:
    ```bash
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices list'
    ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'openclaw devices approve <request-id>'
    ```
 
-3. **If Ansible failed during first deploy** (cron setup skipped due to pairing), re-run after approving:
+3. **If Ansible failed because CLI authorization was unavailable**, resolve the matching request, then re-run:
    ```bash
    ./scripts/provision.sh --tags telegram
    ```
