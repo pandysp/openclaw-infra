@@ -184,9 +184,12 @@
       vars:
         _repo_var: "{{ 'workspace_repo_url' if item.id == 'main' else 'workspace_' ~ item.id ~ '_repo_url' }}"
         _key_var: "{{ 'workspace_deploy_key' if item.id == 'main' else 'workspace_' ~ item.id ~ '_deploy_key' }}"
+        # One canonical form inside Ansible: setup-workspace.sh writes
+        # git@github.com:, older deployments store this agent's own SSH alias.
+        # Any other host or alias stays as is and fails the workspace role's check.
         _entry:
           agent_id: "{{ item.id }}"
-          repo_url: "{{ lookup('vars', _repo_var, default='') }}"
+          repo_url: "{{ lookup('vars', _repo_var, default='') | regex_replace('^git@github-workspace-' ~ item.id ~ ':', 'git@github.com:') }}"
           deploy_key_var: "{{ _key_var }}"
           workspace_dir: "{{ '/home/ubuntu/.openclaw/workspace' if item.id == 'main' else '/home/ubuntu/.openclaw/workspace-' ~ item.id }}"
           ssh_alias: "github-workspace-{{ item.id }}"
