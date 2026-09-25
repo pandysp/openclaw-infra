@@ -266,8 +266,15 @@
         mkdir -p "$HASH_DIR"
         DESIRED_HASH=$(echo "$DESIRED_MODELS" | jq -cS '.' | sha256sum | cut -d' ' -f1)
         CURRENT_HASH=$(cat "$HASH_DIR/custom-models" 2>/dev/null) || CURRENT_HASH=""
-        MODELS_EXISTS=$(openclaw config get models.mode 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || MODELS_EXISTS=""
-        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ] || [ -z "$MODELS_EXISTS" ]; then
+        # Detect an external reset by comparing the mode, when one is declared: an
+        # empty custom-model set has no mode, and treating that as "missing"
+        # rewrote it on every run.
+        DESIRED_MODE=$(echo "$DESIRED_MODELS" | jq -r '.mode // empty')
+        CURRENT_MODE=""
+        if [ -n "$DESIRED_MODE" ]; then
+            CURRENT_MODE=$(openclaw config get models.mode 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_MODE=""
+        fi
+        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ] || [ "$CURRENT_MODE" != "$DESIRED_MODE" ]; then
             # --replace: since 2026.4.22, models.providers is a protected map path that
             # rejects replacements removing existing entries (e.g. a gateway-discovered
             # model or a narrowed model set on day-2). Our declarative tree is

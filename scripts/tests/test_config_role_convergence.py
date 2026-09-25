@@ -22,15 +22,39 @@ TEMP_FILES = 'Write secrets and config to temp files'
 REPORT = 'Show which gateway settings were updated'
 MIGRATE = 'Migrate session model provider to match primary model'
 FAKE_OPENCLAW = '''#!/usr/bin/env python3
-# config get: nothing configured yet; config set/unset: record the exact argv.
+# A stateful stand-in for the OpenClaw config CLI: get/set/unset on a JSON
+# store, recording every write, so a second pass can prove convergence.
 import json, os, sys
 args = sys.argv[1:]
-if args[:2] == ['config', 'get']:
-    sys.exit(1)
-if args[:2] in (['config', 'set'], ['config', 'unset']):
-    with open(os.path.join(os.environ['FIXTURE_ROOT'], 'writes'), 'a') as f:
+root = os.environ['FIXTURE_ROOT']
+store_path = os.path.join(root, 'store.json')
+store = json.load(open(store_path)) if os.path.exists(store_path) else {}
+def record():
+    with open(os.path.join(root, 'writes'), 'a') as f:
         f.write(json.dumps(args) + '\\n')
+def walk(key, create=False):
+    node, parts = store, key.split('.')
+    for part in parts[:-1]:
+        if part not in node:
+            if not create: return None, None
+            node[part] = {}
+        node = node[part]
+    return node, parts[-1]
+if args[:2] == ['config', 'get']:
+    node, leaf = walk(args[2])
+    if node is None or leaf not in node: sys.exit(1)
+    value = node[leaf]
+    print(value if isinstance(value, str) else json.dumps(value))
     sys.exit(0)
+if args[:2] == ['config', 'set']:
+    node, leaf = walk(args[2], create=True)
+    node[leaf] = json.loads(args[args.index('--json') + 1]) if '--json' in args else args[3]
+    record(); json.dump(store, open(store_path, 'w')); sys.exit(0)
+if args[:2] == ['config', 'unset']:
+    node, leaf = walk(args[2])
+    if node is None or leaf not in node:
+        print('Config path not found: ' + args[2]); sys.exit(1)
+    del node[leaf]; record(); json.dump(store, open(store_path, 'w')); sys.exit(0)
 sys.exit('unexpected openclaw call: ' + ' '.join(args))
 '''
 
@@ -108,6 +132,22 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertIn('openclaw-mcp-adapter', writes['tools.sandbox.tools.allow'])
             self.assertIn('group:plugins', writes['tools.sandbox.tools.allow'])
             self.assertEqual(writes['tools.alsoAllow'], ['group:plugins'])
+
+    def test_a_second_pass_writes_nothing(self):
+        # Includes the empty custom-model set staging uses, whose models object
+        # has no 'mode' key: the old existence check rewrote it on every run.
+        for custom_models in (self.defaults['openclaw_custom_models'], {}):
+            with self.subTest(custom_models=bool(custom_models)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                tasks = [self.temp_files, self.configure, self.report]
+                extra = {'openclaw_custom_models': custom_models}
+                first = self.run_task(tasks, root, extra)
+                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                (root / 'writes').unlink()
+                second = self.run_task(tasks, root, extra)
+                self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+                self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
+                self.assertNotIn('UPDATED:', second.stdout)
 
     def test_no_adapter_is_allowed_when_none_is_declared(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
