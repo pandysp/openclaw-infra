@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -64,6 +65,21 @@ def remote_marker_status():
     except urllib.error.HTTPError as error:
         return error.code, None
 
+def await_remote_marker(want_present):
+    # GitHub's contents API is eventually consistent: it served a pre-push copy
+    # 2 s after a verified push. Poll to a deadline; the git push already happened.
+    # Anonymous API: 60 requests/hour per IP, so poll gently (<= 16 per call).
+    deadline = time.monotonic() + 75
+    while True:
+        status, remote = remote_marker_status()
+        if want_present and status == 200 and base64.b64decode(remote['content']).decode() == expected+'\n':
+            return True
+        if not want_present and status == 404:
+            return True
+        if status not in (200, 404) or time.monotonic() > deadline:
+            return False
+        time.sleep(5)
+
 systemctl('stop', timer)
 created = []
 try:
@@ -93,8 +109,7 @@ pathlib.Path('.git/phoenix-isolation-proof').write_text('isolated')
     hook.chmod(0o700)
     systemctl('start', service)
     assert proof.read_text() == 'isolated'
-    status, remote = remote_marker_status()
-    assert status == 200 and base64.b64decode(remote['content']).decode() == expected+'\n'
+    assert await_remote_marker(True), 'Marker push did not reach the remote'
     print('PASS: actual sync unit executes hooks without host privileges or proxy access')
     print('PASS: repository-scoped SSH fetch/push and remote readback')
 finally:
@@ -103,6 +118,6 @@ finally:
     proof.unlink(missing_ok=True)
     systemctl('start', service)
     systemctl('start', timer)
-assert remote_marker_status()[0] == 404, 'Marker removal did not reach the remote'
+assert await_remote_marker(False), 'Marker removal did not reach the remote'
 print('PASS: test files removed locally and remotely; the existing timer is restored')
 PY
