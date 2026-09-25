@@ -92,6 +92,9 @@ if cmd == 'pulumi':
                      for suffix in ['', '-test']]
         print(opts.get('raw_export_output', json.dumps({'deployment': {'resources': resources}})))
         sys.exit(opts.get('export_exit', 0))
+    if args[0] == 'cancel':
+        if args[1:] != ['--yes', '--stack', 'staging', '--non-interactive']: sys.exit('Wrong cancelled stack')
+        sys.exit(opts.get('cancel_exit', 0))
     if args[0] == 'destroy':
         sys.exit(opts.get('destroy_exit', 0))
     if args[:2] == ['stack', 'rm']:
@@ -693,12 +696,20 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
     def test_destroy_failure_keeps_checkpoint_and_no_force_removal_is_used(self):
         result = self.run_step('Destroy staging infrastructure', destroy_exit=73)
         self.assertEqual(result.returncode, 73)
-        self.assertEqual([call['args'][0] for call in self.calls()], ['destroy'])
+        self.assertEqual([call['args'][0] for call in self.calls()], ['cancel', 'destroy'])
         self.assertNotIn('--force', self.steps['Destroy staging infrastructure']['run'])
 
     def test_successful_destroy_keeps_checkpoint_until_cleanup_is_verified(self):
         self.assertEqual(self.run_step('Destroy staging infrastructure').returncode, 0)
-        self.assertEqual([call['args'][:2] for call in self.calls()], [['destroy', '--yes']])
+        self.assertEqual([call['args'][:2] for call in self.calls()], [['cancel', '--yes'], ['destroy', '--yes']])
+
+    def test_a_timed_out_deploy_cannot_block_destroy(self):
+        # A step timeout kills Pulumi and leaves this run's lock (run 36147194676
+        # leaked a server that way). The stack is run-owned, so cleanup releases
+        # the lock first; a failed release still stops before destroy.
+        result = self.run_step('Destroy staging infrastructure', cancel_exit=9)
+        self.assertEqual(result.returncode, 9)
+        self.assertEqual([call['args'][0] for call in self.calls()], ['cancel'])
 
     def test_checkpoint_removal_requires_all_cleanup_outcomes_and_runs_last(self):
         step = self.steps['Remove verified staging stack']

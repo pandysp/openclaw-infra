@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     # Step deadlines leave teardown time before the job deadline (fixture checked).
     # Cancellation or runner loss can still interrupt cleanup; this is not a teardown guarantee.
-    timeout-minutes: 145
+    timeout-minutes: 165
 
     steps:
       # ── Setup ────────────────────────────────────────────────────
@@ -345,7 +345,8 @@ jobs:
 
       # ── Deploy ───────────────────────────────────────────────────
       - name: Deploy staging infrastructure
-        timeout-minutes: 40
+        # Measured 29.6-39.2 min for a full provision (2026-09-25); 40 min killed one.
+        timeout-minutes: 60
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -589,6 +590,10 @@ jobs:
         run: |
           set -euo pipefail
           cd pulumi
+          # A step timeout kills Pulumi and leaves this run's lock, which blocked
+          # destroy and leaked a server (run 36147194676). The stack is run-owned
+          # (fresh per run, one run at a time), so releasing the lock is safe.
+          pulumi cancel --yes --stack staging --non-interactive
           # Retain the checkpoint until independent cleanup verification succeeds.
           pulumi destroy --yes --stack staging --non-interactive
 
