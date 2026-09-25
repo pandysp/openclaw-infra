@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     # Step deadlines leave teardown time before the job deadline (fixture checked).
     # Cancellation or runner loss can still interrupt cleanup; this is not a teardown guarantee.
-    timeout-minutes: 140
+    timeout-minutes: 145
 
     steps:
       # ── Setup ────────────────────────────────────────────────────
@@ -522,7 +522,8 @@ jobs:
         run: ./scripts/test-workspace-isolation.sh
 
       - name: Run smoke test
-        timeout-minutes: 5
+        # Two gateway restarts (<= 2 min each) plus inference (<= 2.5 min).
+        timeout-minutes: 10
         run: |
           : "${STAGING_HOST:?Run host resolution first}"
           : "${STAGING_PRIVATE_REPOSITORY:?Validate a private repository before provisioning}"

@@ -148,20 +148,36 @@ try {
     const temporary = `${configPath}.smoke.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(current), {mode: 0o600});
     fs.renameSync(temporary, configPath);
+    // The gateway pins the config it started with; tools.* and agents.* file
+    // edits never reach it (reload class "none"). Restart so it runs this policy.
+    step = `restarting the gateway to ${disabled ? 'disable' : 'restore'} tools`;
+    execFileSync('systemctl', ['--user', 'restart', 'openclaw-gateway'], {
+      timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
+      env: {HOME: os.homedir(), PATH: process.env.PATH, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`},
+    });
   };
   const waitForToolPolicy = async denied => {
     for (const agent of ['main', 'test']) {
       step = `${denied ? 'disabling' : 'restoring'} tool access for ${agent}`;
+      // A restart takes ~10-20 s on staging; refused connections mean "not up yet".
+      const deadline = Date.now() + 120000;
       let applied = false;
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const response = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-          method: 'POST', signal: AbortSignal.timeout(8000),
-          headers: {Authorization: `Bearer ${config.gateway.auth.token}`, 'Content-Type': 'application/json'},
-          body: JSON.stringify({...mainRead, tool: `${agent === 'main' ? 'github' : 'github-test'}_get_file_contents`, sessionKey: `agent:${agent}:main`}),
-        });
+      while (!applied && Date.now() < deadline) {
+        let response;
+        try {
+          response = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+            method: 'POST', signal: AbortSignal.timeout(8000),
+            headers: {Authorization: `Bearer ${config.gateway.auth.token}`, 'Content-Type': 'application/json'},
+            body: JSON.stringify({...mainRead, tool: `${agent === 'main' ? 'github' : 'github-test'}_get_file_contents`, sessionKey: `agent:${agent}:main`}),
+          });
+        } catch (error) {
+          if (!(error instanceof TypeError)) throw error;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
         assert([200, 404].includes(response.status));
-        if (response.status === (denied ? 404 : 200)) { applied = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 250));
+        applied = response.status === (denied ? 404 : 200);
+        if (!applied) await new Promise(resolve => setTimeout(resolve, 1000));
       }
       assert(applied);
     }

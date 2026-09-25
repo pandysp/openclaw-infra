@@ -35,11 +35,22 @@ class SmokeTests(unittest.TestCase):
                 ]}}}}
             }))
             original_config = json.loads((state/'openclaw.json').read_text())
+            # The real gateway pins the config it started with: tools.* and
+            # agents.* file edits are reload class "none" and never swap the
+            # runtime snapshot (openclaw 2026.6.6, src/gateway/config-reload-plan.ts).
+            (root / 'gateway-snapshot.json').write_text((state/'openclaw.json').read_text())
             preload = root / 'http.mjs'
             preload.write_text('''
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+// Virtual clock: waits complete instantly but still advance Date.now, so the
+// script's real deadlines are exercised without real sleeping.
+let clockOffset = 0;
+const realNow = Date.now.bind(Date);
+Date.now = () => realNow() + clockOffset;
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, ms = 0, ...rest) => { clockOffset += ms; return realSetTimeout(callback, 0, ...rest); };
 globalThis.fetch = async (url, options = {}) => {
   const mode = process.env.FIXTURE_CASE;
   if (url === 'https://api.github.com/repos/fixture/private-repo') {
@@ -55,7 +66,9 @@ globalThis.fetch = async (url, options = {}) => {
   const body = JSON.parse(options.body);
   assert(['github_get_file_contents', 'github-test_get_file_contents'].includes(body.tool));
   assert.equal(body.args.repo, 'private-repo');
-  const config = JSON.parse(fs.readFileSync(os.homedir()+'/.openclaw/openclaw.json','utf8'));
+  const refused = os.homedir()+'/gateway-restarting';
+  if (fs.existsSync(refused)) { fs.rmSync(refused); throw new TypeError('fetch failed'); }
+  const config = JSON.parse(fs.readFileSync(os.homedir()+'/gateway-snapshot.json','utf8'));
   if (config.tools?.deny?.includes('*') && mode !== 'tools_not_disabled') return {status:404};
   return {status: mode === 'mcp_failure' ? 500 : 200, json: async () => ({ok: true, result: {
     isError: mode === 'mcp_error_result', content: [{type: 'text', text: mode === 'invalid_mcp_json' ? 'fixture-secret-invalid' : '[{"type":"file"}]'}]
@@ -69,6 +82,14 @@ assert sys.argv[1:3] == ['ssh','ubuntu@openclaw-staging-123-1.fixture.ts.net']
 raise SystemExit(subprocess.run(shlex.split(sys.argv[3]), input=sys.stdin.read(), text=True).returncode)
 ''',
                 'hostname': "print('openclaw-staging-123-1')\n",
+                'systemctl': '''import os,pathlib,shutil,sys
+root=pathlib.Path(os.environ['HOME'])
+assert sys.argv[1:]==['--user','restart','openclaw-gateway'], sys.argv
+assert os.environ.get('XDG_RUNTIME_DIR','').startswith('/run/user/')
+shutil.copyfile(root/'.openclaw/openclaw.json', root/'gateway-snapshot.json')
+(root/'gateway-restarting').touch()
+with (root/'restarts').open('a') as f: f.write('restart\\n')
+''',
                 'claude': '''import os,pathlib,sys
 if sys.argv[1:]==['--help']:print('--tools --strict-mcp-config')
 else:
@@ -95,7 +116,7 @@ elif args[:2]==['devices','approve']:
  if mode=='approval_failed':print('fixture-secret-error');raise SystemExit(1)
  (root/'approved').touch();print('{}')
 elif args[:3]==['gateway','call','agent']:
- config=json.loads((root/'.openclaw/openclaw.json').read_text())
+ config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'Inference still has tools'
  subprocess.run([config['agents']['defaults']['cliBackends']['claude-cli']['command']],check=True,capture_output=True)
  assert (root/'native-tool-free').exists()
@@ -128,6 +149,10 @@ else:raise AssertionError('Unexpected command')
             restored = json.loads((state/'openclaw.json').read_text())
             self.assertEqual(restored['tools'], original_config['tools'])
             self.assertEqual(restored['agents']['defaults']['cliBackends'], original_config['agents']['defaults']['cliBackends'])
+            # The running gateway, not just the file, must be back on the original policy.
+            running = json.loads((root / 'gateway-snapshot.json').read_text())
+            self.assertEqual(running['tools'], original_config['tools'])
+            self.assertEqual(running['agents']['defaults']['cliBackends'], original_config['agents']['defaults']['cliBackends'])
             return result
 
     def test_pairing_inference_and_private_reads(self):
