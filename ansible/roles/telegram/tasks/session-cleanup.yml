@@ -15,12 +15,12 @@
   ansible.builtin.shell: |
     set -euo pipefail
     python3 << 'PYEOF'
-    import json, os, sys
+    import json, os, subprocess, sys, tempfile
 
     with open("/tmp/ansible-agents-session-check.json") as f:
         agents = json.load(f)
 
-    changes = []
+    stale = []
 
     for agent in agents:
         agent_id = agent["id"]
@@ -37,9 +37,7 @@
             continue
 
         with open(sessions_path) as f:
-            store = json.load(f)
-
-        entry = store.get(session_key)
+            entry = json.load(f).get(session_key)
         if not entry:
             continue
 
@@ -52,26 +50,42 @@
             print("OK: %s -> %s" % (agent_id, current_to))
             continue
 
-        session_id = entry.get("sessionId", "")
-        del store[session_key]
-        with open(sessions_path, "w") as f:
-            json.dump(store, f, indent=2)
+        stale.append((agent_id, sessions_path, session_key, current_to, deliver_to))
 
-        jsonl_path = "/home/ubuntu/.openclaw/agents/%s/sessions/%s.jsonl" % (agent_id, session_id)
-        if os.path.exists(jsonl_path):
-            os.remove(jsonl_path)
-
-        changes.append("FIXED: %s was %s, expected %s" % (agent_id, current_to, deliver_to))
-        print("FIXED: %s session had deliveryContext.to=%s, expected %s -- removed stale session" % (agent_id, current_to, deliver_to))
-
-    if not changes:
+    if not stale:
         print("OK: all group agent sessions have correct delivery targets")
+        sys.exit(0)
+
+    # The gateway keeps the store in memory and rewrites it whole, so edits made
+    # while it runs can be lost or undone: stop it, replace each file atomically,
+    # and start it again even if a write fails.
+    systemctl = ["systemctl", "--user"]
+    subprocess.run(systemctl + ["stop", "openclaw-gateway"], check=True)
+    try:
+        for agent_id, sessions_path, session_key, current_to, deliver_to in stale:
+            with open(sessions_path) as f:
+                store = json.load(f)
+            session_id = store.pop(session_key).get("sessionId", "")
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(sessions_path), prefix=".sessions-cleanup-")
+            with os.fdopen(fd, "w") as f:
+                json.dump(store, f, indent=2)
+            os.chmod(tmp, os.stat(sessions_path).st_mode & 0o777)
+            os.replace(tmp, sessions_path)
+
+            jsonl_path = "/home/ubuntu/.openclaw/agents/%s/sessions/%s.jsonl" % (agent_id, session_id)
+            if os.path.exists(jsonl_path):
+                os.remove(jsonl_path)
+
+            print("FIXED: %s session had deliveryContext.to=%s, expected %s -- removed stale session" % (agent_id, current_to, deliver_to))
+    finally:
+        subprocess.run(systemctl + ["start", "openclaw-gateway"], check=True)
     PYEOF
   args:
     executable: /bin/bash
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
   register: session_cleanup_result
   changed_when: "'FIXED' in session_cleanup_result.stdout"
-  notify: restart openclaw-gateway
 
 - name: Clean up session check temp file
   ansible.builtin.file:

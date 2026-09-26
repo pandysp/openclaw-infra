@@ -4,7 +4,9 @@
 Both bugs here only showed on a second provision of a live server: the adapter
 was dropped from plugins.allow because an install-path check looked in the
 pre-2026.5 location, and every Claude CLI session was reset to the primary
-model because its 'claude-cli' provider was treated as foreign.
+model because its 'claude-cli' provider was treated as foreign. The migration
+also edited the session stores under a running gateway, which keeps them in
+memory and rewrites them whole; it now stops the gateway around its writes.
 """
 import json
 import os
@@ -70,6 +72,16 @@ def find_task(tasks, name):
     return None
 
 
+FAKE_SYSTEMCTL = '''#!/usr/bin/env python3
+# Records each gateway stop/start with the session store as it is at that moment.
+import json, os, sys
+root = os.environ['FIXTURE_ROOT']
+store = os.path.join(root, 'state/agents/main/sessions/sessions.json')
+with open(os.path.join(root, 'systemctl'), 'a') as f:
+    f.write(json.dumps([sys.argv[1:], open(store).read() if os.path.exists(store) else None]) + '\\n')
+'''
+
+
 class ConfigRoleConvergenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -93,6 +105,9 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         fake = root / 'bin/openclaw'
         fake.write_text(FAKE_OPENCLAW)
         fake.chmod(0o700)
+        systemctl = root / 'bin/systemctl'
+        systemctl.write_text(FAKE_SYSTEMCTL)
+        systemctl.chmod(0o700)
         # Point the tasks' fixed server and temp paths at this fixture tree.
         tasks = json.loads(json.dumps(tasks).replace('/home/ubuntu/.openclaw', str(root / 'state'))
                            .replace('/tmp/ansible-', str(root / 'tmp-ansible-')))
@@ -178,9 +193,18 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 'foreign': {'modelProvider': 'openai', 'model': 'gpt-5'},
             }
             sessions.write_text(json.dumps(original))
+            sessions.chmod(0o640)
             result = self.run_task([self.migrate, self.migrate_report], root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             migrated = json.loads(sessions.read_text())
+            self.assertEqual(sessions.stat().st_mode & 0o777, 0o640)
+            # The gateway rewrites the store from memory, so it is stopped while the
+            # file changes and started again afterwards.
+            calls = [json.loads(line) for line in (root / 'systemctl').read_text().splitlines()]
+            self.assertEqual([c[0] for c in calls], [['--user', 'stop', 'openclaw-gateway'], ['--user', 'start', 'openclaw-gateway']])
+            self.assertEqual(json.loads(calls[0][1]), original)
+            self.assertEqual(json.loads(calls[1][1]), migrated)
+            (root / 'systemctl').unlink()
             primary_provider, primary_model = self.defaults['openclaw_model_primary'].split('/', 1)
             self.assertEqual(migrated['runtime'], original['runtime'])
             self.assertEqual(migrated['canonical'], original['canonical'])
@@ -191,6 +215,18 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             # A second pass has nothing left to migrate.
             result = self.run_task([self.migrate, self.migrate_report], root)
             self.assertRegex(result.stdout, r'localhost\s+: ok=1\s+changed=0 ')
+            self.assertFalse((root / 'systemctl').exists(), 'gateway touched with nothing to migrate')
+
+    def test_an_unreadable_session_store_fails_before_the_gateway_stops(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            sessions = root / 'state/agents/main/sessions/sessions.json'
+            sessions.parent.mkdir(parents=True)
+            sessions.write_text('{"truncated": ')
+            result = self.run_task([self.migrate], root)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn('sessions.json', result.stdout + result.stderr)
+            self.assertFalse((root / 'systemctl').exists())
 
 
 if __name__ == '__main__':
