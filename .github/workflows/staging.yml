@@ -417,6 +417,12 @@ jobs:
           # Tailscale checks the host key against its authenticated control plane.
           ACTUAL_NAME=$(tailscale ssh "ubuntu@$HOST" hostname)
           test "$ACTUAL_NAME" = "$EXPECTED"
+          # The tailnet policy lets only CI runners reach Phoenix servers, so the
+          # server must not even see a personal device or another server. No
+          # device names in this public log.
+          tailscale ssh "ubuntu@$HOST" 'tailscale status --json' |
+            jq -e '.Peer | type == "object" and all(.[]; (.Tags // []) | index("tag:ci"))' >/dev/null ||
+            { echo "::error::The staging server sees tailnet devices other than CI runners"; exit 1; }
           IPV4=$(cd pulumi && pulumi stack output serverIpv4 --stack staging)
           tailscale ssh "ubuntu@$HOST" 'ip -j -4 address show scope global' |
             jq -es --arg ip "$IPV4" 'length == 1 and

@@ -135,6 +135,9 @@ elif cmd == 'tailscale':
     if args[:2] == ['ssh', 'ubuntu@' + name + '.example.ts.net']:
         if args[2:] == ['true']: pass
         elif args[2:] == ['hostname']: print(opts.get('hostname', name))
+        elif args[2:] == ['tailscale status --json']:
+            print(opts.get('raw_server_status', json.dumps({'Peer': opts.get('server_peers', {'r': {'HostName': 'runner', 'Tags': ['tag:ci']}})})))
+            sys.exit(opts.get('server_status_exit', 0))
         elif args[2:] == ['ip -j -4 address show scope global']:
             print(opts.get('raw_ip_output', json.dumps([{'addr_info': [{'local': opts.get('ipv4', '203.0.113.42')}]}])))
             sys.exit(opts.get('ip_output_exit', 0))
@@ -623,6 +626,25 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         for options in ({'tailscale_exit': 1}, {'hostname': 'other-server'}, {'ipv4': '203.0.113.9'}):
             with self.subTest(options=options):
                 self.assertNotEqual(self.run_step('Resolve staging host', **options).returncode, 0)
+
+    def test_the_staging_server_sees_only_ci_runners(self):
+        # The tailnet policy lets only CI runners reach Phoenix servers, so a
+        # Phoenix server must not even see a personal device or another server.
+        runner = {'HostName': 'runner', 'Tags': ['tag:ci']}
+        self.assertEqual(self.run_step('Resolve staging host', server_peers={'r': runner, 's': runner}).returncode, 0)
+        self.assertEqual(self.run_step('Resolve staging host', server_peers={}).returncode, 0)
+        for options in ({'server_peers': {'r': runner, 'm': {'HostName': 'private-laptop'}}},
+                        {'server_peers': {'m': {'HostName': 'private-laptop', 'Tags': None}}},
+                        {'server_peers': {'s': {'HostName': 'private-laptop', 'Tags': ['tag:server']}}},
+                        {'raw_server_status': 'not JSON'}, {'raw_server_status': '{}'},
+                        {'server_status_exit': 1}):
+            with self.subTest(options=options):
+                (self.root / 'env').unlink(missing_ok=True)
+                result = self.run_step('Resolve staging host', **options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.root / 'env').exists())
+                # Public CI logs never name the devices it saw.
+                self.assertNotIn('private-laptop', result.stdout + result.stderr)
 
     def test_host_address_requires_one_json_array_and_successful_ssh(self):
         valid = json.dumps([{'addr_info': [{'local': '203.0.113.42'}]}])
