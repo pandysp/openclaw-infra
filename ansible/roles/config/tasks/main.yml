@@ -655,7 +655,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     python3 << 'PYEOF'
-    import json, glob
+    import glob, json, os, subprocess, sys, tempfile
 
     # Extract provider prefix from the primary model (e.g., "anthropic" from "anthropic/claude-opus-4-6")
     primary = "{{ openclaw_model_primary }}"
@@ -666,44 +666,56 @@
     # turns of the primary model are stored as provider "claude-cli", not a foreign one.
     accepted_providers = set(filter(None, [target_provider, "{{ openclaw_agent_models[openclaw_model_primary].agentRuntime.id | default('') }}"]))
 
-    changed_agents = []
-    for sessions_file in sorted(glob.glob("/home/ubuntu/.openclaw/agents/*/sessions/sessions.json")):
+    def foreign(entry):
+        provider = entry.get("modelProvider", "") if isinstance(entry, dict) else ""
+        return bool(provider) and provider not in accepted_providers
+
+    def load(path):
         try:
-            with open(sessions_file) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            continue
+            with open(path) as f:
+                return json.load(f)
+        except json.JSONDecodeError as error:
+            sys.exit(f"Unreadable session store {path}: {error}")
 
-        modified = False
-        old_providers = set()
-        for key, val in data.items():
-            if not isinstance(val, dict):
-                continue
-            current_provider = val.get("modelProvider", "")
-            # Only migrate sessions pinned to a different provider
-            if current_provider and current_provider not in accepted_providers:
-                old_providers.add(current_provider)
-                val["modelProvider"] = target_provider
-                val["model"] = target_model
-                modified = True
+    stores = sorted(glob.glob("/home/ubuntu/.openclaw/agents/*/sessions/sessions.json"))
+    pending = [path for path in stores if any(foreign(entry) for entry in load(path).values())]
+    if not pending:
+        print("OK")
+        sys.exit(0)
 
-        if modified:
-            with open(sessions_file, "w") as f:
+    # The gateway keeps the store in memory and rewrites it whole, so edits made
+    # while it runs can be lost or undone: stop it, replace each file atomically,
+    # and start it again even if a write fails.
+    systemctl = ["systemctl", "--user"]
+    subprocess.run(systemctl + ["stop", "openclaw-gateway"], check=True)
+    migrated = []
+    try:
+        for path in pending:
+            data = load(path)
+            old_providers = sorted({entry["modelProvider"] for entry in data.values() if foreign(entry)})
+            for entry in data.values():
+                if foreign(entry):
+                    entry["modelProvider"] = target_provider
+                    entry["model"] = target_model
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".sessions-migrate-")
+            with os.fdopen(fd, "w") as f:
                 json.dump(data, f, indent=2)
-            agent = sessions_file.split("/agents/")[1].split("/")[0]
-            changed_agents.append(agent + " (" + ", ".join(sorted(old_providers)) + ")")
+            os.chmod(tmp, os.stat(path).st_mode & 0o777)
+            os.replace(tmp, path)
+            agent = path.split("/agents/")[1].split("/")[0]
+            migrated.append(agent + " (" + ", ".join(old_providers) + ")")
+    finally:
+        subprocess.run(systemctl + ["start", "openclaw-gateway"], check=True)
 
     # Agent and old provider names only (never session content).
-    if changed_agents:
-        print("MIGRATED: " + "; ".join(changed_agents))
-    else:
-        print("OK")
+    print("MIGRATED: " + "; ".join(migrated))
     PYEOF
   args:
     executable: /bin/bash
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
   register: session_migration_result
   changed_when: "'MIGRATED:' in session_migration_result.stdout"
-  notify: restart openclaw-gateway
 
 - name: Show which sessions were moved to the primary model
   ansible.builtin.debug:

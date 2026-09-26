@@ -15,7 +15,7 @@ OpenClaw has a bug where heartbeat delivery to Telegram **groups** silently fall
 
 In `resolveHeartbeatSenderId()` (defined once in `dist/targets-*.js` as of 2026.4.15+; earlier versions bundled it into other chunks):
 
-1. The heartbeat delivery target correctly resolves to the group ID (e.g., `-5046803888`)
+1. The heartbeat delivery target correctly resolves to the group ID (a negative number)
 2. `resolveHeartbeatSenderId` tries to match this against Telegram's `allowFrom` list
 3. `allowFrom` only contains individual user IDs — group IDs never match
 4. Falls back to `allowList[0]` → the primary user's DM ID
@@ -55,7 +55,7 @@ The `ansible/roles/openclaw/tasks/main.yml` should re-apply this patch after ins
 
 ### Session cleanup on provision (`telegram` role)
 
-The `ansible/roles/telegram/tasks/session-cleanup.yml` runs after bindings are set and checks each group agent's main session. If `deliveryContext.to` doesn't match the expected group ID, it patches `sessions.json`.
+The `ansible/roles/telegram/tasks/session-cleanup.yml` runs after bindings are set and checks each group agent's main session. If `deliveryContext.to` doesn't match the expected group ID, it follows the manual procedure above: stops the gateway (which keeps `sessions.json` in memory and would rewrite it), removes the stale entry and its transcript, and starts the gateway again.
 
 ## Verification
 
@@ -73,8 +73,8 @@ for agent in [\"tl\", \"ph\"]:
 "'
 
 # Expected: group IDs (negative numbers), NOT user IDs (positive numbers)
-# tl: deliveryContext.to=-5046803888
-# ph: deliveryContext.to=-5203656694
+# tl: deliveryContext.to=-<tl group id>
+# ph: deliveryContext.to=-<ph group id>
 ```
 
 ## Status
