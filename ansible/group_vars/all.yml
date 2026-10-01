@@ -53,6 +53,10 @@ openclaw_version: "2026.6.6"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
 claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
+# Claude Code compacts claude-cli sessions when the context reaches this window
+# minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
+# ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
+claude_code_auto_compact_window: 305000
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in docs/DOCS-REVIEW.md. Provisioning refuses scheduler changes on a mismatch.
 openclaw_docs_reviewed_version: "2026.6.6"
