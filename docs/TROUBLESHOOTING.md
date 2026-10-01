@@ -12,7 +12,6 @@ Common issues and solutions for the OpenClaw deployment.
 - Workspace sync not working → [Workspace Git Sync](#workspace-git-sync-issues)
 - Docker permission denied → [Sandbox / Docker Issues](#sandbox--docker-issues)
 - Provision fails with empty secrets → [Provisioning Errors](#provision-fails-with-empty-secret-validation-error)
-- Health check failed during provisioning → [Provisioning Issues](#health-check-failed-during-provisioning)
 - Ansible not found → [Provisioning Issues](#ansible-not-found-during-pulumi-up)
 
 > **Note**: All `systemctl --user` and `journalctl --user` commands on the server require `XDG_RUNTIME_DIR=/run/user/1000`. Either prefix each command or run `export XDG_RUNTIME_DIR=/run/user/1000` once per session.
@@ -208,39 +207,23 @@ XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 200
 **Symptom**: Service fails with "node: command not found".
 
 ```bash
-# Reinstall OpenClaw (includes Node.js)
-OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash
-
-# Reinstall daemon and restart
-XDG_RUNTIME_DIR=/run/user/1000 openclaw daemon install
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
+# Node.js comes from NodeSource (system role); OpenClaw from npm (openclaw role)
+./scripts/provision.sh --tags system,openclaw
 ```
 
 ## Setup Token Issues
 
 ### Token expired or invalid
 
-**Symptom**: OpenClaw fails to authenticate, logs show auth errors.
+**Symptom**: Agent turns fail with Claude auth errors (401) in the gateway log.
+
+Agent turns run through the Claude CLI, which reads only `~/.claude/.credentials.json`; re-running `openclaw onboard` does not reach it. Rotate the token as in [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation), then check the CLI directly:
 
 ```bash
-# Generate new token locally
-claude setup-token
-
-# Re-onboard on the server
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net
-
-openclaw onboard --non-interactive --accept-risk \
-    --mode local \
-    --auth-choice token \
-    --token "YOUR_NEW_TOKEN" \
-    --token-provider anthropic \
-    --gateway-port 18789 \
-    --gateway-bind loopback \
-    --skip-daemon \
-    --skip-skills
-
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd /tmp && echo "Reply OK" | claude -p'
 ```
+
+**Model rejected** ("Claude Code <X> does not support this model; version <Y> or newer is required"): new Claude models need a newer Claude Code. Raise `claude_code_version` in `group_vars/all.yml`, then `./scripts/provision.sh --tags openclaw`.
 
 ### /status shows no usage tracking
 
@@ -302,19 +285,6 @@ Replace `main` with the agent ID when checking another workspace. Do not run hos
 **Common causes**: missing GitHub deploy-key permission, a missing repository, strict host-key verification failure, or a merge conflict. Re-provision `--tags workspace` to refresh managed inputs. Resolve conflicts deliberately; sync never force-pushes over them.
 
 ## Provisioning Issues
-
-### Health check failed during provisioning
-
-**Symptom**: Ansible shows "Skipping cron job setup — gateway health check failed" during provisioning.
-
-This is non-fatal by design. The health check can fail on first install because:
-- Device pairing is pending (server CLI hasn't been approved yet)
-- Gateway is still starting up
-
-**Solution**: Approve devices (see [Pairing deadlock on first install](#pairing-deadlock-on-first-install)), then re-run:
-```bash
-./scripts/provision.sh --tags telegram
-```
 
 ### Ansible not found during `pulumi up`
 
@@ -410,9 +380,9 @@ pulumi destroy
 pulumi up
 # Wait ~5 min for cloud-init
 cd .. && ./scripts/verify.sh
-# Clean up cloud-init log (contains secrets)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"
 ```
+
+The new server can read the Tailscale auth key: see [auth key exposure](../README.md#tailscale-auth-key-exposure).
 
 ## General Diagnostics
 

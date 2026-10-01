@@ -2,7 +2,7 @@
 
 **Story:** US-015
 **Date:** 2026-02-23
-**Status:** Go (with caveats). Superseded in part: the Claude Code MCP image was removed on 2026-10-01, so only the Codex and Pi blocks remain.
+**Status:** Go (with caveats). Superseded: the Claude Code, Codex and Pi MCP images were all removed on 2026-10-01.
 
 ## Current Duplication
 

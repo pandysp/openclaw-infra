@@ -27,7 +27,7 @@ Alternatively, message **@userinfobot** on Telegram to get a user ID manually.
 
 ### Scheduled Tasks
 
-When Telegram is configured, these default cron jobs are created for the main agent:
+When Telegram is configured, these default cron jobs are declared for the main agent. They stay disabled until the agent sets `scheduled_automation_enabled: true`:
 
 | Job | Schedule | Purpose |
 |-----|----------|---------|
@@ -67,7 +67,7 @@ openclaw cron add \
 
 ## WhatsApp Integration
 
-Agents can use WhatsApp instead of Telegram by setting `deliver_channel: "whatsapp"` in their agent definition. WhatsApp is a bundled OpenClaw plugin using the Baileys/WhatsApp Web protocol.
+Agents can use WhatsApp instead of Telegram by setting `deliver_channel: "whatsapp"` in their agent definition. WhatsApp is the external `@openclaw/whatsapp` plugin (Baileys/WhatsApp Web protocol); the whatsapp role installs it pinned to `openclaw_version`.
 
 ### Setup
 
@@ -96,7 +96,7 @@ Agents can use WhatsApp instead of Telegram by setting `deliver_channel: "whatsa
 
 ### Session Expiry
 
-WhatsApp Web sessions expire approximately every 14 days. A health-check cron job on the main agent monitors WhatsApp status every 30 minutes and alerts via Telegram when re-authentication is needed.
+WhatsApp Web sessions expire approximately every 14 days. Nothing alerts on expiry: no health-check cron exists, and the config role turns OpenClaw's own monitor off (`channels.whatsapp.healthMonitor.enabled: false`). Check with `openclaw channels status --probe`.
 
 ### Verify WhatsApp
 

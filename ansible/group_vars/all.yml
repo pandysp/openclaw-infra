@@ -33,10 +33,10 @@ openclaw_agent_models:
 # OAuth auth (Claude Max subscription). No direct Anthropic API calls for the primary model.
 # The claude CLI is installed via npm (@anthropic-ai/claude-code) and authenticated via
 # ~/.claude/.credentials.json (OAuth access + refresh tokens from Pulumi secret).
-# Claude Code compacts claude-cli sessions itself: OpenClaw skips its own preflight
-# compaction and memory flush for CLI turns, so there are no compaction settings here.
+# Claude Code compacts claude-cli sessions itself (OpenClaw skips its own compaction
+# and memory flush for CLI turns); see claude_code_auto_compact_window below.
 #
-# OpenClaw's own anthropic provider catalog (the MCP containers do not read it).
+# OpenClaw's own anthropic provider catalog, for direct-API use only.
 openclaw_custom_models:
   mode: "merge"
   providers:

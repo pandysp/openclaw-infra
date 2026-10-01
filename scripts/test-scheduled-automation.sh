@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Run the unit tests for the cron reconciler (scheduled automation opt-in).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

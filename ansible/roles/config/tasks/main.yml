@@ -409,16 +409,6 @@
         check_set_json agents.defaults.sandbox.docker.binds '["/home/ubuntu/.openclaw/media:/media:ro"]'
         check_set_json agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources 'true'
 
-        # Migration for forks that ran the pre-2026-04-19 Beads setup: strip the
-        # four BEADS_DOLT env vars from the openclaw sandbox config. Safe to delete
-        # after 2026-07-01 (give forks one quarter to pull + re-run the playbook).
-        for key in agents.defaults.sandbox.docker.env.BEADS_DOLT_SERVER_HOST \
-                   agents.defaults.sandbox.docker.env.BEADS_DOLT_SERVER_PORT \
-                   agents.defaults.sandbox.docker.env.BEADS_DOLT_AUTO_START \
-                   agents.defaults.sandbox.docker.env.BEADS_DOLT_SHARED_SERVER; do
-            check_unset "$key"
-        done
-
         # Image generation model (Google Gemini — provider apiKey merged into models JSON above)
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
         check_set agents.defaults.imageGenerationModel.primary "{{ openclaw_image_generation_model }}"

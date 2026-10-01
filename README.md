@@ -1,12 +1,12 @@
 # OpenClaw Infrastructure
 
-Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. ~€11.39/month.
+Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. About €11/month ([cost breakdown](./CLAUDE.md#cost-breakdown)).
 
 **This is a reference template.** Clone it and adapt for your own deployment — the config values (timezone, model, cron prompts) are working examples you'll customize.
 
 ## Features
 
-- **Cheap**: Hetzner CX43 x86 (8 vCPU, 16 GB) ~€9.49/mo + backups (~€11.39/mo total)
+- **Cheap**: one Hetzner CX43 (8 vCPU, 16 GB) plus backups
 - **Secure**: Hetzner firewall + UFW + Tailscale-only access + device pairing
 - **Simple**: Pulumi IaC, single command deploy, systemd user service
 - **Safe automation**: Heartbeats and cron jobs are off until explicitly enabled per agent
@@ -15,7 +15,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22 (the version CI uses)
 - [Pulumi CLI](https://www.pulumi.com/docs/install/)
 - [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/) (`pip install ansible`)
 - [Tailscale](https://tailscale.com/start) installed and connected on your machine
@@ -45,7 +45,7 @@ If you've never used Tailscale before:
 3. **Generate auth key for server**:
    - Go to https://login.tailscale.com/admin/settings/keys
    - Click "Generate auth key"
-   - Enable: **Reusable**, **Ephemeral**
+   - Enable: **Reusable**, **Ephemeral** (rebuilds reuse the key; see [auth key exposure](#tailscale-auth-key-exposure))
    - Copy the key (starts with `tskey-auth-...`)
 
 ### Telegram Bot Setup
@@ -91,7 +91,7 @@ pulumi config set hcloud:token --secret       # Hetzner API token
 pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
 pulumi config set claudeSetupToken --secret    # From `claude setup-token`
 
-# Optional: Telegram notifications (daily digests, weekly planning)
+# Optional: Telegram chat and scheduled jobs (daily standup, night shift)
 pulumi config set telegramBotToken --secret    # From @BotFather
 pulumi config set telegramUserId "YOUR_ID"     # ./scripts/get-telegram-id.sh or @userinfobot
 
@@ -106,8 +106,11 @@ cd ..
 ./scripts/verify.sh
 ```
 
-> After verifying, clean up the cloud-init log (contains secrets):
-> `ssh ubuntu@openclaw-vps.<tailnet>.ts.net "sudo shred -u /var/log/cloud-init-openclaw.log"`
+> <a id="tailscale-auth-key-exposure"></a>**Tailscale auth key exposure:** the key stays readable on the server after first boot,
+> in cloud-init's copy of the bootstrap script (`/var/lib/cloud/instance/scripts/part-001`) and in Hetzner's
+> metadata service (`http://169.254.169.254/hetzner/v1/userdata`), which sandbox containers can reach too.
+> A reusable, unexpired key therefore lets anything on the server join devices to your tailnet.
+> Production rebuilds (`pulumi up`) reuse the stored `tailscaleAuthKey`; staging mints a single-use key per run.
 
 Stack state is stored in R2; secret decryption requires the stack's passphrase. See [Pulumi Backend](#pulumi-backend).
 
@@ -152,9 +155,7 @@ Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
 ## Documentation
 
 - [CLAUDE.md](./CLAUDE.md) — Setup, operations, security, and troubleshooting
-- [docs/SECURITY.md](./docs/SECURITY.md) — Threat model and mitigations
-- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — Common issues
-- [docs/BROWSER-CONTROL-PLANNING.md](./docs/BROWSER-CONTROL-PLANNING.md) — Future browser automation approaches
+- [docs/](./docs/) — Topic guides (security, troubleshooting, integrations, Mac node) and dated records
 
 ## License
 

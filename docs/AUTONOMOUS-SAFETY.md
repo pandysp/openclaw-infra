@@ -27,7 +27,7 @@ All sessions (including web chat) run in Docker with bridge networking — isola
 | External comm | Yes | Git push (PRs), HTTP requests |
 | Host access | **No** | Sandbox blocks `~/.openclaw/`, sudo, gateway config |
 
-The sandbox prevents privilege escalation and credential theft, but the trifecta still exists within the workspace boundary. The night shift reads private code, browses the web for solutions, and pushes PRs. Telegram delivery is gateway-controlled and not an exfiltration vector.
+The sandbox prevents privilege escalation and keeps host config and secrets out of reach, with the exceptions listed in [SECURITY.md, Threat 4](./SECURITY.md#4-agent-host-command-abuse). The trifecta still exists within the workspace boundary. The night shift reads private code, browses the web for solutions, and pushes PRs. Telegram delivery is gateway-controlled and not an exfiltration vector.
 
 The eventual fix is splitting the night shift into Research (web access, no private data) and Dev (code access, no web) agents. See [SECURITY.md, Threat 4](./SECURITY.md#4-agent-host-command-abuse) for current mitigations.
 
