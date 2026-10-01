@@ -39,54 +39,24 @@ openclaw-infra/
 ├── package.json        # Node.js dependencies
 ├── tsconfig.json       # TypeScript config
 │
-├── pulumi/
-│   ├── Pulumi.yaml     # Project definition
-│   ├── Pulumi.prod.yaml  # Stack config (non-secrets)
-│   ├── index.ts        # Main entrypoint (infra + Ansible trigger)
-│   ├── server.ts       # Hetzner server resource
-│   ├── firewall.ts     # Security rules (no inbound!)
-│   └── user-data.ts    # Cloud-init (Tailscale-only bootstrap)
+├── pulumi/            # Hetzner server, firewall, cloud-init; triggers Ansible
 │
 ├── ansible/
-│   ├── ansible.cfg         # Defaults; strict host-key checks for every deployment
-│   ├── requirements.yml    # Ansible Galaxy collections
 │   ├── playbook.yml        # Main playbook
-│   ├── group_vars/all.yml  # Non-secret defaults (model, agent types, server templates)
+│   ├── group_vars/all.yml  # Non-secret defaults (models, agent types, server templates)
 │   ├── group_vars/openclaw.yml        # Deployment-specific overrides (gitignored)
 │   ├── group_vars/openclaw.yml.example  # Template for openclaw.yml
-│   ├── inventory/
-│   │   └── pulumi_inventory.py  # Inventory consumes authenticated provisioner inputs
-│   └── roles/
-│       ├── system/    # apt packages, unattended-upgrades
-│       ├── docker/    # Docker install, ubuntu→docker group
-│       ├── ufw/       # Firewall rules
-│       ├── openclaw/  # Binary install, onboard, daemon
-│       ├── config/    # All `openclaw config set` commands
-│       ├── agents/    # Create non-default agents, set bindings (conditional)
-│       ├── telegram/  # Telegram channel config, cron jobs (conditional)
-│       ├── whatsapp/  # WhatsApp channel config (conditional)
-│       ├── obsidian-headless/  # Obsidian Sync daemon per workspace (conditional)
-│       ├── qmd/       # qmd semantic search: install, per-agent watchers
-│       ├── plugins/   # MCP adapter, Codex/Pi/qmd servers, deny rules
-│       ├── sandbox/   # Pull base image, build custom Docker image
-│       └── workspace/ # Deploy key, git sync timer (conditional)
+│   ├── inventory/          # Inventory from authenticated provisioner inputs
+│   └── roles/              # One role per tag, see Ansible Tags below
 │
 ├── scripts/
-│   ├── provision.sh          # Ansible wrapper (reads secrets from Pulumi)
-│   ├── setup-mac-node.sh     # One-time Mac node host installation
-│   ├── setup-workspace.sh    # Create workspace repo + deploy key + Pulumi config
-│   ├── get-telegram-id.sh    # Discover Telegram user/group IDs
-│   ├── verify.sh             # Post-deployment checks
-│   └── backup.sh             # Data backup
+│   ├── provision.sh        # Ansible wrapper (reads secrets from Pulumi)
+│   ├── verify.sh           # Post-deployment checks
+│   ├── tests/              # Unit tests: python3 -m unittest discover -s scripts/tests
+│   └── ...                 # Setup, staging and check scripts; each starts with a usage comment
 │
-└── docs/
-    ├── AUTONOMOUS-SAFETY.md         # Multi-agent safety architecture design
-    ├── BROWSER-CONTROL-PLANNING.md  # Future browser automation approaches
-    ├── DOCS-REVIEW.md               # Official docs review tracking
-    ├── INTEGRATIONS.md              # Telegram, WhatsApp, Discord, Obsidian setup detail
-    ├── NODE-EXEC.md                 # Remote Mac node host: setup, config, operations
-    ├── SECURITY.md                  # Threat model
-    └── TROUBLESHOOTING.md
+└── docs/                   # Topic guides; INVESTIGATION-*, UPGRADE-*, *-FIX and
+                            # *-audit files are dated records, not current docs
 ```
 
 ### Ansible Tags
@@ -106,7 +76,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
 | `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
-| `plugins` | plugins | MCP adapter, Codex/Pi containers, GitHub MCP, deny rules |
+| `plugins` | plugins | MCP adapter, GitHub/qmd/Mac MCP servers, GitHub token proxy for sandbox git, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
@@ -192,6 +162,8 @@ pulumi up    # Creates server + auto-triggers Ansible provisioning
 ./scripts/provision.sh --check --diff
 ```
 
+Check mode is partial: the config role applies settings through shell steps that check mode skips, so a dry run cannot show config changes such as the default model or the model allowlist. Read the `UPDATED:` lines of a real run instead. Heartbeat changes (agents role) do show up in a dry run.
+
 ### Check Server Status
 
 ```bash
@@ -230,7 +202,7 @@ openclaw node restart   # if node exec is enabled
 openclaw security audit --deep
 ```
 
-**Expected output (as of 2026.6.1):** `0 critical · 3 warn · 2 info` — run it **on the VPS via SSH** (running locally audits your Mac instead). The 3 warnings flag deliberate config and are accepted: `dangerouslyAllowExternalBindSources` (sandbox bind mounts), `tools.exec.security=full` (gateway exec gated by `elevated=false` + node-side approvals), and the multi-user heuristic (Telegram/Discord group allowlists — personal deployment, one trusted operator).
+**Expected output (as of 2026.6.6):** `0 critical · 3 warn · 2 info` — run it **on the VPS via SSH** (running locally audits your Mac instead). The 3 warnings flag deliberate config and are accepted: `dangerouslyAllowExternalBindSources` (sandbox bind mounts), `tools.exec.security=full` (gateway exec gated by `elevated=false` + node-side approvals), and the multi-user heuristic (Telegram/Discord group allowlists — personal deployment, one trusted operator).
 
 ### Destroy Infrastructure
 
@@ -267,6 +239,8 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 | Hetzner API token | Creates/manages VPS | console.hetzner.cloud → Project → API Tokens |
 | Tailscale auth key | Joins server to your network | login.tailscale.com/admin/settings/keys |
 | Claude setup token | Powers OpenClaw (flat fee) | `claude setup-token` in terminal |
+| Claude OAuth credentials | (Optional) Full login blob; overrides the setup token for the claude CLI | Export from a local `claude` login |
+| GitHub tokens (`githubToken`, `githubToken<Agent>`) | (Optional) Per-agent GitHub MCP tools and sandbox git push via the token proxy | GitHub → Settings → Fine-grained tokens |
 | Gateway token | Authenticates browser and CLI sessions (cached after first use) | Auto-generated by Pulumi, view with `pulumi stack output openclawGatewayToken --show-secrets` |
 | Telegram bot token | (Optional) Sends messages via Telegram | @BotFather on Telegram |
 | Telegram user/group ID | (Optional) Your Telegram recipient ID | `./scripts/get-telegram-id.sh` or @userinfobot |
@@ -277,7 +251,6 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 | xAI API key | (Optional) Enables web search via Grok | x.ai/api → API Keys |
 | Groq API key | (Optional) Enables voice transcription via Whisper | console.groq.com → API Keys |
 | Gemini API key | (Optional) Enables image generation via Google Gemini | aistudio.google.com → API Keys |
-| Codex auth (`~/.codex/auth.json`) | (Optional) Powers Codex MCP servers for coding assistance | Run `codex login` locally, auto-deployed by provision.sh |
 | Obsidian auth token | (Optional) Authenticates with Obsidian Sync API | `ob login` locally, copy from `~/.obsidian-headless/auth_token` |
 | Obsidian vault password | (Optional) E2EE encryption for Obsidian Sync vaults | User-chosen password |
 
@@ -291,7 +264,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 - Run `./scripts/verify.sh` after deployment
 - Check that no public ports are exposed
 - Scope R2 access keys to the state bucket; load backend credentials from private, ignored `.env` via `direnv exec`
-- **Cloud-init log is minimal** (Tailscale bootstrap only, no secrets beyond auth key)
+- Know that the Tailscale auth key stays readable on the server: [auth key exposure](./README.md#tailscale-auth-key-exposure)
 - **Monitor Tailscale admin console** for unauthorized devices: https://login.tailscale.com/admin/machines
 - **Rotate Tailscale auth keys periodically** (see [Key Rotation](#key-rotation) below)
 - **Review paired OpenClaw devices** regularly: `openclaw devices list` (via local CLI)
@@ -306,7 +279,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 
 ### Key Rotation
 
-Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude token: update `claudeSetupToken`, then `./scripts/provision.sh --tags openclaw,plugins` — the `openclaw` role rewrites `~/.claude/.credentials.json` (the claude-cli backend's only auth surface) and `plugins` refreshes the credential-proxy token; there is no `openclaw auth login`. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
+Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude token: update `claudeSetupToken`, then `./scripts/provision.sh --tags openclaw,config` — the `openclaw` role rewrites `~/.claude/.credentials.json` (the claude-cli backend's only auth surface) and `config` refreshes the agents' Anthropic auth profiles; there is no `openclaw auth login`. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
 
 ## First-Time Setup
 
@@ -401,12 +374,7 @@ pulumi config rm xaiApiKey
 
 ## Telegram Integration (Optional)
 
-Pulumi secrets: `telegramBotToken` (from @BotFather) + `telegramUserId`. Use `./scripts/get-telegram-id.sh` to discover user/group IDs. Declares two default cron jobs for the main agent (Europe/Berlin timezone); they remain disabled until the agent explicitly opts into scheduled automation:
-
-| Job | Schedule | Purpose |
-|-----|----------|---------|
-| **Daily Standup** | 09:30 daily | Summarize what needs attention today |
-| **Night Shift** | 23:00 daily | Review notes, organize, triage tasks, prepare morning summary |
+Pulumi secrets: `telegramBotToken` (from @BotFather) + `telegramUserId`. Use `./scripts/get-telegram-id.sh` to discover user/group IDs. Declares default cron jobs for the main agent ([list](./docs/INTEGRATIONS.md#scheduled-tasks)); they remain disabled until the agent explicitly opts into scheduled automation.
 
 ```bash
 pulumi config set telegramBotToken --secret && pulumi config set telegramUserId "123456789"
@@ -418,7 +386,7 @@ openclaw channels status && openclaw cron list
 
 ## WhatsApp Integration (Optional)
 
-Uses Baileys/WhatsApp Web protocol (not official Business API). Since openclaw 2026.5.12 the channel ships as the external `@openclaw/whatsapp` plugin — the whatsapp role installs it pinned to `openclaw_version` and the config role allowlists it; channel config stays at `channels.whatsapp.*`. **Sessions expire every ~14 days** — a health-check cron alerts via Telegram when re-authentication is needed. Set `deliver_channel: "whatsapp"` in the agent's `openclaw.yml` entry.
+Uses Baileys/WhatsApp Web protocol (not official Business API). Since openclaw 2026.5.12 the channel ships as the external `@openclaw/whatsapp` plugin — the whatsapp role installs it pinned to `openclaw_version` and the config role allowlists it; channel config stays at `channels.whatsapp.*`. **Sessions expire every ~14 days** and nothing alerts on expiry; check `openclaw channels status --probe`. Set `deliver_channel: "whatsapp"` in the agent's `openclaw.yml` entry.
 
 ```bash
 pulumi config set whatsappNiciPhone "+491234567890"
@@ -480,7 +448,7 @@ even while its agent is enabled.
 
 | Resource | main | other (e.g., `bob`) |
 |---|---|---|
-| MCP server | `github`, `codex`, `claude` | `github-bob`, `codex-bob`, `claude-bob` |
+| MCP server | `github`, `qmd`, `mac` | `github-bob`, `qmd-bob`, `mac-bob` |
 | Workspace dir | `~/.openclaw/workspace` | `~/.openclaw/workspace-bob` |
 | Deploy key var | `workspace_deploy_key` | `workspace_bob_deploy_key` |
 | GitHub token var | `github_token` | `github_token_bob` |
@@ -511,9 +479,9 @@ All sessions (including web chat) run in Docker containers with bridge networkin
 | Host filesystem | No access |
 | Gateway config | Isolated (can't read `~/.openclaw/`) |
 | Privilege escalation | Blocked (setuid bits stripped) |
-| Dev toolchain | Python 3, Node.js, git, git-lfs, ripgrep, fd, jq, yq, just, uv, pnpm, bd, sqlite3, pandoc, build-essential, ffmpeg, imagemagick, tmux, htop, tree, curl, wget, openssh-client |
+| Dev toolchain | See `ansible/roles/sandbox/templates/Dockerfile.sandbox.j2` |
 
-**Network:** Bridge (outbound internet for web research/git push). MCP containers (Codex, Claude Code, Pi) use a separate `codex-proxy-net`. Sandbox containers can't reach the credential proxy.
+**Network:** Bridge (outbound internet for web research/git push). Git to GitHub goes through `mcp-auth-proxy`, which injects the agent's GitHub token: each workspace's `.git-proxy-config` rewrites GitHub URLs to the proxy's `/github-<agent>/` route (gateway IP of `codex-proxy-net`, port `codex_proxy_port`), and ufw admits the sandbox bridge to that port. Risks: [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse).
 
 **Custom image:** Two layers built locally: base (`openclaw-sandbox:trixie`, Debian 13) + custom (`openclaw-sandbox-custom:latest`). Neither pulled from registry. Rebuild: `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
 
@@ -532,24 +500,11 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 ## Remote Node Control (Mac)
 
-> **Disabled by default.** Node exec runs arbitrary shell commands on your Mac with full user permissions — no sandbox. Enable with `node_exec_enabled: true` in `group_vars/all.yml`. Read [docs/SECURITY.md](./docs/SECURITY.md) section 5 first.
+> **Disabled by default.** Node exec runs arbitrary shell commands on your Mac with full user permissions — no sandbox. Enable with `node_exec_enabled: true` in `group_vars/openclaw.yml`. Read [docs/SECURITY.md](./docs/SECURITY.md) section 5 first.
 
-Architecture: VPS sandbox → `node-exec-mcp` (OPENCLAW_GATEWAY_TOKEN auth, Tailscale Serve) → LaunchAgent on Mac. Each agent gets a scoped `mac_run` tool (`mac-<id>_run` for non-main agents).
+Architecture: agent → `mac_run` MCP tool (`node-exec-mcp` on the VPS) → gateway over Tailscale Serve → LaunchAgent on the Mac.
 
-**Key gotchas:**
-- Two approval layers: gateway (`tools.exec.security/ask`) AND node (`~/.openclaw/exec-approvals.json`, must have `defaults.security: full`) — both must allow the command
-- CWD defaults to `/tmp` — VPS workspace path doesn't exist on Mac; pass `workdir=/Users/<you>` explicitly
-- LaunchAgent plist patched to `/opt/homebrew/bin/openclaw` symlink (survives `brew upgrade`)
-- **Token wipe danger:** An empty remote token breaks the node host's authentication. The [Local CLI setup](#local-cli) rejects an empty token and feeds the config through stdin rather than exposing it in command arguments. `setup-mac-node.sh` detects and recovers a wiped token at setup time. Diagnosis: check `~/.openclaw/openclaw.json` → `gateway.remote.token` is non-empty; backups live in `.bak` files
-
-```bash
-./scripts/setup-mac-node.sh                     # one-time Mac setup (installs LaunchAgent, sets approvals)
-./scripts/provision.sh --tags config,plugins    # install node-exec-mcp, pin node ID
-openclaw node status / restart / stop           # manage Mac LaunchAgent
-ssh ubuntu@openclaw-vps 'openclaw nodes status' # check from VPS side
-```
-
-**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** first-time setup, debugging connection failures, resetting node ID after re-pairing, or changing exec approval settings.
+**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** first-time setup, debugging connection failures, resetting node ID after re-pairing, changing exec approval settings, or recovering a wiped node token.
 
 ## Semantic Search (qmd)
 
@@ -559,8 +514,6 @@ Each agent has a **qmd** instance providing local hybrid search (BM25 + vector +
 - `workspace` — all `.md`, `.txt`, `.csv` files in the workspace
 - `memory` — memory directory (`.md` files only)
 - `extracted-content` — text extracted from PDFs, images, `.docx`, `.xlsx`
-
-**Tool count:** `N_agents × Σ(tools_per_server_type)`. Per agent: github: 26, codex: 2, claude-code: 2, pi: 2, qmd: 6. Check `openclaw_mcp_server_types` in `group_vars/all.yml`.
 
 **Operations:**
 ```bash

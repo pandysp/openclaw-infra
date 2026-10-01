@@ -1,6 +1,6 @@
 # Remote Node Control (Mac)
 
-> **Disabled by default.** Node exec lets agents run arbitrary shell commands on your local machine with your user's full permissions — no sandbox. Enable with `node_exec_enabled: true` in `ansible/group_vars/all.yml` only after reading the security warnings in [docs/SECURITY.md](./SECURITY.md) section 5.
+> **Disabled by default.** Node exec lets agents run arbitrary shell commands on your local machine with your user's full permissions — no sandbox. Enable with `node_exec_enabled: true` in `ansible/group_vars/openclaw.yml` (the default in `all.yml` is `false`) only after reading the security warnings in [docs/SECURITY.md](./SECURITY.md) section 5.
 
 Agents can run shell commands on your Mac via the node host feature. This enables tmux-based workflows where a VPS agent controls a Claude Code session on your local machine.
 
@@ -18,7 +18,7 @@ Agents access node exec via the `mac_run` MCP tool (provided by `node-exec-mcp`)
 
 ## Setup
 
-**1. Enable in config** (edit `ansible/group_vars/all.yml`):
+**1. Enable in config** (edit `ansible/group_vars/openclaw.yml`):
 ```yaml
 node_exec_enabled: true
 ```
@@ -81,5 +81,7 @@ ssh ubuntu@openclaw-vps 'openclaw config unset tools.exec.node'
 # View node host logs
 tail -f ~/.openclaw/logs/node.log
 ```
+
+**Token wipe danger:** An empty `gateway.remote.token` in the Mac's `~/.openclaw/openclaw.json` breaks the node host's authentication. The [Local CLI setup](../CLAUDE.md#local-cli) rejects an empty token, and `setup-mac-node.sh` detects and recovers a wiped token. Backups live in `.bak` files next to the config.
 
 **Note:** The node host disconnects on gateway restarts but auto-reconnects (LaunchAgent handles restarts). If the node ID changes (re-pairing), re-run `./scripts/provision.sh --tags config` to update the pin.

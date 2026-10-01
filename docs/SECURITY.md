@@ -87,9 +87,9 @@ Threat model and mitigations for the OpenClaw Hetzner/Tailscale deployment.
 - Secrets stored in Pulumi encrypted state (never in git)
 - Written to temp files during setup (`600` permissions), then deleted
 - `set +x` disables command logging during secret operations
-- Cloud-init log should be shredded after deployment (contains secrets)
+- The bootstrap log holds no secrets, but the Tailscale auth key stays readable on the server: [auth key exposure](../README.md#tailscale-auth-key-exposure)
 
-**Residual Risk**: Low if cloud-init log is cleaned up. Medium if forgotten.
+**Residual Risk**: Medium while the stored Tailscale auth key is reusable and unexpired.
 
 See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedures.
 
@@ -115,7 +115,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - `tools.elevated.allowFrom.<channel>` — restricts elevated tools to additional channels beyond Telegram
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
-**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers use the default Docker bridge; the plugins role explicitly permits access to the credential proxy for workspace Git operations. Do not treat the network name alone as a credential boundary. The separate workspace-sync containers block proxy access with their own outbound firewall. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
+**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers use the default Docker bridge; the plugins role explicitly permits access to the credential proxy for workspace Git operations. The proxy takes the agent ID from the URL and does not check the caller, so any sandbox can use any agent's GitHub token. Sandboxes can also read the server's cloud-init user data, including the [Tailscale auth key](../README.md#tailscale-auth-key-exposure). Do not treat the network name alone as a credential boundary. The separate workspace-sync containers block proxy access with their own outbound firewall. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
 
 **Prompt injection guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
 - Lock down inbound DMs (we use allowlist — done)
@@ -172,7 +172,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Mitigations**:
 - Official OpenClaw package from npm registry
-- Node.js installed via official OpenClaw installer (NodeSource)
+- Node.js from the NodeSource apt repository, pinned to a major version (`nodejs_major_version`)
 - Automatic security patches via unattended-upgrades
 
 **Residual Risk**: Medium. Trust in upstream is required.
@@ -183,7 +183,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 Plugins run in-process — they have the same access as the gateway itself (config, credentials, sessions, network, sudo). npm lifecycle scripts execute during installation before code review.
 
-**Current status**: The `openclaw-mcp-adapter` plugin is installed and allowlisted. It manages per-agent MCP servers (GitHub, Codex, Pi, qmd, node-exec) running as Docker containers on the `codex-proxy-net` network with a credential-injecting proxy.
+**Current status**: Two non-bundled plugins run in-process: `openclaw-mcp-adapter` (per-agent GitHub, qmd and Mac MCP servers, run as host processes, not containers) and the official `@openclaw/whatsapp` channel plugin. Both are pinned and allowlisted.
 
 **When adding plugins**:
 - Review source code before installing
@@ -191,7 +191,7 @@ Plugins run in-process — they have the same access as the gateway itself (conf
 - Pin exact versions (`@scope/pkg@1.2.3`)
 - Prefer plugins from known/trusted authors
 
-**Residual Risk**: Low (no plugins). Medium when plugins are added.
+**Residual Risk**: Medium. Each plugin has full gateway access.
 
 ### 10. Infrastructure Token Compromise
 
@@ -254,7 +254,9 @@ Sensitive files on the server (all under `~/.openclaw/` unless noted):
 | `devices/paired.json` | Paired device tokens |
 | `devices/pending.json` | Pending pairing requests |
 | `credentials/` | Channel tokens, OAuth tokens |
-| `agents/<id>/auth-profiles.json` | Model provider auth |
+| `agents/<id>/auth-profiles.json` | Model provider auth (Claude setup token) |
+| `github-tokens/<agent>` | Per-agent GitHub PATs, used by the GitHub MCP servers and `mcp-auth-proxy` |
+| `~/.claude/.credentials.json` | Claude CLI login (setup token or OAuth), used for every agent turn |
 | `agents/<id>/sessions/*.jsonl` | Session transcripts (full conversation history) |
 | `cron/jobs.json` | Cron job definitions |
 | `~/.ssh/workspace-deploy-key` | GitHub deploy key (if workspace sync enabled) |
@@ -270,9 +272,8 @@ The `~/.openclaw/` directory is restricted to owner-only access (mode `700`), en
 - [ ] Hetzner Project is dedicated to OpenClaw (not shared)
 - [ ] Hetzner firewall has NO inbound rules
 - [ ] UFW enabled: default deny incoming, allow tailscale0
-- [ ] Tailscale auth key is ephemeral/reusable
+- [ ] Tailscale auth key exposure understood: [README](../README.md#tailscale-auth-key-exposure)
 - [ ] All secrets set via `pulumi config set --secret`
-- [ ] Cloud-init log shredded after verification
 - [ ] `./scripts/verify.sh` passes all checks
 - [ ] `openclaw security audit --deep` shows 0 critical issues
 - [ ] `openclaw security audit --fix` applied (hardens file permissions)

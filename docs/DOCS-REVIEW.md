@@ -17,7 +17,7 @@ fixtures before provisioning can pass.
 - [x] [Getting Started](https://docs.openclaw.ai/start/getting-started)
 - [x] [Hetzner Platform Guide](https://docs.openclaw.ai/platforms/hetzner)
 - [x] [Tailscale Networking](https://docs.openclaw.ai/gateway/tailscale) — adopted built-in `gateway.tailscale.mode: serve` and switched to `openclaw config set`
-- [x] [Gateway Configuration](https://docs.openclaw.ai/gateway/configuration) — our config aligns; default model set to opus 4.5; sandbox now enabled (see Sandboxing entry)
+- [x] [Gateway Configuration](https://docs.openclaw.ai/gateway/configuration) — our config aligns; sandbox now enabled (see Sandboxing entry)
 - [x] [Telegram Channel](https://docs.openclaw.ai/channels/telegram) — our config is correct but minimal; see potential improvements below
 - [x] [Heartbeat at v2026.6.6](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/gateway/heartbeat.md) — `0m` disables; `agents.list[]` heartbeat blocks form an allowlist when any are present
 - [x] [Scheduled Tasks at v2026.6.6](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/automation/cron-jobs.md) — reconciliation uses the CLI rather than editing scheduler storage

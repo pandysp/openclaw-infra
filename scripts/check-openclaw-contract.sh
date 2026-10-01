@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Check that the pinned OpenClaw version matches the reviewed heartbeat and cron
+# contracts (docs/DOCS-REVIEW.md) and that the roles still honour them.
+# --latest-docs also diffs the pinned heartbeat and cron docs against OpenClaw main.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

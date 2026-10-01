@@ -1,5 +1,47 @@
 # Migration Guide
 
+## 2026-10-01 — Claude Code, Codex and Pi MCP servers removed
+
+The `claude-code`, `codex` and `pi` MCP server types are gone, together with
+their Docker images, the Claude Code plugin install, the Codex login in
+`provision.sh`, and the Codex and Anthropic routes of `mcp-auth-proxy`. The
+proxy itself stays: it injects per-agent GitHub tokens for sandbox git.
+`openclaw_compaction_*` was removed too: OpenClaw never applies it to
+claude-cli turns, which Claude Code compacts itself
+(`claude_code_auto_compact_window`).
+
+### What happens automatically on your next playbook run
+
+- the MCP adapter config is rewritten without the `claude*`, `codex*` and `pi*` servers
+- `mcp-auth-proxy` is redeployed with only the GitHub route
+
+### What stays on your host (manual cleanup)
+
+Run on the VPS as `ubuntu`:
+
+```bash
+# Containers and images
+for role in claude-code-mcp codex-mcp pi-mcp; do docker ps -aq --filter "label=openclaw-role=$role" | xargs -r docker rm -f; done
+docker image rm claude-code-mcp:latest codex-mcp:latest pi-mcp:latest 2>/dev/null || true
+
+# Build directories, configs and credentials only these servers used
+rm -rf ~/.openclaw/claude-code-mcp-build ~/.openclaw/claude-code-plugins \
+       ~/.openclaw/codex-mcp-build ~/.openclaw/pi-mcp-build ~/.openclaw/codex-config.toml
+rm -f ~/.openclaw/anthropic-auth-token ~/.codex/auth.json
+npm uninstall -g @openai/codex
+
+# OpenClaw compaction keys (no effect on claude-cli turns)
+openclaw config unset agents.defaults.compaction
+
+# UFW rule for MCP containers on codex-proxy-net (keep the 172.17 "sandbox git push" rule)
+sudo ufw status numbered | grep 8787    # find the codex-proxy-net subnet rule
+sudo ufw delete <N>
+```
+
+Also delete the `CODEX_AUTH_JSON` secret from the repository's GitHub Actions
+settings if you set it for staging.
+
+
 ## 2026-04-19 — Beads removal
 
 Beads ([steveyegge/beads](https://github.com/steveyegge/beads)) was retired as an
@@ -15,8 +57,9 @@ After pulling PR #13, `ansible-playbook` will:
 
 - stop injecting `BEADS_DOLT_*` env vars into new sandbox configs
 - strip those four env vars from your existing openclaw config via a one-shot
-  `check_unset` loop in the `config` role (safe to re-run; the loop itself is
-  scheduled for removal after 2026-07-01)
+  `check_unset` loop in the `config` role (removed on 2026-10-01; forks that
+  had not re-run the playbook by then must `openclaw config unset` the four
+  `agents.defaults.sandbox.docker.env.BEADS_DOLT_*` keys by hand)
 - stop baking `bd` + `dolt` into new sandbox container images
 - stop running the SQLite→Dolt workspace migration task on new agents
 - stop `export_beads` in qmd-watch
