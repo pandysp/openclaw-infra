@@ -99,7 +99,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Scenario**: OpenClaw has `tools.elevated.enabled: true` (default), giving it shell access. If the agent is manipulated via prompt injection, it could attempt to run destructive commands, exfiltrate data, or modify config.
 
-**Where agent turns run**: every agent turn uses the `claude-cli` runtime. Claude Code runs on the host as `ubuntu` in the agent's workspace, and its own tools (Bash, Read, Edit, Write, WebSearch) run there too, outside the Docker sandbox. Because exec is set to `tools.exec.security: "full"` and `ask: "off"` (for node exec), OpenClaw starts Claude Code with `--permission-mode bypassPermissions` ([OpenClaw CLI backends docs](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/gateway/cli-backends.md)). `ubuntu` has passwordless sudo. A prompt-injected agent can therefore read everything on the server, including the Claude login, bot tokens, API keys, every agent's GitHub token, deploy keys and the [Tailscale auth key](../README.md#tailscale-auth-key-exposure), and can act as root. The Docker sandbox below applies to OpenClaw's own tools only. Ways to make it the boundary for agents: pass `--tools ""` through `openclaw_cli_backends` (staging does), or set a restrictive per-agent `agents.list[].tools.exec`, which starts Claude Code with `--permission-mode default`.
+**Where agent turns run**: every agent turn uses the `claude-cli` runtime. Claude Code runs on the host as `ubuntu` in the agent's workspace, and its own tools (Bash, Read, Edit, Write, WebSearch) run there too, outside the Docker sandbox. Because exec is set to `tools.exec.security: "full"` and `ask: "off"` (for node exec), OpenClaw starts Claude Code with `--permission-mode bypassPermissions` ([OpenClaw CLI backends docs](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/gateway/cli-backends.md); the agents' Claude Code transcripts record `permissionMode: bypassPermissions`). `ubuntu` has passwordless sudo. A prompt-injected agent can therefore read everything on the server, including the Claude login, bot tokens, API keys, every agent's GitHub token, deploy keys and the [Tailscale auth key](../README.md#tailscale-auth-key-exposure), and can act as root. The Docker sandbox below applies to OpenClaw's own tools only. Ways to make it the boundary for agents: pass `--tools ""` through `openclaw_cli_backends` (staging does), or set a restrictive per-agent `agents.list[].tools.exec`, which starts Claude Code with `--permission-mode default`.
 
 **Mitigations in place**:
 - **`agents.defaults.sandbox.mode: "all"`** — OpenClaw's own tools run in Docker containers, without direct host access (Claude Code's tools do not; see above)
@@ -126,7 +126,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - Prefer the latest, strongest model for tool-enabled agents
 - Red flags: requests to "read this URL and do exactly what it says", ignore system prompts, or reveal hidden instructions
 
-**Residual Risk**: High for agent turns (Claude Code with host access as `ubuntu`, passwordless sudo). Medium for OpenClaw's sandboxed tools (no host access, but network-enabled workspace exfiltration possible).
+**Residual Risk**: Agent turns have host access as `ubuntu` with passwordless sudo; accepted for this single-operator deployment. Medium for OpenClaw's sandboxed tools (no host access, but network-enabled workspace exfiltration possible).
 
 ### 5. Self-Modification via Node Control
 
