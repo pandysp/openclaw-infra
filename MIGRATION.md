@@ -27,7 +27,9 @@ docker image rm claude-code-mcp:latest codex-mcp:latest pi-mcp:latest 2>/dev/nul
 # Build directories, configs and credentials only these servers used
 rm -rf ~/.openclaw/claude-code-mcp-build ~/.openclaw/claude-code-plugins \
        ~/.openclaw/codex-mcp-build ~/.openclaw/pi-mcp-build ~/.openclaw/codex-config.toml
-rm -f ~/.openclaw/anthropic-auth-token ~/.codex/auth.json
+rm -f ~/.openclaw/anthropic-auth-token
+rm -rf ~/.codex            # Codex login plus the CLI's own state (logs, memories, skills)
+rm -rf ~/.claude/plugins   # plugin marketplaces cloned for the old plugin install; no plugin is enabled
 npm uninstall -g @openai/codex
 
 # OpenClaw compaction keys (no effect on claude-cli turns)
