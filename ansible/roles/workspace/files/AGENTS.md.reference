@@ -286,9 +286,9 @@ Think of it like a human reviewing their journal and updating their mental model
 
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
-## Sandbox Environment
+## Environment
 
-You run inside a Docker container with a writable filesystem.
+Your turns run in Claude Code on the server, as the `ubuntu` user, in your workspace directory (`~/.openclaw/workspace` or `~/.openclaw/workspace-<id>`). Stay inside your workspace: leave other agents' workspaces, `~/.openclaw/` config and system settings alone. OpenClaw's own exec tool runs in a Docker sandbox, where your workspace is mounted at `/workspace/`; the notes below apply there.
 
 ### Installing Packages
 

@@ -21,14 +21,14 @@ Your Machine (Tailscale) → Hetzner VPS → Gateway (systemd, localhost:18789) 
 | Network (infrastructure) | Hetzner cloud firewall blocks ALL inbound |
 | Network (host) | UFW: deny incoming, allow only tailscale0 interface |
 | Access | Tailscale-only (no public SSH, no public ports) |
-| Process | Runs as unprivileged `ubuntu` user; all sessions [sandboxed](#sandboxing) in Docker (custom image with dev toolchain) |
+| Process | Runs as the `ubuntu` user (passwordless sudo). Agent turns run Claude Code on the host; OpenClaw's own tools run [sandboxed](#sandboxing) in Docker ([details](./docs/SECURITY.md#4-agent-host-command-abuse)) |
 | Auth | Tailscale identity + device pairing |
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
 
 For the full threat model, see [docs/SECURITY.md](./docs/SECURITY.md).
 
-Gateway runs via systemd (not Docker) as unprivileged user. Docker runs sandbox sessions (`openclaw-sandbox-custom:latest`), MCP servers, and isolated workspace Git jobs. Auth: Tailscale identity + device pairing; no token needed. Resolve pairing requests over Tailscale SSH; do not print token-bearing URLs.
+Gateway runs via systemd (not Docker) as unprivileged user. Docker runs OpenClaw's sandboxed tools (`openclaw-sandbox-custom:latest`) and the isolated workspace Git jobs. Auth: Tailscale identity + device pairing; no token needed. Resolve pairing requests over Tailscale SSH; do not print token-bearing URLs.
 
 ## Directory Structure
 
@@ -469,9 +469,9 @@ Telegram must run immediately after agents (prevents message misrouting). Plugin
 
 ## Sandboxing
 
-All sessions (including web chat) run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain.
+OpenClaw's own tools run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain. Agent turns themselves run through Claude Code on the host, and its tools (Bash, Read, Edit, Write) are not sandboxed: see [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse).
 
-| | All sessions (web chat, cron, Telegram) |
+| | OpenClaw's sandboxed tools |
 |---|---|
 | Runtime | Docker container (`openclaw-sandbox-custom:latest`) |
 | Network | Bridge (outbound internet via Docker NAT) |
