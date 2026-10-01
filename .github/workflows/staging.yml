@@ -27,7 +27,7 @@ concurrency:
 
 env:
   STAGING_PRIVATE_REPOSITORY: ${{ vars.STAGING_PRIVATE_REPOSITORY }}
-  STAGING_MODEL: anthropic/claude-sonnet-4-6
+  STAGING_MODEL: anthropic/claude-sonnet-5-5
   PHOENIX_RESOURCE_NAME: openclaw-staging-${{ github.run_id }}-${{ github.run_attempt }}
   # Only tag:ci owns this tag (tailnet policy), and the policy grants it no
   # source rights: exact run name + this tag proves a device is this run's.

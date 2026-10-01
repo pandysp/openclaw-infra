@@ -455,7 +455,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
              str(directory / 'openclaw.yml')], check=True, capture_output=True, text=True,
         )
         config = json.loads(parsed.stdout)
-        self.assertEqual(config['openclaw_model_primary'], 'anthropic/claude-sonnet-4-6')
+        self.assertEqual(config['openclaw_model_primary'], 'anthropic/claude-sonnet-5-5')
         self.assertEqual(config['openclaw_model_fallbacks'], [])
 
         # An override replaces OpenClaw's defaults (openclaw 2026.6.6,

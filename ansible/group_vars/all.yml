@@ -9,6 +9,8 @@ openclaw_timezone: "Europe/Berlin"
 # strict model validation (no models.providers["claude-cli"] catalog entry exists).
 openclaw_model_primary: "anthropic/claude-opus-5-5"
 openclaw_model_fallbacks: []
+# Default heartbeat model for every agent; an agent's heartbeat_model overrides it.
+openclaw_heartbeat_model: "anthropic/claude-sonnet-5-5"
 openclaw_thinking_default: "high"
 
 # Model allowlist for agents, with explicit agent-runtime mapping (protected map
@@ -20,7 +22,7 @@ openclaw_agent_models:
     alias: "opus"
     agentRuntime:
       id: "claude-cli"
-  "anthropic/claude-sonnet-4-6":
+  "anthropic/claude-sonnet-5-5":
     # alias is auto-derived by the gateway and persisted; declare it so the
     # idempotency compare converges instead of rewriting every run.
     alias: "sonnet"
