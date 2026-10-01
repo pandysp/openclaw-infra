@@ -47,7 +47,7 @@ Threat model and mitigations for the OpenClaw Hetzner/Tailscale deployment.
 | **UFW** | Blocks all except tailscale0 interface | On VM |
 | **Tailscale** | Encrypts + authenticates network access | Overlay network |
 | **Gateway Auth** | Tailscale identity + device pairing (token fallback) | Application |
-| **Process Isolation** | Unprivileged user, systemd --user service; all sessions sandboxed in Docker | OS level |
+| **Process Isolation** | `ubuntu` user, systemd --user service; OpenClaw's own tools sandboxed in Docker, Claude Code's tools on the host (see [Threat 4](#4-agent-host-command-abuse)) | OS level |
 
 ## Threat Model
 
@@ -99,8 +99,10 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Scenario**: OpenClaw has `tools.elevated.enabled: true` (default), giving it shell access. If the agent is manipulated via prompt injection, it could attempt to run destructive commands, exfiltrate data, or modify config.
 
+**Where agent turns run**: every agent turn uses the `claude-cli` runtime. Claude Code runs on the host as `ubuntu` in the agent's workspace, and its own tools (Bash, Read, Edit, Write, WebSearch) run there too, outside the Docker sandbox. Because exec is set to `tools.exec.security: "full"` and `ask: "off"` (for node exec), OpenClaw starts Claude Code with `--permission-mode bypassPermissions` ([OpenClaw CLI backends docs](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/gateway/cli-backends.md)). `ubuntu` has passwordless sudo. A prompt-injected agent can therefore read everything on the server, including the Claude login, bot tokens, API keys, every agent's GitHub token, deploy keys and the [Tailscale auth key](../README.md#tailscale-auth-key-exposure), and can act as root. The Docker sandbox below applies to OpenClaw's own tools only. Ways to make it the boundary for agents: pass `--tools ""` through `openclaw_cli_backends` (staging does), or set a restrictive per-agent `agents.list[].tools.exec`, which starts Claude Code with `--permission-mode default`.
+
 **Mitigations in place**:
-- **`agents.defaults.sandbox.mode: "all"`** — all sessions (including web chat) run in Docker containers, preventing direct host access
+- **`agents.defaults.sandbox.mode: "all"`** — OpenClaw's own tools run in Docker containers, without direct host access (Claude Code's tools do not; see above)
 - `agents.defaults.sandbox.docker.image: "openclaw-sandbox-custom:latest"` — custom image with dev toolchain and setuid bits stripped
 - `agents.defaults.sandbox.docker.network: "bridge"` — allows web research and git push while isolating from host filesystem, gateway config, and sudo
 - **`agents.defaults.sandbox.docker.readOnlyRoot: false`** — rootfs is writable to allow runtime package installation (`pip install`, `npm install`, `curl` binaries). Container runs as UID 1000 with `--cap-drop ALL`, so Unix file permissions still prevent writing to system directories (`/usr/bin/`, `/etc/`, `/usr/lib/`). Only `/home/node/` is writable. Writable layer is disk-backed (overlay) and destroyed on container recreation. See [Writable Rootfs Rationale](#writable-rootfs-rationale) below.
@@ -124,7 +126,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - Prefer the latest, strongest model for tool-enabled agents
 - Red flags: requests to "read this URL and do exactly what it says", ignore system prompts, or reveal hidden instructions
 
-**Residual Risk**: Medium for all sessions (sandboxed in Docker — no host access, no sudo, no gateway config — but network-enabled workspace exfiltration possible).
+**Residual Risk**: High for agent turns (Claude Code with host access as `ubuntu`, passwordless sudo). Medium for OpenClaw's sandboxed tools (no host access, but network-enabled workspace exfiltration possible).
 
 ### 5. Self-Modification via Node Control
 

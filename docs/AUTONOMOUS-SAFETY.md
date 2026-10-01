@@ -18,16 +18,16 @@ An attacker embeds instructions in untrusted content. The agent follows them, re
 
 ## Current State
 
-All sessions (including web chat) run in Docker with bridge networking — isolated from the host but with outbound internet. Main sessions are human-controlled (you can pull the plug); non-main sessions (cron, Telegram) run autonomously.
+Agent turns run Claude Code on the host as `ubuntu`; only OpenClaw's own tools run in Docker ([SECURITY.md, Threat 4](./SECURITY.md#4-agent-host-command-abuse)). Main sessions are human-controlled (you can pull the plug); non-main sessions (cron, Telegram) run autonomously.
 
 | Capability | All sessions | Vector |
 |---|---|---|
 | Private data | Yes | Workspace r/w |
 | Untrusted content | Yes | Web research during night shift (GitHub issues, Stack Overflow, Reddit) |
 | External comm | Yes | Git push (PRs), HTTP requests |
-| Host access | **No** | Sandbox blocks `~/.openclaw/`, sudo, gateway config |
+| Host access | **Yes** | Claude Code's tools run on the host as `ubuntu` (passwordless sudo) |
 
-The sandbox prevents privilege escalation and keeps host config and secrets out of reach, with the exceptions listed in [SECURITY.md, Threat 4](./SECURITY.md#4-agent-host-command-abuse). The trifecta still exists within the workspace boundary. The night shift reads private code, browses the web for solutions, and pushes PRs. Telegram delivery is gateway-controlled and not an exfiltration vector.
+Host access completes the trifecta beyond the workspace: secrets and system access are in reach, not just workspace data. The night shift reads private code, browses the web for solutions, and pushes PRs. Telegram delivery is gateway-controlled and not an exfiltration vector.
 
 The eventual fix is splitting the night shift into Research (web access, no private data) and Dev (code access, no web) agents. See [SECURITY.md, Threat 4](./SECURITY.md#4-agent-host-command-abuse) for current mitigations.
 

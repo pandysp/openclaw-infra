@@ -48,6 +48,7 @@ Gateway-side (set by Ansible):
 tools.exec.host: sandbox        # Built-in exec stays sandboxed (agents use mac_run MCP tool instead)
 tools.exec.security: full       # Tighten to "allowlist" after testing
 tools.exec.ask: off             # Tighten to "on-miss" after testing
+                                # full + off also starts Claude Code with bypassPermissions (SECURITY.md §4)
 tools.exec.node: <auto>         # Auto-discovered during provisioning; used by node-exec-mcp
 ```
 
