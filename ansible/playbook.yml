@@ -155,7 +155,7 @@
         _token_var: "{{ 'github_token' if item.1.id == 'main' else 'github_token_' ~ item.1.id }}"
         _entry: >-
           {{ {'name': _name, 'type': item.0.type, 'agent_id': item.1.id}
-             | combine({'cwd': _cwd} if item.0.type in ['codex', 'claude-code', 'pi', 'qmd'] else {})
+             | combine({'cwd': _cwd} if item.0.type in ['codex', 'pi', 'qmd'] else {})
              | combine({'token_var': _token_var} if item.0.type == 'github' else {}) }}
       loop: "{{ openclaw_mcp_server_types | product(openclaw_agents) | list }}"
       loop_control:

@@ -53,7 +53,7 @@ A prior session wrote **`scripts/deploy-mac-daemons.sh`** (548 lines, currently 
 **Clean fix:**
 
 1. In `scripts/setup-mac-workspaces.sh` and `scripts/setup-mac-qmd.sh`, **keep** workspace prep + helper-script install (`workspace-git-sync-<agent>.sh`, `qmd-watch-<agent>.sh` in `~/.local/bin`, vault link, index build) — the deployer *reuses* those helpers — and **remove only** the plist emit / `launchctl bootstrap gui` / agent-load blocks. Surgical excision, not deletion. Leave a one-line pointer at the top of each: workspace + helper prep only; daemon deployment is `deploy-mac-daemons.sh`.
-2. Commit the deployer + the trimmed generators together, staging **named files only** (the tree carries unrelated in-flight work — the opus-4-8 model bump in `group_vars/all.yml` and the heartbeat-shadow fix in `roles/agents/tasks/main.yml`):
+2. Commit the deployer + the trimmed generators together, staging **named files only**:
 
 ```bash
 cd ~/dev/personal/openclaw-infra
@@ -220,7 +220,7 @@ Run top-to-bottom. Each Studio step is done on **both** Studio accounts (spannag
 2. Trim `setup-mac-workspaces.sh` + `setup-mac-qmd.sh` to prep+helpers only (remove plist emit/load) — **P0**.
 3. Namespace `qmd-watch-mac.sh.tmpl` with `__ACCOUNT__`; drop the deploy script's `namespace_qmd_watch_lock` sed — **P3**.
 4. Bump `qmd_version` 2.0.1 → 2.5.3 and reconcile `nodejs_major_version` 25 → 26 in `group_vars/all.yml` — **P2**.
-5. `git add` the **named** daemon/template/version files only (never `-A` — unrelated opus-4-8 + heartbeat work is in the tree). Commit.
+5. `git add` the **named** daemon/template/version files only. Commit.
 
 **Phase B — fragility & hazard groundwork (each account, each machine)**
 6. **P1** one-time repair: `sudo chgrp -R admin /opt/homebrew && sudo chmod -R g+w /opt/homebrew` on all three homes; then apply the inherited ACL, **verify with `ls -le` + a two-account `brew install`** before trusting it.
@@ -248,4 +248,3 @@ Run top-to-bottom. Each Studio step is done on **both** Studio accounts (spannag
 - **better-sqlite3 12.10.0 as a drop-in for ob 0.0.12 is unverified** — same major, low risk, but the `ob sync-status` smoke-test (step 8) is a hard gate.
 - **Multi-user Homebrew is officially unsupported** — this is a workaround on an unsupported topology; `brew doctor` may complain and a future Homebrew release could break the inheritance/mode assumptions.
 - **Studio daemons' `launchctl list` "loaded" state** was not re-verified with root this session; "responding" (curl health) is proven for 8191/8291, which is the half that matters for "active."
-- The tree carries **unrelated in-flight work** (opus-4-8 model bump, heartbeat-shadow fix) — stage daemon files by name, never `git add -A`.

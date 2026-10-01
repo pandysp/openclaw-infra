@@ -67,7 +67,7 @@ openclaw-infra/
 │       ├── whatsapp/  # WhatsApp channel config (conditional)
 │       ├── obsidian-headless/  # Obsidian Sync daemon per workspace (conditional)
 │       ├── qmd/       # qmd semantic search: install, per-agent watchers
-│       ├── plugins/   # MCP adapter, Codex/Claude Code/Pi/qmd servers, deny rules
+│       ├── plugins/   # MCP adapter, Codex/Pi/qmd servers, deny rules
 │       ├── sandbox/   # Pull base image, build custom Docker image
 │       └── workspace/ # Deploy key, git sync timer (conditional)
 │
@@ -106,7 +106,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
 | `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
-| `plugins` | plugins | MCP adapter, Codex/Claude Code/Pi containers, GitHub MCP, deny rules |
+| `plugins` | plugins | MCP adapter, Codex/Pi containers, GitHub MCP, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 

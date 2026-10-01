@@ -1,6 +1,6 @@
 ---
 # Install and configure the mcp-adapter plugin with per-agent MCP servers
-# (GitHub, Codex, Claude Code, Pi, qmd, node-exec).
+# (GitHub, Codex, Pi, qmd, node-exec).
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
 
@@ -42,172 +42,6 @@
   environment:
     PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
   loop: "{{ mcp_npm_packages }}"
-
-- name: Install Claude Code CLI on host for plugin management
-  community.general.npm:
-    name: "@anthropic-ai/claude-code"
-    version: "{{ openclaw_mcp_adapter.claude_code_version }}"
-    global: true
-    state: present
-  environment:
-    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
-  when: claude_code_plugins is defined and claude_code_plugins.plugins | length > 0
-
-- name: Verify Claude Code CLI version
-  ansible.builtin.command: claude --version
-  environment:
-    PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
-  register: claude_cli_version
-  changed_when: false
-  failed_when: openclaw_mcp_adapter.claude_code_version not in claude_cli_version.stdout
-  when: claude_code_plugins is defined and claude_code_plugins.plugins | length > 0
-
-- name: Install Claude Code plugins for MCP containers
-  when: claude_code_plugins is defined and claude_code_plugins.plugins | length > 0
-  block:
-    - name: Ensure plugins config directory exists
-      ansible.builtin.file:
-        path: "{{ claude_code_plugins.config_dir }}"
-        state: directory
-        mode: "0755"
-
-    # `claude plugin install`/`marketplace add` git-clone the plugin source repos.
-    # For a `source:"github"` plugin, claude's wPY() builds a `git@github.com:` (SSH)
-    # URL unless CLAUDE_CODE_REMOTE is set — and this box has no key for bare
-    # git@github.com (workspace deploy keys are host-alias-scoped), so SSH clones
-    # 401 with no fallback. We force HTTPS (CLAUDE_CODE_REMOTE=1 on the clone tasks)
-    # and authenticate it with the read-only GitHub PAT via the git credential store,
-    # so both public reference plugins and private-marketplace plugins clone cleanly.
-    - name: Configure git credential for GitHub plugin clones (PAT over HTTPS)
-      when: github_token | default('') | length > 0
-      block:
-        - name: Write ~/.git-credentials with the plugin-clone PAT
-          ansible.builtin.copy:
-            content: "https://x-access-token:{{ github_token }}@github.com\n"
-            dest: /home/ubuntu/.git-credentials
-            mode: "0600"
-          no_log: true
-
-        - name: Enable git credential store helper
-          ansible.builtin.command:
-            argv: [git, config, --global, credential.helper, store]
-          changed_when: false
-
-    - name: Add plugin marketplaces
-      ansible.builtin.shell: |
-        set -euo pipefail
-        output=$(claude plugin marketplace add "{{ item.repo }}" 2>&1) || {
-          if echo "$output" | grep -qi "already added\|already exists\|already registered\|already installed"; then
-            echo "OK_EXISTS"
-            exit 0
-          fi
-          echo "FAILED: $output" >&2
-          exit 1
-        }
-        echo "$output"
-      args:
-        executable: /bin/bash
-      environment:
-        CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
-        CLAUDE_CODE_REMOTE: "1"  # force https:// clone URLs (not git@github SSH) — see credential note above
-        PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
-      loop: "{{ claude_code_plugins.marketplaces }}"
-      loop_control:
-        label: "{{ item.repo }}"
-      register: marketplace_result
-      # git-clones the marketplace repo; retry transient network/git flakes
-      # per item rather than aborting the provision on the first hiccup.
-      until: marketplace_result.rc == 0
-      retries: 3
-      delay: 10
-      changed_when: "'Successfully added' in marketplace_result.stdout"
-
-    - name: Update plugin marketplaces
-      ansible.builtin.shell: |
-        set -euo pipefail
-        claude plugin marketplace update 2>&1
-      args:
-        executable: /bin/bash
-      environment:
-        CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
-        CLAUDE_CODE_REMOTE: "1"  # force https:// clone URLs (not git@github SSH) — see credential note above
-        PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
-      register: marketplace_update_result
-      changed_when: false
-
-    - name: Install plugins
-      ansible.builtin.shell: |
-        set -euo pipefail
-        # Check if already installed
-        if claude plugin list 2>&1 | grep -qi "{{ item }}"; then
-            echo "OK_EXISTS"
-            exit 0
-        fi
-        output=$(claude plugin install "{{ item }}" 2>&1) || {
-          if echo "$output" | grep -qi "already installed"; then
-            echo "OK_EXISTS"
-            exit 0
-          fi
-          echo "FAILED: $output" >&2
-          exit 1
-        }
-        echo "$output"
-      args:
-        executable: /bin/bash
-      environment:
-        CLAUDE_CONFIG_DIR: "{{ claude_code_plugins.config_dir }}"
-        CLAUDE_CODE_REMOTE: "1"  # force https:// clone URLs (not git@github SSH) — see credential note above
-        PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
-      loop: "{{ claude_code_plugins.plugins }}"
-      loop_control:
-        label: "{{ item }}"
-      register: plugin_result
-      # `claude plugin install` git-clones from a marketplace; on a fresh box
-      # that occasionally flakes (transient network / GitHub hiccup) and would
-      # otherwise abort the whole provision. Retry per item; a genuinely bad
-      # plugin still fails after the attempts and drops into the rescue below.
-      until: plugin_result.rc == 0
-      retries: 3
-      delay: 10
-      changed_when: "'OK_EXISTS' not in plugin_result.stdout"
-
-    - name: Verify plugins directory exists
-      ansible.builtin.stat:
-        path: "{{ claude_code_plugins.config_dir }}/plugins"
-      register: plugins_dir
-      failed_when: not plugins_dir.stat.exists or not plugins_dir.stat.isdir
-
-    - name: Remove Claude Code MCP containers to pick up plugin changes
-      ansible.builtin.shell: |
-        set -euo pipefail
-        containers=$(docker ps -aq --filter "label=openclaw-role=claude-code-mcp")
-        if [ -n "$containers" ]; then
-          echo "$containers" | xargs docker rm -f
-          echo "REMOVED"
-        else
-          echo "NONE"
-        fi
-      args:
-        executable: /bin/bash
-      register: plugin_container_cleanup
-      changed_when: "'REMOVED' in plugin_container_cleanup.stdout"
-      notify: restart openclaw-gateway
-      when: marketplace_result is changed or plugin_result is changed
-
-  rescue:
-    - name: Plugin installation failed — show diagnostics
-      ansible.builtin.debug:
-        msg: |
-          Plugin installation failed.
-          Marketplace add results: {{ marketplace_result.results | default([]) | map(attribute='stdout') | list }}
-          Marketplace update stdout: {{ marketplace_update_result.stdout | default('(did not run)') }}
-          Marketplace update stderr: {{ marketplace_update_result.stderr | default('(did not run)') }}
-          Plugin results: {{ plugin_result.results | default([]) | map(attribute='stdout') | list }}
-          Config dir: {{ claude_code_plugins.config_dir }}
-
-    - name: Fail with actionable message
-      ansible.builtin.fail:
-        msg: "Claude Code plugin installation failed. Check diagnostics above. Re-run with -vvv for details."
 
 - name: Resolve mcp-server-github binary path
   ansible.builtin.shell: |
@@ -488,34 +322,6 @@
 - name: Flush handlers to ensure proxy is restarted before image build
   ansible.builtin.meta: flush_handlers
 
-- name: Write Claude Code validation script (bundled CLI, check source)
-  ansible.builtin.copy:
-    content: |
-      // Claude Code CLI bundles its SDK (no separate @anthropic-ai/sdk package).
-      // Validate ANTHROPIC_BASE_URL by checking the bundled source references it
-      // AND by verifying the env var propagates correctly.
-      const fs = require('fs');
-      const cliPath = '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js';
-      try {
-        const src = fs.readFileSync(cliPath, 'utf8');
-        if (src.includes('ANTHROPIC_BASE_URL')) {
-          console.log('SDK_VALIDATED: cli.js reads process.env.ANTHROPIC_BASE_URL');
-          process.exit(0);
-        } else {
-          console.log('SDK_FAILED: ANTHROPIC_BASE_URL not found in cli.js');
-          process.exit(1);
-        }
-      } catch (err) {
-        console.log('SDK_FAILED: cannot read cli.js: ' + err.message);
-        process.exit(1);
-      }
-    dest: /tmp/validate-claude-code-sdk.js
-    mode: "0644"
-  changed_when: false
-  when:
-    - claude_setup_token | default('') | length > 0
-    - codex_proxy_gateway_ip is defined
-
 - name: Write Pi SDK validation script (actual SDK require test)
   ansible.builtin.copy:
     content: |
@@ -575,41 +381,6 @@
     - claude_setup_token | default('') | length > 0
     - codex_proxy_gateway_ip is defined
 
-- name: Check if Claude Code MCP image exists
-  ansible.builtin.command: docker image inspect {{ openclaw_mcp_adapter.claude_code_docker_image }}
-  register: claude_code_image_exists
-  changed_when: false
-  failed_when: false
-
-- name: Validate ANTHROPIC_BASE_URL support in Claude Code container
-  ansible.builtin.shell: |
-    set -euo pipefail
-    echo "=== SDK test ==="
-    docker run --rm \
-      --network=codex-proxy-net \
-      --cap-drop ALL --security-opt no-new-privileges --read-only \
-      --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
-      -v /tmp/validate-claude-code-sdk.js:/tmp/validate-claude-code-sdk.js:ro \
-      "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
-      node /tmp/validate-claude-code-sdk.js
-    echo "=== Network test ==="
-    docker run --rm \
-      --network=codex-proxy-net \
-      --cap-drop ALL --security-opt no-new-privileges --read-only \
-      --tmpfs /tmp:size=256m --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
-      -e "PROXY_HEALTH_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/health" \
-      -v /tmp/validate-proxy-network.js:/tmp/validate-proxy-network.js:ro \
-      "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
-      node /tmp/validate-proxy-network.js
-    echo "VALIDATED: Claude Code SDK respects ANTHROPIC_BASE_URL + proxy reachable"
-  args:
-    executable: /bin/bash
-  changed_when: false
-  when:
-    - claude_setup_token | default('') | length > 0
-    - codex_proxy_gateway_ip is defined
-    - claude_code_image_exists.rc == 0
-
 - name: Check if Pi MCP image exists
   ansible.builtin.command: docker image inspect {{ openclaw_mcp_adapter.pi_mcp_docker_image }}
   register: pi_image_exists
@@ -654,7 +425,6 @@
     state: absent
   changed_when: false
   loop:
-    - /tmp/validate-claude-code-sdk.js
     - /tmp/validate-pi-sdk.js
     - /tmp/validate-proxy-network.js
   when:
@@ -669,16 +439,6 @@
   loop_control:
     label: "{{ item.name }}"
   when: codex_auth_json | default('') | length > 0
-
-- name: Ensure agent workspace directories exist for Claude Code containers
-  ansible.builtin.file:
-    path: "{{ item.cwd }}"
-    state: directory
-    mode: "0755"
-  loop: "{{ _openclaw_mcp_servers | selectattr('type', 'equalto', 'claude-code') | list }}"
-  loop_control:
-    label: "{{ item.name }}"
-  when: claude_setup_token | default('') | length > 0
 
 - name: Ensure agent workspace directories exist for Pi containers
   ansible.builtin.file:
@@ -812,103 +572,6 @@
       ansible.builtin.fail:
         msg: >-
           Codex MCP Docker image build or smoke test failed.
-          Check task output above for details.
-
-- name: Build Claude Code MCP Docker image
-  when: claude_setup_token | default('') | length > 0
-  block:
-    - name: Check if Claude Code MCP image exists
-      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.claude_code_docker_image }}\""
-      register: claude_code_image_check
-      changed_when: false
-      failed_when: false
-
-    - name: Create Claude Code MCP build directory
-      ansible.builtin.file:
-        path: /home/ubuntu/.openclaw/claude-code-mcp-build
-        state: directory
-        mode: "0755"
-
-    - name: Template Claude Code MCP Dockerfile
-      ansible.builtin.template:
-        src: Dockerfile.claude-code-mcp.j2
-        dest: /home/ubuntu/.openclaw/claude-code-mcp-build/Dockerfile
-        mode: "0644"
-      register: claude_code_dockerfile_changed
-
-    - name: Build Claude Code MCP Docker image
-      ansible.builtin.shell: |
-        set -euo pipefail
-        docker build -t "{{ openclaw_mcp_adapter.claude_code_docker_image }}" /home/ubuntu/.openclaw/claude-code-mcp-build/
-      args:
-        executable: /bin/bash
-      when: claude_code_image_check.rc != 0 or claude_code_dockerfile_changed.changed or (force_claude_code_rebuild | bool)
-      register: claude_code_image_build
-      notify: restart openclaw-gateway
-
-    - name: Verify Claude Code MCP image was built
-      ansible.builtin.command: "docker image inspect \"{{ openclaw_mcp_adapter.claude_code_docker_image }}\""
-      changed_when: false
-
-    - name: Smoke test Claude Code MCP image (version check)
-      ansible.builtin.shell: |
-        docker run --rm "{{ openclaw_mcp_adapter.claude_code_docker_image }}" claude --version
-      args:
-        executable: /bin/bash
-      changed_when: false
-      when: claude_code_image_build is changed
-
-    - name: Smoke test Claude Code MCP image with hardened flags
-      ansible.builtin.shell: |
-        set -euo pipefail
-        docker run --rm \
-          --network=codex-proxy-net \
-          --cap-drop ALL \
-          --security-opt no-new-privileges \
-          --read-only \
-          --tmpfs /tmp:size=256m \
-          --tmpfs /home/node:size=512m,uid=1000,gid=1000 \
-          -e ANTHROPIC_API_KEY=proxy \
-          -e "ANTHROPIC_BASE_URL=http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
-          "{{ openclaw_mcp_adapter.claude_code_docker_image }}" \
-          sh -c 'test -x $(which claude) && test -x $(which claude-code-mcp) && echo "binaries-ok"'
-      args:
-        executable: /bin/bash
-      changed_when: false
-      when: claude_code_image_build is changed
-
-    - name: Remove Claude Code MCP containers after image rebuild
-      ansible.builtin.shell: |
-        set -euo pipefail
-        containers=$(docker ps -aq --filter "label=openclaw-role=claude-code-mcp")
-        if [ -n "$containers" ]; then
-          echo "$containers" | xargs docker rm -f
-        fi
-      args:
-        executable: /bin/bash
-      register: claude_code_container_removal
-      changed_when: claude_code_container_removal.stdout | length > 0
-      when: claude_code_image_build is changed
-
-    - name: Verify no Claude Code MCP containers remain after cleanup
-      ansible.builtin.shell: |
-        set -euo pipefail
-        count=$(docker ps -aq --filter "label=openclaw-role=claude-code-mcp" | wc -l)
-        if [ "$count" -ne 0 ]; then
-          echo "ERROR: $count Claude Code MCP containers still present after removal"
-          docker ps -a --filter "label=openclaw-role=claude-code-mcp" --format '{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Image{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}'
-          exit 1
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      when: claude_code_container_removal is changed
-
-  rescue:
-    - name: Report Claude Code MCP build or smoke test failure
-      ansible.builtin.fail:
-        msg: >-
-          Claude Code MCP Docker image build or smoke test failed.
           Check task output above for details.
 
 - name: Build Pi MCP Docker image
@@ -1083,15 +746,6 @@
       changed_when: false
       loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
 
-    - name: Write Claude setup token to temp file
-      ansible.builtin.copy:
-        content: "{{ claude_setup_token }}"
-        dest: "/tmp/ansible-mcp-claude-setup-token"
-        mode: "0600"
-      no_log: true
-      changed_when: false
-      when: claude_setup_token | default('') | length > 0
-
     - name: Build and write plugin config JSON
       ansible.builtin.shell: |
         set -euo pipefail
@@ -1157,55 +811,6 @@
                 '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
         fi
         {% endfor %}
-
-        # Claude Code servers — containerized with docker run -i (stdio piped through Docker)
-        # Security: containers have NO credentials. Auth is injected by the proxy
-        # running on codex-proxy-net. ANTHROPIC_BASE_URL routes API calls through proxy.
-        CLAUDE_IMAGE="{{ openclaw_mcp_adapter.claude_code_docker_image }}"
-        CLAUDE_MEM="{{ openclaw_mcp_adapter.claude_code_memory_limit | default('2g') }}"
-        if [ -n "$PROXY_GW" ]; then
-        {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-        CLAUDE_CMD="mkdir -p /home/node/.claude && cp -a /opt/claude-config/. /home/node/.claude/ && exec claude-code-mcp"
-        {% else %}
-        CLAUDE_CMD="exec claude-code-mcp"
-        {% endif %}
-        {% for srv in _openclaw_mcp_servers | selectattr('type', 'equalto', 'claude-code') %}
-            DOCKER_ARGS=$(jq -n \
-                --arg ws "{{ srv.cwd }}" \
-                --arg img "$CLAUDE_IMAGE" \
-                --arg agent "{{ srv.agent_id }}" \
-                --arg mem "$CLAUDE_MEM" \
-                --arg base_url "http://${PROXY_GW}:{{ openclaw_mcp_adapter.codex_proxy_port }}/anthropic" \
-        {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-                --arg config_dir "{{ claude_code_plugins.config_dir }}" \
-        {% endif %}
-                --arg cmd "$CLAUDE_CMD" \
-                '["run","--rm","-i","--init","--network=codex-proxy-net",
-                  "--cap-drop","ALL",
-                  "--security-opt","no-new-privileges",
-                  "--read-only",
-                  "--tmpfs","/tmp:size=256m",
-                  "--tmpfs","/home/node:size=512m,uid=1000,gid=1000",
-                  "--pids-limit","300",
-                  "--cpus","2",
-                  ("--memory=" + $mem),("--memory-swap=" + $mem),
-                  "--label","openclaw-role=claude-code-mcp",
-                  "--label",("openclaw-agent=" + $agent),
-                  "--mount",("type=bind,source=" + $ws + ",target=/workspace"),
-        {% if claude_code_plugins is defined and claude_code_plugins.plugins | default([]) | length > 0 %}
-                  "--mount",("type=bind,source=" + $config_dir + ",target=/opt/claude-config,readonly"),
-        {% endif %}
-                  "-e","ANTHROPIC_API_KEY=proxy",
-                  "-e",("ANTHROPIC_BASE_URL=" + $base_url),
-                  "-e","ENABLE_LSP_TOOL=1",
-                  "-e","CLAUDE_CODE_SUBAGENT_MODEL=opus",
-                  "-w","/workspace",
-                  $img,
-                  "sh","-c",$cmd]')
-            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ srv.name }}" --argjson args "$DOCKER_ARGS" \
-                '. + [{name: $name, transport: "stdio", command: "docker", args: $args}]')
-        {% endfor %}
-        fi
 
         # Pi MCP servers — containerized with docker run -i (stdio piped through Docker)
         # Security: containers have NO credentials. Auth is injected by the proxy
@@ -1499,12 +1104,6 @@
         state: absent
       changed_when: false
       loop: "{{ _openclaw_mcp_servers | selectattr('token_var', 'defined') | map(attribute='token_var') | unique | list }}"
-
-    - name: Clean up Claude setup token temp file
-      ansible.builtin.file:
-        path: /tmp/ansible-mcp-claude-setup-token
-        state: absent
-      changed_when: false
 
 - name: Flush handlers to restart gateway before verification
   ansible.builtin.meta: flush_handlers

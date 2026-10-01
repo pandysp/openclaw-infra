@@ -68,7 +68,7 @@
 #     deliver_type: "dm"
 #     deliver_channel: "telegram"      # telegram (default), whatsapp, or discord
 #     heartbeat_every: "15m"
-#     heartbeat_model: "anthropic/claude-opus-4-6"  # override default Sonnet
+#     heartbeat_model: "anthropic/claude-sonnet-4-6"  # optional; defaults to openclaw_model_primary, must be in openclaw_agent_models
 #     sandbox_mode: "off"  # override default sandbox mode (also sets exec.host=gateway)
 #   - id: "second-agent"
 #     is_default: false
@@ -191,24 +191,6 @@
 # still honoured (they map to mac.daemons / mac.accounts) so existing forks keep
 # working, but the deployer prints a migration note. There is no flat equivalent
 # of mac.agents — nest the block to use it.
-
-# --- Claude Code plugins (optional) ---
-# Plugins installed into the VPS agents' `claude` CLI. This is a per-deployment
-# choice and is NOT defaulted in all.yml — define it here to enable it. Each
-# entry is a plugin name (resolved from any added marketplace) or
-# "<plugin>@<marketplace-owner>" to pin it to a specific marketplace. Keep this
-# in sync with the marketplaces — a plugin that no longer exists in its
-# marketplace fails provisioning.
-#
-# claude_code_plugins:
-#   config_dir: "/home/ubuntu/.openclaw/claude-code-plugins"
-#   marketplaces:
-#     - repo: "anthropics/claude-plugins-official"
-#     - repo: "astral-sh/claude-code-plugins"
-#   plugins:
-#     - "code-review"
-#     - "feature-dev"
-#     - "astral@astral-sh"
 
 # --- Advanced: manual overrides for auto-generated config ---
 # The following variables are normally auto-generated from openclaw_agents.
