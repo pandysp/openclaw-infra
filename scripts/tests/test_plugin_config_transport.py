@@ -179,15 +179,13 @@ p.write_text(json.dumps(cfg))
             variables.update({
                 "github_mcp_binary": {"stdout": "/usr/bin/false"},
                 "github_token": "fixture-main\n\n", "github_token_test": "fixture-test\n",
-                "claude_setup_token": "", "codex_proxy_gateway_ip": "", "qmd_workspaces": [],
+                "qmd_workspaces": [],
                 "node_exec_enabled": case.startswith("node_exec") or case == "minimal_node_exec",
                 "node_exec_mcp_binary": {"stdout": "/usr/bin/true"},
                 "_tailscale_wss_url": "wss://openclaw-test.example",
                 "_openclaw_mcp_servers": [
                     {"type": "github", "name": "github", "token_var": "github_token"},
                     {"type": "github", "name": "github-test", "token_var": "github_token_test"},
-                    {"type": "codex", "name": "codex", "cwd": "/workspace", "agent_id": "main"},
-                    {"type": "pi", "name": "pi", "cwd": "/workspace", "agent_id": "main"},
                     {"type": "node-exec", "name": "node-exec"},
                 ],
                 "ansible_python_interpreter": self.python,

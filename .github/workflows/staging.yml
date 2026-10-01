@@ -84,17 +84,6 @@ jobs:
           tags: tag:ci
 
       # ── Pre-deploy config ────────────────────────────────────────
-      - name: Write Codex auth file
-        timeout-minutes: 1
-        env:
-          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
-        run: |
-          if [ -n "$CODEX_AUTH_JSON" ]; then
-            mkdir -p ~/.codex
-            install -m 600 /dev/null ~/.codex/auth.json
-            printf '%s' "$CODEX_AUTH_JSON" > ~/.codex/auth.json
-          fi
-
       - name: Generate staging openclaw.yml
         timeout-minutes: 1
         run: |
@@ -155,10 +144,6 @@ jobs:
           openclaw_mcp_server_types:
             - type: "github"
               name_prefix: "github"
-            - type: "codex"
-              name_prefix: "codex"
-            - type: "pi"
-              name_prefix: "pi"
             - type: "qmd"
               name_prefix: "qmd"
 

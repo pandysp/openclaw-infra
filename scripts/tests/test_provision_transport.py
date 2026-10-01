@@ -62,7 +62,7 @@ class ProvisionTransportTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='provision transport ')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        for directory in ['bin', 'scripts', 'ansible', '.codex']:
+        for directory in ['bin', 'scripts', 'ansible']:
             (self.root/directory).mkdir()
         shutil.copy2(ROOT/'scripts/provision.sh', self.root/'scripts/provision.sh')
         fixture = self.root/'bin/fixture'
@@ -71,8 +71,6 @@ class ProvisionTransportTests(unittest.TestCase):
         for name in ['tailscale', 'ansible-playbook', 'ansible-galaxy', 'sleep', 'ssh', 'pulumi']:
             (self.root/'bin'/name).symlink_to(fixture)
         self.key = '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture-key\n-----END OPENSSH PRIVATE KEY-----\n'
-        self.codex = json.dumps({'token': 'fixture-codex"\\ä'}, indent=2)+'\n'
-        (self.root/'.codex/auth.json').write_text(self.codex)
         self.env = {'HOME':str(self.root), 'TMPDIR':str(self.root),
                     'PATH':str(self.root/'bin')+':'+os.environ['PATH'],
                     'FIXTURE_ROOT':str(self.root), 'INVENTORY_SCRIPT':str(ROOT/'ansible/inventory/pulumi_inventory.py'),
@@ -84,7 +82,7 @@ class ProvisionTransportTests(unittest.TestCase):
                     'PROVISION_WORKSPACE_DEPLOY_KEY':self.key, 'PROVISION_WORKSPACE_TEST_DEPLOY_KEY':self.key,
                     'PROVISION_OBSIDIAN_VAULT_PASSWORD':'fixture-quote"\\slash\nline: true\nü',
                     'EXPECTED_SECRETS':json.dumps({'gateway_token':'fixture-gateway','workspace_deploy_key':self.key,
-                        'workspace_test_deploy_key':self.key,'codex_auth_json':self.codex,'github_token':'',
+                        'workspace_test_deploy_key':self.key,'github_token':'',
                         'telegram_test_user_id':'','obsidian_vault_password':'fixture-quote"\\slash\nline: true\nü'})}
 
     def run_provisioner(self):
@@ -117,18 +115,6 @@ class ProvisionTransportTests(unittest.TestCase):
         self.env['VALIDATE_SSH_KEY']='1'
         result=self.run_provisioner()
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-
-    def test_invalid_codex_auth_fails_before_connecting(self):
-        (self.root/'.codex/auth.json').write_text('fixture-invalid-secret')
-        result = self.run_provisioner()
-        self.assertNotEqual(result.returncode,0)
-        self.assertFalse((self.root/'calls').exists())
-
-    def test_missing_optional_codex_auth_is_empty(self):
-        (self.root/'.codex/auth.json').unlink()
-        expected=json.loads(self.env['EXPECTED_SECRETS']);expected['codex_auth_json']=''
-        self.env['EXPECTED_SECRETS']=json.dumps(expected)
-        self.assertEqual(self.run_provisioner().returncode,0)
 
     def test_missing_hostname_never_uses_default(self):
         del self.env['PROVISION_TAILSCALE_HOSTNAME']

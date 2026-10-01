@@ -61,9 +61,9 @@
   delay: 3
   changed_when: false
 
-# Create codex-proxy-net unconditionally for MCP containers (Codex, Claude Code, Pi)
-# that need access to the credential-injecting proxy. Sandbox containers run on the
-# default bridge network and cannot reach this network.
+# codex-proxy-net only provides the listen address (its gateway IP) for mcp-auth-proxy,
+# the GitHub token proxy behind sandbox git. No container joins it; the name predates
+# the removal of the Codex MCP server.
 - name: Create codex-proxy-net Docker network
   community.docker.docker_network:
     name: codex-proxy-net

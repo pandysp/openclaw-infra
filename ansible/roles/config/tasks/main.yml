@@ -542,13 +542,12 @@
     from pathlib import Path
 
     openclaw_dir = Path(os.path.expanduser("~/.openclaw"))
-    token_file = openclaw_dir / "anthropic-auth-token"
+    token = os.environ["CLAUDE_SETUP_TOKEN"].strip()
 
-    if not token_file.exists():
-        print("SKIP: anthropic-auth-token not found")
+    if not token:
+        print("SKIP: no claude_setup_token")
         raise SystemExit(0)
 
-    token = token_file.read_text().strip()
     changed_agents = []
 
     for agent_dir in sorted((openclaw_dir / "agents").iterdir()):
@@ -589,6 +588,9 @@
     PYEOF
   args:
     executable: /bin/bash
+  environment:
+    CLAUDE_SETUP_TOKEN: "{{ claude_setup_token | default('') }}"
+  no_log: true
   register: auth_profiles_result
   changed_when: "'CHANGED:' in auth_profiles_result.stdout"
   notify: restart openclaw-gateway
