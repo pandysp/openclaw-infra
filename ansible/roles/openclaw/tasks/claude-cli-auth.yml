@@ -6,6 +6,8 @@
 # This task ensures:
 #   1. The pinned CLI is installed and accessible via /usr/local/bin/claude
 #   2. Anthropic credentials are written to ~/.claude/.credentials.json
+#   3. ~/.claude/settings.json holds the auto-compact window (OpenClaw runs the
+#      CLI with --setting-sources user, so this file applies to every agent)
 #
 # The claude-cli backend authenticates ONLY from ~/.claude/.credentials.json.
 # Verified 2026-06-21: it ignores both the openclaw auth_profile_store (per-agent
@@ -58,6 +60,12 @@
     path: /home/ubuntu/.claude
     state: directory
     mode: "0700"
+
+- name: Write Claude CLI user settings
+  ansible.builtin.copy:
+    content: "{{ {'autoCompactWindow': claude_code_auto_compact_window} | to_nice_json }}\n"
+    dest: /home/ubuntu/.claude/settings.json
+    mode: "0600"
 
 - name: Write Claude CLI OAuth credentials
   ansible.builtin.copy:
