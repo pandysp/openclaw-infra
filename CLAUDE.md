@@ -202,7 +202,7 @@ openclaw node restart   # if node exec is enabled
 openclaw security audit --deep
 ```
 
-**Expected output (as of 2026.6.6):** `0 critical · 3 warn · 2 info` — run it **on the VPS via SSH** (running locally audits your Mac instead). The 3 warnings flag deliberate config and are accepted: `dangerouslyAllowExternalBindSources` (sandbox bind mounts), `tools.exec.security=full` (gateway exec gated by `elevated=false` + node-side approvals), and the multi-user heuristic (Telegram/Discord group allowlists — personal deployment, one trusted operator).
+**Expected output:** 0 critical. Run it **on the VPS via SSH** (running locally audits your Mac instead). Accepted warnings, all deliberate: `config.insecure_or_dangerous_flags` (`dangerouslyAllowExternalBindSources` for sandbox bind mounts), `tools.exec.security_full_configured` (gateway exec gated by `elevated=false` + node-side approvals), and `security.trust_model.multi_user_heuristic` (Telegram/Discord group allowlists — personal deployment, one trusted operator). `--deep` probes occasionally add a transient warning; rerun before acting on it.
 
 ### Destroy Infrastructure
 
