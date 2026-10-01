@@ -7,7 +7,7 @@ openclaw_timezone: "Europe/Berlin"
 # mapping in agents.defaults.models (see openclaw_agent_models below) keeps turns on
 # the claude CLI backend (Max subscription). The legacy "claude-cli/<model>" ids fail
 # strict model validation (no models.providers["claude-cli"] catalog entry exists).
-openclaw_model_primary: "anthropic/claude-opus-4-8"
+openclaw_model_primary: "anthropic/claude-opus-5-5"
 openclaw_model_fallbacks: []
 openclaw_thinking_default: "high"
 
@@ -16,7 +16,7 @@ openclaw_thinking_default: "high"
 # by primary/fallbacks/heartbeat must be listed here; agentRuntime.id=claude-cli
 # routes it through the claude CLI instead of the direct Anthropic API.
 openclaw_agent_models:
-  "anthropic/claude-opus-4-8":
+  "anthropic/claude-opus-5-5":
     alias: "opus"
     agentRuntime:
       id: "claude-cli"
@@ -54,7 +54,7 @@ nodejs_major_version: 25
 openclaw_version: "2026.6.6"
 # Host Claude Code CLI: the claude-cli model runtime and plugin management share
 # one pinned install (@anthropic-ai/claude-code). Update intentionally.
-claude_code_version: "2.1.97"
+claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in docs/DOCS-REVIEW.md. Provisioning refuses scheduler changes on a mismatch.
 openclaw_docs_reviewed_version: "2026.6.6"
