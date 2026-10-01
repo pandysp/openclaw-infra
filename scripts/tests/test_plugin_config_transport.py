@@ -187,7 +187,6 @@ p.write_text(json.dumps(cfg))
                     {"type": "github", "name": "github", "token_var": "github_token"},
                     {"type": "github", "name": "github-test", "token_var": "github_token_test"},
                     {"type": "codex", "name": "codex", "cwd": "/workspace", "agent_id": "main"},
-                    {"type": "claude-code", "name": "claude", "cwd": "/workspace", "agent_id": "main"},
                     {"type": "pi", "name": "pi", "cwd": "/workspace", "agent_id": "main"},
                     {"type": "node-exec", "name": "node-exec"},
                 ],

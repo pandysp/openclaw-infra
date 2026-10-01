@@ -31,9 +31,10 @@ openclaw_agent_models:
 # OAuth auth (Claude Max subscription). No direct Anthropic API calls for the primary model.
 # The claude CLI is installed via npm (@anthropic-ai/claude-code) and authenticated via
 # ~/.claude/.credentials.json (OAuth access + refresh tokens from Pulumi secret).
+# Claude Code compacts claude-cli sessions itself: OpenClaw skips its own preflight
+# compaction and memory flush for CLI turns, so there are no compaction settings here.
 #
-# Custom model definitions still needed for the anthropic provider (used by MCP proxy
-# containers: codex-mcp, claude-code-mcp, pi-mcp) which call the API directly.
+# OpenClaw's own anthropic provider catalog (the MCP containers do not read it).
 openclaw_custom_models:
   mode: "merge"
   providers:
@@ -45,15 +46,12 @@ openclaw_custom_models:
           name: "Claude Opus 4.6"
           reasoning: true
           input: ["text", "image"]
-          # contextWindow drives compaction timing for the anthropic provider.
-          # The claude-cli backend manages its own context window (200K for Max subscription).
-          # Keep 200K here for any direct-API fallback paths.
           contextWindow: 200000
           maxTokens: 128000
 nodejs_major_version: 25
 openclaw_version: "2026.6.6"
-# Host Claude Code CLI: the claude-cli model runtime and plugin management share
-# one pinned install (@anthropic-ai/claude-code). Update intentionally.
+# Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
+# Update intentionally.
 claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in docs/DOCS-REVIEW.md. Provisioning refuses scheduler changes on a mismatch.
@@ -78,21 +76,6 @@ openclaw_groq_base_url: "https://api.groq.com/openai/v1"
 openclaw_image_generation_model: "google/gemini-3-pro-image-preview"
 openclaw_image_generation_fallbacks:
   - "google/gemini-3.1-flash-image-preview"
-
-# Compaction safeguard: flush memories to disk before context compression
-# Prevents silent loss of in-context state when long sessions get compacted.
-# See: https://docs.openclaw.ai/concepts/compaction, openclaw/openclaw#5429
-openclaw_compaction_mode: "safeguard"
-openclaw_compaction_reserve_tokens_floor: 50000   # was 24000; 50K gives compaction room within 200K API limit
-openclaw_compaction_memory_flush: true
-openclaw_compaction_memory_flush_threshold: 20000  # was 8000; flush memories 20K tokens before compaction trigger
-openclaw_compaction_memory_flush_prompt: >-
-  Distill important context from this session to memory/YYYY-MM-DD.md (today's date).
-  Focus on: decisions made, task progress, blockers, lessons learned.
-  Skip routine exchanges. If nothing worth storing: NO_FLUSH
-openclaw_compaction_memory_flush_system_prompt: >-
-  Extract only durable facts worth remembering across sessions. Be selective.
-openclaw_compaction_notify_user: true   # show "Compacting context..." notice in chat (2026.4.2+)
 
 # Concurrency settings
 openclaw_max_concurrent: 8
@@ -134,9 +117,6 @@ force_sandbox_rebuild: false
 
 # Force Codex MCP Docker image rebuild (override with -e force_codex_rebuild=true)
 force_codex_rebuild: false
-
-# Force Claude Code MCP Docker image rebuild (override with -e force_claude_code_rebuild=true)
-force_claude_code_rebuild: false
 
 # Force Pi MCP Docker image rebuild (override with -e force_pi_mcp_rebuild=true)
 force_pi_mcp_rebuild: false
@@ -212,15 +192,10 @@ openclaw_mcp_adapter:
   codex_memory_limit: "2g"       # Prevent runaway Codex from exhausting VPS RAM
   codex_proxy_port: 8787         # Port for the credential-injecting reverse proxy
   codex_oauth_client_id: "DRivsnm2Mu42T3KOpqdL9p3q9ByGaHfy"  # Codex OAuth client_id for token refresh
-  # Claude Code settings
-  claude_code_docker_image: "claude-code-mcp:latest"
-  claude_code_version: "{{ claude_code_version }}"  # one pin, defined above
-  claude_code_mcp_version: "2.2.0"  # Pin @pandysp/claude-code-mcp server for reproducibility
-  claude_code_memory_limit: "2g"    # Monitor and adjust — Claude Code may need more than Codex
   # Pi MCP settings
   pi_mcp_docker_image: "pi-mcp:latest"
   pi_mcp_version: "0.1.2"
-  pi_mcp_memory_limit: "1g"    # Lower than Codex/Claude Code — Pi is lighter (session trees, not full IDE)
+  pi_mcp_memory_limit: "1g"    # Lower than Codex — Pi is lighter (session trees, not full IDE)
   pi_mcp_model: "claude-opus-4-6"
   pi_mcp_thinking: "xhigh"
   # Note: MCP servers are auto-generated from openclaw_agents × openclaw_mcp_server_types
@@ -234,24 +209,12 @@ openclaw_mcp_server_types:
     name_prefix: "github"
   - type: "codex"
     name_prefix: "codex"
-  - type: "claude-code"
-    name_prefix: "claude"
   - type: "pi"
     name_prefix: "pi"
   - type: "qmd"
     name_prefix: "qmd"
   - type: "node-exec"
     name_prefix: "mac"
-
-# Claude Code plugins installed into the VPS agents' `claude` CLI.
-#
-# Intentionally NOT defaulted here: which plugins a deployment wants is a
-# per-deployment choice, and a hardcoded list silently rots when upstream
-# marketplaces change (e.g. a plugin removed from its marketplace breaks
-# provisioning). Define `claude_code_plugins` in group_vars/openclaw.yml to
-# enable it — see openclaw.yml.example for the structure. When it is undefined
-# the plugins role simply skips Claude Code plugin install
-# (`when: claude_code_plugins is defined`).
 
 # Obsidian Headless Sync (obsidian-headless npm package)
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.

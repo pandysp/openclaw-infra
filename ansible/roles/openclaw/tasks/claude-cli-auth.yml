@@ -3,8 +3,6 @@
 #
 # The claude CLI (@anthropic-ai/claude-code) is not an OpenClaw dependency: this
 # role installs it, pinned to claude_code_version, before the credential check.
-# (A fresh Phoenix server previously failed here with rc=2 because the plugins
-# role installs the CLI later, and only when Claude Code plugins are declared.)
 # This task ensures:
 #   1. The pinned CLI is installed and accessible via /usr/local/bin/claude
 #   2. Anthropic credentials are written to ~/.claude/.credentials.json

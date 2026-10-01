@@ -157,8 +157,6 @@ jobs:
               name_prefix: "github"
             - type: "codex"
               name_prefix: "codex"
-            - type: "claude-code"
-              name_prefix: "claude"
             - type: "pi"
               name_prefix: "pi"
             - type: "qmd"
