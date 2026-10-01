@@ -1,16 +1,14 @@
 #!/usr/bin/env node
-// MCP Auth Proxy — reverse proxy that injects credentials for MCP containers
-// on the codex-proxy-net Docker network.
+// MCP Auth Proxy — injects per-agent GitHub tokens into git traffic, so sandbox
+// containers can clone and push without holding a token.
 //
 // Routes:
-//   /health         → health check with per-service status
-//   /github-<id>/*  → github.com (per-agent PAT injection for git clone)
-//   /anthropic/*    → api.anthropic.com (credential injection for Claude Code + Pi)
-//                     Auto-detects token type: OAuth (sk-ant-oat*) → Bearer, API key → x-api-key
-//   /*              → chatgpt.com (Bearer token injection for Codex)
+//   /health         → health check
+//   /github-<id>/*  → github.com (per-agent PAT injection for git clone/push)
 //
-// Zero npm dependencies. Listens on the Docker network gateway IP only,
-// so sandbox containers on the default bridge cannot reach it.
+// Zero npm dependencies. Listens on the codex-proxy-net gateway IP; ufw admits
+// only the default Docker bridge (sandbox containers) to the port. Each
+// workspace's .git-proxy-config rewrites github.com URLs to its /github-<id>/ route.
 //
 // Managed by Ansible — do not edit on the server.
 
@@ -24,14 +22,8 @@ const { pipeline } = require('stream');
 
 const LISTEN_HOST = process.env.CODEX_PROXY_LISTEN || '127.0.0.1';
 const LISTEN_PORT = parseInt(process.env.CODEX_PROXY_PORT || '{{ openclaw_mcp_adapter.codex_proxy_port }}', 10);
-const AUTH_PATH = process.env.CODEX_AUTH_PATH || '/home/ubuntu/.codex/auth.json';
-const UPSTREAM_HOST = 'chatgpt.com';
-const UPSTREAM_PATH_PREFIX = '/backend-api/codex';
 const CONNECT_TIMEOUT_MS = 10000;
 const RESPONSE_TIMEOUT_MS = 30000;
-const OVERALL_TIMEOUT_MS = 300000; // 5 min for long codex sessions
-const REFRESH_URL = 'https://auth.openai.com/oauth/token';
-const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
 
 // --- Structured logging ---
 
@@ -39,122 +31,6 @@ function log(level, msg, extra) {
   const entry = { ts: new Date().toISOString(), level, msg };
   if (extra) Object.assign(entry, extra);
   process.stdout.write(JSON.stringify(entry) + '\n');
-}
-
-// --- Token management ---
-
-let cachedToken = null;
-let tokenMtime = 0;
-let lastSuccessfulTokenRead = 0; // epoch ms of last successful auth.json read
-let refreshMutex = null; // Promise when refresh is in-flight
-let circuitOpen = false;
-let circuitOpenUntil = 0;
-const STALE_TOKEN_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
-
-function readAuthFile() {
-  try {
-    const raw = fs.readFileSync(AUTH_PATH, 'utf8');
-    const data = JSON.parse(raw);
-    return data;
-  } catch (err) {
-    log('error', 'Failed to read auth.json', { error: err.message });
-    return null;
-  }
-}
-
-function getAccessToken() {
-  try {
-    const stat = fs.statSync(AUTH_PATH);
-    const mtime = stat.mtimeMs;
-    if (cachedToken && mtime === tokenMtime) return cachedToken;
-    const data = readAuthFile();
-    const tokens = data && data.tokens;
-    if (tokens && tokens.access_token) {
-      cachedToken = tokens.access_token;
-      tokenMtime = mtime;
-      lastSuccessfulTokenRead = Date.now();
-      log('info', 'Loaded access token from auth.json');
-      return cachedToken;
-    }
-  } catch (err) {
-    // File read failed — decide severity based on cache state and staleness
-    if (!cachedToken) {
-      throw new Error('Cannot read auth.json and no cached token available: ' + err.message);
-    }
-    const staleDuration = Date.now() - lastSuccessfulTokenRead;
-    if (lastSuccessfulTokenRead > 0 && staleDuration > STALE_TOKEN_THRESHOLD_MS) {
-      log('error', 'auth.json unreadable and cached token is stale', {
-        error: err.message,
-        lastSuccessfulReadAgo: Math.round(staleDuration / 1000) + 's',
-      });
-    } else {
-      log('warn', 'auth.json unreadable, using cached token', { error: err.message });
-    }
-  }
-  return cachedToken;
-}
-
-function invalidateToken() {
-  cachedToken = null;
-  tokenMtime = 0;
-  // Preserve lastSuccessfulTokenRead so staleness tracking remains accurate
-  // after a 401-triggered invalidation + successful re-read from disk.
-}
-
-// Watch auth.json for external changes (e.g. reprovision)
-try {
-  fs.watch(AUTH_PATH, () => {
-    log('info', 'auth.json changed on disk, invalidating cached token');
-    invalidateToken();
-  });
-} catch (err) {
-  log('warn', 'Cannot watch auth.json, token reload requires restart', { error: err.message });
-}
-
-// --- Anthropic token management (static key from file, no refresh) ---
-
-const ANTHROPIC_AUTH_PATH = process.env.ANTHROPIC_AUTH_PATH || '/home/ubuntu/.openclaw/anthropic-auth-token';
-let cachedAnthropicToken = null;
-let anthropicTokenMtime = 0;
-
-function getAnthropicToken() {
-  try {
-    const stat = fs.statSync(ANTHROPIC_AUTH_PATH);
-    if (cachedAnthropicToken && stat.mtimeMs === anthropicTokenMtime) return cachedAnthropicToken;
-    const token = fs.readFileSync(ANTHROPIC_AUTH_PATH, 'utf8').trim();
-    if (!token) {
-      log('error', 'Anthropic token file exists but is empty', { path: ANTHROPIC_AUTH_PATH });
-      return null;
-    }
-    cachedAnthropicToken = token;
-    anthropicTokenMtime = stat.mtimeMs;
-    log('info', 'Loaded Anthropic token from file');
-    return cachedAnthropicToken;
-  } catch (err) {
-    log('error', 'Failed to read Anthropic token', { error: err.message });
-    return null;
-  }
-}
-
-// Watch for rotation, with retry if file doesn't exist yet
-function watchAnthropicToken() {
-  try {
-    fs.watch(ANTHROPIC_AUTH_PATH, () => {
-      log('info', 'Anthropic token file changed, invalidating cache');
-      cachedAnthropicToken = null;
-      anthropicTokenMtime = 0;
-    });
-    log('info', 'Watching Anthropic token file for changes');
-    return true;
-  } catch (err) {
-    log('warn', 'Cannot watch Anthropic token file, retrying in 30s', { error: err.message });
-    return false;
-  }
-}
-if (!watchAnthropicToken()) {
-  const retryWatch = setInterval(() => {
-    if (watchAnthropicToken()) clearInterval(retryWatch);
-  }, 30000);
 }
 
 // --- GitHub token management (per-agent PATs from directory) ---
@@ -200,261 +76,6 @@ try {
   log('info', 'Watching GitHub tokens directory for changes');
 } catch (err) {
   if (err.code !== 'ENOENT') log('warn', 'Cannot watch GitHub tokens directory', { error: err.message });
-}
-
-// --- Token refresh ---
-
-function refreshToken() {
-  // Deduplicate concurrent refresh attempts
-  if (refreshMutex) return refreshMutex;
-
-  // Circuit breaker: don't hammer refresh endpoint
-  if (circuitOpen && Date.now() < circuitOpenUntil) {
-    return Promise.reject(new Error('Circuit breaker open — refresh disabled'));
-  }
-
-  refreshMutex = new Promise((resolve, reject) => {
-    const auth = readAuthFile();
-    const tokens = auth && auth.tokens;
-    if (!tokens || !tokens.refresh_token) {
-      reject(new Error('No refresh_token in auth.json'));
-      return;
-    }
-
-    const body = JSON.stringify({
-      grant_type: 'refresh_token',
-      refresh_token: tokens.refresh_token,
-      client_id: '{{ openclaw_mcp_adapter.codex_oauth_client_id }}',
-    });
-
-    const req = https.request(REFRESH_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-      timeout: CONNECT_TIMEOUT_MS,
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          log('error', 'Token refresh failed', { status: res.statusCode, body: data.slice(0, 500) });
-          // Open circuit breaker for 5 minutes
-          circuitOpen = true;
-          circuitOpenUntil = Date.now() + 5 * 60 * 1000;
-          reject(new Error(`Refresh returned ${res.statusCode}`));
-          return;
-        }
-        try {
-          const parsed = JSON.parse(data);
-          if (!parsed.access_token) throw new Error('No access_token in refresh response');
-          // Update auth.json on disk (tokens are nested under .tokens)
-          const updatedTokens = Object.assign({}, tokens, {
-            access_token: parsed.access_token,
-            refresh_token: parsed.refresh_token || tokens.refresh_token,
-          });
-          const updated = Object.assign({}, auth, {
-            tokens: updatedTokens,
-            last_refresh: new Date().toISOString(),
-          });
-          fs.writeFileSync(AUTH_PATH, JSON.stringify(updated, null, 2), 'utf8');
-          cachedToken = parsed.access_token;
-          tokenMtime = fs.statSync(AUTH_PATH).mtimeMs;
-          lastSuccessfulTokenRead = Date.now();
-          circuitOpen = false;
-          log('info', 'Token refreshed successfully');
-          resolve(parsed.access_token);
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      log('error', 'Token refresh request error', { error: err.message });
-      circuitOpen = true;
-      circuitOpenUntil = Date.now() + 5 * 60 * 1000;
-      reject(err);
-    });
-    req.on('timeout', () => { req.destroy(new Error('Refresh request timeout')); });
-    req.write(body);
-    req.end();
-  }).finally(() => { refreshMutex = null; });
-
-  return refreshMutex;
-}
-
-// --- Proxy logic ---
-
-function bufferBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > MAX_BODY_SIZE) {
-        reject(new Error('Request body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
-
-function proxyRequest(clientReq, clientRes, body, token, isRetry) {
-  const upstreamPath = UPSTREAM_PATH_PREFIX + clientReq.url;
-  const headers = Object.assign({}, clientReq.headers);
-  delete headers.host;
-  headers.host = UPSTREAM_HOST;
-  headers.authorization = 'Bearer ' + token;
-  headers['content-length'] = Buffer.byteLength(body);
-
-  const options = {
-    hostname: UPSTREAM_HOST,
-    port: 443,
-    path: upstreamPath,
-    method: clientReq.method,
-    headers: headers,
-    timeout: CONNECT_TIMEOUT_MS,
-  };
-
-  const upReq = https.request(options, (upRes) => {
-    // Handle 401 — try refresh once
-    if (upRes.statusCode === 401 && !isRetry) {
-      // Drain upstream response
-      upRes.resume();
-      log('warn', 'Upstream returned 401, attempting token refresh');
-      invalidateToken();
-      refreshToken().then((newToken) => {
-        proxyRequest(clientReq, clientRes, body, newToken, true);
-      }).catch((err) => {
-        log('error', 'Token refresh failed on 401 retry', { error: err.message });
-        clientRes.writeHead(502, { 'Content-Type': 'application/json' });
-        clientRes.end(JSON.stringify({ error: 'token_refresh_failed', detail: err.message }));
-      });
-      return;
-    }
-
-    // Validate upstream content type
-    const ct = (upRes.headers['content-type'] || '').toLowerCase();
-    if (upRes.statusCode >= 200 && upRes.statusCode < 300 &&
-        !ct.includes('json') && !ct.includes('event-stream') && !ct.includes('text/')) {
-      log('warn', 'Unexpected upstream content-type', { contentType: ct, status: upRes.statusCode });
-    }
-
-    // Forward response
-    clientRes.writeHead(upRes.statusCode, upRes.headers);
-    pipeline(upRes, clientRes, (err) => {
-      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
-        log('error', 'Stream pipeline error', { error: err.message });
-      }
-    });
-  });
-
-  // Timeouts
-  upReq.on('timeout', () => {
-    upReq.destroy(new Error('Upstream connect timeout'));
-  });
-
-  upReq.on('socket', (socket) => {
-    socket.once('connect', () => {
-      // After connect, set response timeout
-      upReq.setTimeout(RESPONSE_TIMEOUT_MS, () => {
-        upReq.destroy(new Error('Upstream response timeout'));
-      });
-    });
-  });
-
-  upReq.on('error', (err) => {
-    log('error', 'Upstream request error', { error: err.message, path: upstreamPath });
-    if (!clientRes.headersSent) {
-      clientRes.writeHead(502, { 'Content-Type': 'application/json' });
-      clientRes.end(JSON.stringify({ error: 'upstream_error', detail: err.message }));
-    }
-  });
-
-  upReq.write(body);
-  upReq.end();
-
-  // Overall timeout
-  const overallTimer = setTimeout(() => {
-    upReq.destroy(new Error('Overall request timeout'));
-  }, OVERALL_TIMEOUT_MS);
-  clientRes.on('close', () => clearTimeout(overallTimer));
-}
-
-function proxyAnthropicRequest(clientReq, clientRes, body) {
-  const token = getAnthropicToken();
-  if (!token) {
-    clientRes.writeHead(503, { 'Content-Type': 'application/json' });
-    clientRes.end(JSON.stringify({ error: 'no_token', detail: 'Cannot read Anthropic token' }));
-    return;
-  }
-
-  const upstreamPath = clientReq.url.slice('/anthropic'.length) || '/';
-  const headers = Object.assign({}, clientReq.headers);
-  delete headers.host;
-  delete headers['x-api-key'];
-  delete headers['authorization'];
-  delete headers['transfer-encoding'];
-  headers.host = 'api.anthropic.com';
-  // Auto-detect token type: OAuth setup tokens (sk-ant-oat*) require Bearer auth
-  // with the oauth-2025-04-20 beta flag. Standard API keys use x-api-key header.
-  if (token.startsWith('sk-ant-oat')) {
-    headers['authorization'] = 'Bearer ' + token;
-    headers['anthropic-dangerous-direct-browser-access'] = 'true';
-    // Merge oauth-2025-04-20 into anthropic-beta (preserve existing beta flags)
-    const existing = (headers['anthropic-beta'] || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (!existing.includes('oauth-2025-04-20')) existing.push('oauth-2025-04-20');
-    headers['anthropic-beta'] = existing.join(',');
-  } else {
-    headers['x-api-key'] = token;
-  }
-  headers['content-length'] = Buffer.byteLength(body);
-
-  const options = {
-    hostname: 'api.anthropic.com',
-    port: 443,
-    path: upstreamPath,
-    method: clientReq.method,
-    headers: headers,
-    timeout: CONNECT_TIMEOUT_MS,
-  };
-
-  const upReq = https.request(options, (upRes) => {
-    clientRes.writeHead(upRes.statusCode, upRes.headers);
-    pipeline(upRes, clientRes, (err) => {
-      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE')
-        log('error', 'Anthropic stream error', { error: err.message });
-    });
-  });
-
-  upReq.on('timeout', () => upReq.destroy(new Error('Anthropic connect timeout')));
-  upReq.on('socket', (socket) => {
-    socket.once('connect', () => {
-      upReq.setTimeout(RESPONSE_TIMEOUT_MS, () =>
-        upReq.destroy(new Error('Anthropic response timeout')));
-    });
-  });
-  upReq.on('error', (err) => {
-    log('error', 'Anthropic upstream error', { error: err.message, path: upstreamPath });
-    if (!clientRes.headersSent) {
-      clientRes.writeHead(502, { 'Content-Type': 'application/json' });
-      clientRes.end(JSON.stringify({ error: 'upstream_error', detail: err.message }));
-    }
-  });
-
-  upReq.write(body);
-  upReq.end();
-
-  const overallTimer = setTimeout(() => {
-    upReq.destroy(new Error('Anthropic overall timeout'));
-  }, OVERALL_TIMEOUT_MS);
-  clientRes.on('close', () => clearTimeout(overallTimer));
 }
 
 // --- GitHub proxy (streaming, per-agent PAT injection) ---
@@ -536,21 +157,13 @@ function proxyGitHubRequest(clientReq, clientRes) {
 // --- HTTP server ---
 
 const server = http.createServer((req, res) => {
-  // Health check — per-service status
   if (req.url === '/health' && req.method === 'GET') {
-    let codexToken = null;
-    try { codexToken = getAccessToken(); } catch (err) { /* no cached token — codex unhealthy */ }
-    const anthropicToken = getAnthropicToken();
     const githubAgents = getGitHubAgents();
-    const codexHealthy = !!codexToken && !circuitOpen;
-    const anthropicHealthy = !!anthropicToken;
-    const healthy = codexHealthy || anthropicHealthy || githubAgents.length > 0;
+    const healthy = githubAgents.length > 0;
     res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: healthy ? 'healthy' : 'unhealthy',
-      codex: { hasToken: !!codexToken, healthy: codexHealthy, circuitOpen, circuitOpenUntil: circuitOpen ? new Date(circuitOpenUntil).toISOString() : null },
-      anthropic: { hasToken: !!anthropicToken, healthy: anthropicHealthy, authMethod: anthropicToken && anthropicToken.startsWith('sk-ant-oat') ? 'bearer' : 'api-key' },
-      github: { agents: githubAgents, hasTokens: githubAgents.length > 0 },
+      github: { agents: githubAgents, hasTokens: healthy },
     }));
     return;
   }
@@ -561,50 +174,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Anthropic route — Claude Code + Pi containers
-  if (req.url.startsWith('/anthropic/') || req.url === '/anthropic') {
-    bufferBody(req).then((body) => {
-      proxyAnthropicRequest(req, res, body);
-    }).catch((err) => {
-      log('error', 'Failed to buffer Anthropic request body', { error: err.message });
-      if (!res.headersSent) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'bad_request', detail: err.message }));
-      }
-    });
-    return;
-  }
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'not_found', detail: 'Only /health and /github-<agent>/ are served' }));
 
-  // Default: Codex route
-  let token;
-  try {
-    token = getAccessToken();
-  } catch (err) {
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'no_token', detail: err.message }));
-    return;
-  }
-  if (!token) {
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'no_token', detail: 'Cannot read access token from auth.json' }));
-    return;
-  }
-
-  bufferBody(req).then((body) => {
-    proxyRequest(req, res, body, token, false);
-  }).catch((err) => {
-    log('error', 'Failed to buffer request body', { error: err.message });
-    if (!res.headersSent) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'bad_request', detail: err.message }));
-    }
-  });
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
   log('info', 'MCP auth proxy started', { host: LISTEN_HOST, port: LISTEN_PORT });
-  try { getAccessToken(); } catch (err) { log('warn', 'auth.json not available at startup', { error: err.message }); }
-  getAnthropicToken();
 });
 
 server.on('error', (err) => {

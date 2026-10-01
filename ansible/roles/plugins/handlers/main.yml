@@ -6,12 +6,3 @@
     scope: user
   environment:
     XDG_RUNTIME_DIR: "/run/user/1000"
-
-- name: restart mcp-auth-proxy
-  ansible.builtin.systemd:
-    name: mcp-auth-proxy
-    state: restarted
-    scope: user
-    daemon_reload: true
-  environment:
-    XDG_RUNTIME_DIR: "/run/user/1000"

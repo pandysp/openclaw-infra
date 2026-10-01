@@ -1,5 +1,5 @@
 [Unit]
-Description=MCP Auth Proxy (credential injection for Codex, Claude Code, and Pi containers)
+Description=MCP Auth Proxy (per-agent GitHub token injection for sandbox git)
 After=network.target
 Before=openclaw-gateway.service
 
@@ -11,8 +11,6 @@ RestartSec=5
 Environment=NODE_ENV=production
 Environment=CODEX_PROXY_LISTEN={{ codex_proxy_gateway_ip }}
 Environment=CODEX_PROXY_PORT={{ openclaw_mcp_adapter.codex_proxy_port }}
-Environment=CODEX_AUTH_PATH=/home/ubuntu/.codex/auth.json
-Environment=ANTHROPIC_AUTH_PATH=/home/ubuntu/.openclaw/anthropic-auth-token
 Environment=GITHUB_TOKENS_DIR=/home/ubuntu/.openclaw/github-tokens
 
 [Install]

@@ -234,7 +234,6 @@ SECRETS_FILE="$SECRETS_DIR/secrets.json"
 install -m 600 /dev/null "$SECRETS_FILE"
 python3 -c "
 import json, sys, os
-from pathlib import Path
 
 # Static keys: (variable, env_var) — main agent + global config
 static = [
@@ -270,16 +269,6 @@ for aid in agent_ids:
         (f'workspace_{aid}_deploy_key', f'PROVISION_WORKSPACE_{upper}_DEPLOY_KEY'),
     ])
 secrets = {key: os.environ.get(env_var, '') for key, env_var in static}
-
-# Run codex login locally to provide these optional credentials.
-codex_path = Path.home() / '.codex/auth.json'
-secrets['codex_auth_json'] = codex_path.read_text() if codex_path.exists() else ''
-if codex_path.exists():
-    try:
-        json.loads(secrets['codex_auth_json'])
-    except ValueError:
-        sys.exit('ERROR: ~/.codex/auth.json is not valid JSON. Run codex login to regenerate.')
-print('  codex_auth: ' + ('found (~/.codex/auth.json)' if codex_path.exists() else 'skipped (run codex login to enable)'))
 with open(sys.argv[1], 'w') as f:
     json.dump(secrets, f)
     f.write('\n')
