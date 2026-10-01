@@ -140,7 +140,7 @@
     executable: /bin/bash
   vars:
     _heartbeat_defaults: >-
-      {{ {'every': '0m', 'model': 'anthropic/claude-sonnet-4-6', 'directPolicy': 'allow'}
+      {{ {'every': '0m', 'model': openclaw_heartbeat_model, 'directPolicy': 'allow'}
          | combine({'activeHours': openclaw_heartbeat_active_hours}
            if openclaw_heartbeat_active_hours is defined and openclaw_heartbeat_active_hours else {}) }}
   register: heartbeat_defaults_result
