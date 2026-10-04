@@ -18,6 +18,29 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PULUMI_DIR="$REPO_DIR/pulumi"
 ANSIBLE_DIR="$REPO_DIR/ansible"
 
+# One provisioning run at a time on this machine: overlapping runs would apply
+# each other's temporary files, settings and restarts on the server. The lock
+# belongs to the open file, which this script, Ansible and their children share,
+# so it is released only when all of them exit, even after SIGKILL.
+LOCK_FILE="$HOME/.cache/openclaw-provision.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>>"$LOCK_FILE"
+lock_status=0
+python3 -c '
+import fcntl, sys
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(75)
+' || lock_status=$?
+if [ "$lock_status" -eq 75 ]; then
+    echo "ERROR: Another provisioning run is active on this machine. Retry after it finishes."
+    exit 1
+elif [ "$lock_status" -ne 0 ]; then
+    echo "ERROR: Could not take the provisioning lock at $LOCK_FILE."
+    exit 1
+fi
+
 # Temp directory for secrets (cleaned up on exit)
 SECRETS_DIR=$(mktemp -d)
 trap 'rm -rf "$SECRETS_DIR"' EXIT
