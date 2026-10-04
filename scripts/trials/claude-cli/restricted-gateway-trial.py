@@ -67,6 +67,12 @@ try:
         key = f'agent:{agent}:cwrapper-' + run
         session_hash = hashlib.sha256(key.encode()).hexdigest()[:12]
         marker = 'CWRAPPER_' + uuid.uuid4().hex[:12]
+        # Workspace sync may run mid-trial; keep fixtures out of the agent's repository.
+        exclude = workspace / '.git/info/exclude'
+        if exclude.parent.is_dir():
+            text = exclude.read_text() if exclude.exists() else ''
+            if 'cwrapper-*' not in text.splitlines():
+                exclude.write_text(text + ('' if text.endswith('\n') or not text else '\n') + 'cwrapper-*\n')
         proof = workspace / ('cwrapper-proof-' + run + '.txt')
         diagnostic = workspace / ('cwrapper-native-diagnostic-' + run + '.py')
         diagnostic.write_text('''import json,os,pathlib
