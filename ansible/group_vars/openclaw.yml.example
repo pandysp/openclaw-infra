@@ -75,6 +75,7 @@
 #     heartbeat_every: "15m"
 #     heartbeat_model: "anthropic/claude-opus-5-5"  # optional; defaults to openclaw_heartbeat_model, must be in openclaw_agent_models
 #     sandbox_mode: "off"  # override default sandbox mode (also sets exec.host=gateway)
+#     mac_access: true     # SSH to openclaw_claude_cli_mac_host from this agent's container
 #   - id: "second-agent"
 #     is_default: false
 #     scheduled_automation_enabled: true

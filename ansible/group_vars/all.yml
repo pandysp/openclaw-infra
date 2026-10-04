@@ -70,7 +70,8 @@ openclaw_claude_cli_ipv4_subnet: 172.30.55.0/24
 openclaw_claude_cli_ipv6_subnet: fd27:0c1a:c100::/64
 openclaw_claude_cli_mcp_target: /home/ubuntu/.openclaw/claude-cli-mcp-target.json
 # Containers reach a Mac over SSH only when a host is set (an SSH alias the
-# controller can reach, e.g. "mac-air"), with the Mac account in mac_user.
+# controller can reach, e.g. "mac-air"), with the Mac account in mac_user, and
+# only for agents with `mac_access: true` in openclaw_agents.
 openclaw_claude_cli_mac_host: ""
 openclaw_claude_cli_mac_user: ""
 # Inherited variables only; provider keys stay with the host's OpenClaw tools.
@@ -107,19 +108,7 @@ openclaw_image_generation_fallbacks:
 openclaw_max_concurrent: 8
 openclaw_subagents_max_concurrent: 16
 
-# Node exec settings (for remote Mac node control)
-# ⚠️  SECURITY WARNING: Node exec lets agents run arbitrary shell commands on your
-# local machine (Mac) via the OpenClaw node host. This is powerful but dangerous:
-# - An agent (or attacker via prompt injection) can read/modify local files
-# - If your Mac has Pulumi state, cloud credentials, or SSH keys, they're accessible
-# - There is NO sandbox — commands run with your user's full permissions
-# See docs/SECURITY.md §5 for the full threat model.
-# Only enable this if you understand the risks and have set up the Mac node host.
-node_exec_enabled: false
-
-# Exec defaults to sandbox. Agents can target the Mac node on-demand with host=node.
-# Node ID is NOT configured here — it's dynamic (changes on re-pairing).
-# Pin it manually after pairing: openclaw config set tools.exec.node <id>
+# OpenClaw's own exec tool runs in the sandbox.
 openclaw_exec_host: "sandbox"
 openclaw_exec_security: "full"       # Native Claude tools use bypassPermissions; C supplies OS containment.
 openclaw_exec_ask: "off"             # Native execution is not blocked by elevated=false; see SECURITY §4.

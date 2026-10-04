@@ -128,13 +128,13 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Residual Risk**: Agent turns have host access as `ubuntu` with passwordless sudo; accepted for this single-operator deployment. Medium for OpenClaw's sandboxed tools (no host access, but network-enabled workspace exfiltration possible).
 
-### 5. Self-Modification via Node Control
+### 5. Self-Modification via Mac Access
 
-**Attack**: OpenClaw accesses your infrastructure management machine through a connected node.
+**Attack**: An agent with Mac access reaches your infrastructure management machine.
 
-**Scenario**: If your Mac is added as an OpenClaw node and has access to the Pulumi backend, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets. The obsolete plaintext passphrase fields were removed from the current production checkpoint on 2026-09-18. Historical checkpoints, the backend backup, and earlier private exports still expose the same unrotated passphrase. Current-state repair does not contain that exposure; rotation and historical cleanup are outside this reconciliation's scope; the exposure remains. Exports without `--show-secrets` are also sensitive. Commands run with your user's full permissions — there is no sandbox.
+**Scenario**: If an agent can reach your Mac and that account has access to the Pulumi backend, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets. The obsolete plaintext passphrase fields were removed from the current production checkpoint on 2026-09-18. Historical checkpoints, the backend backup, and earlier private exports still expose the same unrotated passphrase. Current-state repair does not contain that exposure; rotation and historical cleanup are outside this reconciliation's scope; the exposure remains. Exports without `--show-secrets` are also sensitive. Commands run with your user's full permissions — there is no sandbox.
 
-**Current route**: Claude-backed agents use native Bash and a dedicated pinned SSH identity, not node-exec MCP. The legacy `node_exec_enabled` flag does not grant these agents OpenClaw's excluded `exec` tool. Disabling node exec does not disable SSH.
+**Current route**: Only agents with `mac_access: true` reach the Mac, through native Bash and a dedicated pinned SSH identity. The restriction holds with containers on; in native mode every agent can use the Mac key.
 
 **Controls**:
 - Pin the Mac host key through a trusted route; use a fixed user and identity.

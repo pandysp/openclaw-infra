@@ -363,24 +363,23 @@ LOCAL_CONFIG="$HOME/.openclaw/openclaw.json"
 echo ""
 echo "13. Checking local gateway token..."
 if [[ ! -f "$LOCAL_CONFIG" ]]; then
-    echo "   Local OpenClaw node config not present (optional on this machine)"
+    echo "   Local OpenClaw CLI config not present (optional on this machine)"
 elif ! TOKEN_LEN=$(OPENCLAW_CONFIG="$LOCAL_CONFIG" python3 -c "
 import json, os
 with open(os.environ['OPENCLAW_CONFIG']) as f:
     d = json.load(f)
 print(len(d.get('gateway', {}).get('remote', {}).get('token', '')))" 2>/dev/null); then
-    check_fail "Local OpenClaw node config is unreadable"
+    check_fail "Local OpenClaw CLI config is unreadable"
 elif [ "$TOKEN_LEN" -gt 0 ] 2>/dev/null; then
     check_pass "Local gateway.remote.token is set"
 else
     # Non-fatal: verify continues to report all checks
-    check_fail "Local gateway.remote.token is EMPTY — node host cannot authenticate"
-    echo "   Fix: run ./scripts/setup-mac-node.sh; never print the gateway token or its backup."
+    check_fail "Local gateway.remote.token is EMPTY — the local CLI cannot authenticate"
+    echo "   Fix: configure the local CLI as in CLAUDE.md (Local CLI); never print the gateway token."
 fi
 
-# 14. Version match — IaC pin vs installed. Catches drift across VPS, local CLI,
-# and the Mac node host: these three must stay in lockstep to avoid protocol
-# mismatches after a skipped upgrade.
+# 14. Version match — IaC pin vs installed. Catches drift between the VPS and the
+# local CLI, which must stay in lockstep to avoid protocol mismatches.
 echo ""
 echo "14. Checking version alignment (IaC pin vs installed)..."
 IAC_VERSION=$(grep -E '^openclaw_version:' "$(dirname "${BASH_SOURCE[0]}")/../ansible/group_vars/all.yml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || echo "")

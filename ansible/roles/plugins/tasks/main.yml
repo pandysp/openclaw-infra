@@ -24,13 +24,6 @@
     line: 'export PATH="$HOME/.npm-global/bin:$PATH"'
     state: present
 
-- name: Determine which npm packages to install
-  ansible.builtin.set_fact:
-    mcp_npm_packages: >-
-      {{ openclaw_mcp_adapter.npm_packages
-         | reject('equalto', 'node-exec-mcp')
-         | list }}
-
 - name: Install MCP server npm packages globally
   community.general.npm:
     name: "{{ item }}"
@@ -38,7 +31,7 @@
     state: present
   environment:
     PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
-  loop: "{{ mcp_npm_packages }}"
+  loop: "{{ openclaw_mcp_adapter.npm_packages }}"
 
 - name: Resolve mcp-server-github binary path
   ansible.builtin.shell: |

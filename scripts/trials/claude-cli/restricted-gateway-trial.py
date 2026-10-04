@@ -61,8 +61,10 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
 ''')
         active.append((key, run, project, proof, diagnostic, session_hash))
         qmd_tool = 'mcp__openclaw__' + ('qmd_status' if agent == 'main' else f'qmd-{agent}_status')
-        # The Mac check runs only when the runtime has a Mac host.
-        ssh = "ssh " + runtime['mac_host'] + " 'printf mac-ssh-ok'" if runtime['mac_host'] else None
+        # Agents with Mac access must reach it; the others' containers must hold no Mac
+        # key, pin or host entry (checked directly below, not through the agent).
+        mac_host = runtime['ssh'][agent]['mac_host']
+        ssh = "ssh " + mac_host + " 'printf mac-ssh-ok'" if mac_host else None
         script_command = 'python3 ' + diagnostic.name
 
         def launches():
@@ -118,6 +120,12 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
         deleted = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', '--delete', branch],
                                  capture_output=True, text=True, timeout=60)
         flags['git_push'] = pushed.returncode == 0 and deleted.returncode == 0
+        if not mac_host:
+            no_files = subprocess.run(['docker', 'exec', name, 'sh', '-c',
+                                       'test ! -e ~/.ssh/id_ed25519_openclaw_mac_air && test ! -e ~/.ssh/known_hosts_openclaw_mac_air'
+                                       ' && ! grep -qi "^Host .*mac" ~/.ssh/config'], timeout=20).returncode == 0
+            hosts = json.loads(command(['docker', 'inspect', '--format', '{{json .HostConfig.ExtraHosts}}', name]))
+            flags['no_mac_credentials'] = no_files and not hosts
         media_reply = None
         if agent == 'main':
             video, frame = diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')

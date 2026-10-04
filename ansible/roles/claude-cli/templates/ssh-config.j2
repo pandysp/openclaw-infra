@@ -1,4 +1,4 @@
-{% if openclaw_claude_cli_mac_host | length > 0 %}
+{% if item.agent_id in _claude_cli_mac_agents %}
 Host {{ openclaw_claude_cli_mac_host }}
     User {{ openclaw_claude_cli_mac_user }}
     IdentityFile ~/.ssh/id_ed25519_openclaw_mac_air

@@ -161,13 +161,6 @@
       when: openclaw_mcp_servers is not defined
       tags: [always]
 
-    # node-exec-mcp calls the removed `openclaw nodes run` command. Native
-    # Bash/SSH replaces it; filter legacy manual lists as well as defaults.
-    - name: Remove obsolete Mac MCP servers from derived configuration
-      ansible.builtin.set_fact:
-        _openclaw_mcp_servers: "{{ _openclaw_mcp_servers | rejectattr('type', 'equalto', 'node-exec') | list }}"
-      tags: [always]
-
     # Workspaces: one per agent with mechanical naming
     - name: Initialize workspace metadata
       ansible.builtin.set_fact:

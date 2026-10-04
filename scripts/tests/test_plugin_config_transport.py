@@ -86,8 +86,6 @@ class PluginConfigTransportTests(unittest.TestCase):
                         for name, token in (("github", "fixture-main"), ("github-test", "fixture-test"))]}
             if case in ("global_disabled", "global_enabled"):
                 old["plugins"]["enabled"] = case == "global_enabled"
-            if case == "node_exec_empty_token":
-                old["gateway"]["auth"]["token"] = ""
             with os.fdopen(os.open(cfg, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as file:
                 json.dump(old, file)
             if case == "invalid_source":
@@ -180,17 +178,14 @@ p.write_text(json.dumps(cfg))
                 "github_mcp_binary": {"stdout": "/usr/bin/false"},
                 "github_token": "fixture-main\n\n", "github_token_test": "fixture-test\n",
                 "qmd_workspaces": [],
-                "node_exec_enabled": case.startswith("node_exec") or case == "minimal_node_exec",
-                "node_exec_mcp_binary": {"stdout": "/usr/bin/true"},
                 "_tailscale_wss_url": "wss://openclaw-test.example",
                 "_openclaw_mcp_servers": [
                     {"type": "github", "name": "github", "token_var": "github_token"},
                     {"type": "github", "name": "github-test", "token_var": "github_token_test"},
-                    {"type": "node-exec", "name": "node-exec"},
                 ],
                 "ansible_python_interpreter": self.python,
             })
-            if case in ("minimal_servers", "minimal_node_exec"):
+            if case == "minimal_servers":
                 variables["_openclaw_mcp_servers"] = [server for server in variables["_openclaw_mcp_servers"] if server["type"] == "github"]
             if case == "force_reinstall":
                 variables["force_plugin_reinstall"] = True
@@ -217,7 +212,7 @@ p.write_text(json.dumps(cfg))
                                     timeout=60, umask=0o022)
             self.assertFalse("fixture-" in result.stdout + result.stderr, "Synthetic credential appeared in task output")
             self.assertFalse((root / "argv-leak").exists(), "Credential reached process argv")
-            success = case in ("fresh", "existing_0644", "node_exec", "node_exec_empty_token", "minimal_servers", "minimal_node_exec",
+            success = case in ("fresh", "existing_0644", "minimal_servers",
                                "disabled", "enabled_only", "upgrade", "force_reinstall", "global_disabled", "global_enabled")
             if success:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -298,15 +293,7 @@ p.write_text(json.dumps(cfg))
         self.run_tasks("existing_0644")
 
     def test_optional_server_types_can_be_absent(self):
-        for case in ("minimal_servers", "minimal_node_exec"):
-            with self.subTest(case=case):
-                self.run_tasks(case)
-
-    def test_legacy_node_exec_configuration_cannot_restore_retired_mac_servers(self):
-        self.run_tasks("node_exec")
-
-    def test_retired_mac_servers_do_not_require_or_forward_a_gateway_token(self):
-        self.run_tasks("node_exec_empty_token")
+        self.run_tasks("minimal_servers")
 
     def test_symlink_is_rejected_without_touching_its_target(self):
         self.run_tasks("symlink")
