@@ -35,9 +35,17 @@
     - /home/ubuntu/.openclaw/claude-cli-ssh
     - /home/ubuntu/.ssh
 
+# Only agents with `mac_access: true` in openclaw_agents reach the Mac.
+- name: Select the agents with Mac access
+  ansible.builtin.set_fact:
+    _claude_cli_mac_agents: >-
+      {{ (openclaw_claude_cli_mac_host | length > 0)
+         | ternary(openclaw_agents | selectattr('mac_access', 'defined') | selectattr('mac_access')
+                   | map(attribute='id') | list, []) }}
+
 - name: Bootstrap the approved Mac SSH identity and host pin
   ansible.builtin.include_tasks: mac-ssh.yml
-  when: openclaw_claude_cli_mac_host | length > 0
+  when: _claude_cli_mac_agents | length > 0
 
 - name: Install per-agent SSH configuration
   ansible.builtin.template:
@@ -185,6 +193,7 @@
     _claude_cli_ssh: >-
       {{ _claude_cli_ssh | combine({item.agent_id: {
         'config': '/home/ubuntu/.openclaw/claude-cli-ssh/' ~ item.agent_id ~ '.conf',
+        'mac_host': openclaw_claude_cli_mac_host if item.agent_id in _claude_cli_mac_agents else '',
         'workspace_key': '/home/ubuntu/.ssh/' ~ item.key_file if item.repo_url | length > 0 else none
       }}) }}
   loop: "{{ _openclaw_workspaces }}"
@@ -205,7 +214,6 @@
       mcp_target: "{{ openclaw_claude_cli_mcp_target }}"
       guard_table: openclaw_claude_cli
       guard_service: openclaw-claude-cli-network.service
-      mac_host: "{{ openclaw_claude_cli_mac_host }}"
       ssh: "{{ _claude_cli_ssh }}"
       env_names: "{{ openclaw_claude_cli_skill_env }}"
       invocations: /home/ubuntu/.openclaw/claude-cli-invocations.jsonl

@@ -378,18 +378,10 @@
         check_set agents.defaults.contextPruning.ttl 15m
         check_set agents.defaults.contextPruning.keepLastAssistants "3"
 
-        # Exec configuration (applies to both sandbox and node exec)
-        # NOTE: Gateway sends VPS workspace path as CWD to nodes — does not exist on Mac.
-        # Agents must pass workdir=/tmp in exec calls. See openclaw/openclaw#15441.
-        # v2026.2.26: node rejects symlink CWDs, so DEFAULT_CWD=/private/tmp in MCP env.
+        # Exec tool policy for OpenClaw itself
         check_set tools.exec.host "{{ openclaw_exec_host }}"
         check_set tools.exec.security "{{ openclaw_exec_security }}"
         check_set tools.exec.ask "{{ openclaw_exec_ask }}"
-
-        {% if not (node_exec_enabled | default(false)) %}
-        # Node exec disabled — clean up any stale node pin
-        openclaw config unset tools.exec.node 2>/dev/null || true
-        {% endif %}
 
         # Skip bootstrap: prevent gateway from re-scaffolding workspace context files
         # (SOUL.md, IDENTITY.md, etc.) with factory templates on every message/cron tick.
@@ -445,53 +437,6 @@
       ansible.builtin.debug:
         msg: "{{ config_settings.stdout_lines | select('match', '^UPDATED:') | list }}"
       when: config_settings is changed
-
-    - name: Auto-discover connected system node for exec
-      when: node_exec_enabled | default(false)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-
-        # Step 1: Get nodes status JSON (fail visibly if gateway is down)
-        NODES_RAW=$(openclaw nodes status --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-            echo "WARNING: 'openclaw nodes status --json' failed (rc=$?): $NODES_RAW"
-            echo "  Gateway may not be running. Check: systemctl --user status openclaw-gateway"
-            NODES_RAW=""
-        }
-
-        # Step 2: Parse JSON to find connected system node
-        NODE_ID=""
-        if [ -n "$NODES_RAW" ]; then
-            NODE_ID=$(echo "$NODES_RAW" | jq -r '[.nodes // . // [] | .[] | select(.connected == true) | select(.caps | index("system")) | .nodeId] | first // empty' 2>&1) || {
-                echo "WARNING: Failed to parse nodes JSON: $NODE_ID"
-                echo "  Raw output: $NODES_RAW"
-                NODE_ID=""
-            }
-        fi
-
-        # Step 3: Pin or warn — only set if different from current
-        if [ -n "$NODE_ID" ]; then
-            CURRENT_NODE=$(openclaw config get tools.exec.node 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_NODE=""
-            if [ "$CURRENT_NODE" = "$NODE_ID" ]; then
-                echo "Node pin already correct: ${NODE_ID:0:12}..."
-            else
-                echo "Pinning exec to connected system node: ${NODE_ID:0:12}..."
-                openclaw config set tools.exec.node "$NODE_ID"
-            fi
-        else
-            echo "WARNING: No connected system node found — tools.exec.node not set"
-            echo "  Start the node host on your Mac: openclaw node install --host <gateway> --port 443 --tls"
-            EXISTING=$(openclaw config get tools.exec.node 2>&1) || true
-            if echo "$EXISTING" | grep -q "not found"; then
-                echo "  No existing tools.exec.node pin — node exec will fail until a node connects"
-            else
-                echo "  Keeping existing pin: $EXISTING"
-            fi
-        fi
-      args:
-        executable: /bin/bash
-      register: node_discovery
-      changed_when: node_discovery.stdout is search('Pinning')
 
     - name: Remove stale sandbox containers after config change
       ansible.builtin.shell: |

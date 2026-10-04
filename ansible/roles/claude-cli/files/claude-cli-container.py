@@ -243,8 +243,8 @@ def main(args, runtime_path=RUNTIME):
     # Directory bind shares atomic credential replacements and both SDK locks.
     mount(SECURE_STORAGE.parent, writable=True)
     mount(HOME / '.claude/settings.json')
-    mac_options = mac_access(runtime['mac_host'], mount)
     ssh = runtime['ssh'][agent]
+    mac_options = mac_access(ssh['mac_host'], mount)
     mount(ssh['config'], HOME / '.ssh/config')
     if ssh['workspace_key'] is not None:
         mount(ssh['workspace_key'], '/run/openclaw-ssh/workspace-key')

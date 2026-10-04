@@ -181,7 +181,7 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journal
 
 ### Update OpenClaw
 
-**Important:** Always keep the local CLI, Mac node host, and VPS gateway on the same version. Version mismatches cause protocol errors (e.g., `system.run.prepare` not supported). After upgrading the gateway, upgrade local too:
+**Important:** Always keep the local CLI and VPS gateway on the same version. Version mismatches cause protocol errors (e.g., `system.run.prepare` not supported). After upgrading the gateway, upgrade local too:
 
 ```bash
 # 1. Update VPS gateway (via Ansible — preferred)
@@ -191,9 +191,8 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journal
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash'
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
 
-# 2. Update local CLI + node host to match
+# 2. Update the local CLI to match
 brew upgrade openclaw-cli
-openclaw node restart   # if node exec is enabled
 ```
 
 ### Run Security Audit
@@ -497,11 +496,11 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 **Tool access:** All standard tool groups enabled; elevated tools enabled (with Telegram approval gate if configured). Change via `./scripts/provision.sh --tags config`.
 
-## Remote Node Control (Mac)
+## Mac Access
 
-Claude-backed agents use native Bash → pinned SSH → the Mac account, with that account's full permissions. The retired Mac MCP package calls a removed command; `node_exec_enabled` does not restore it or expose OpenClaw's `exec` tool to this harness.
+Agents with `mac_access: true` use native Bash → pinned SSH → the Mac account, with that account's full permissions. Other agents' containers get no Mac access.
 
-**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** setting up the dedicated SSH identity, checking host pins, debugging Mac access or distinguishing SSH from an optional OpenClaw node host. The Mac-to-VPS route is accepted; see [SECURITY §5](./docs/SECURITY.md#5-self-modification-via-node-control).
+**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** setting up the dedicated SSH identity, checking host pins, or debugging Mac access. The Mac-to-VPS route is accepted; see [SECURITY §5](./docs/SECURITY.md#5-self-modification-via-mac-access).
 
 ## Semantic Search (qmd)
 

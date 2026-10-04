@@ -143,7 +143,6 @@ jobs:
               schedule: "0 4 29 2 *"
               message: "Staging test cron. Must not fire during a Phoenix run."
 
-          # All MCP server types except node-exec
           openclaw_mcp_server_types:
             - type: "github"
               name_prefix: "github"
@@ -153,7 +152,6 @@ jobs:
           # Never attach public staging Git backups to the owner's live cloud vault.
           obsidian_headless_enabled: false
 
-          node_exec_enabled: false
           YAML
 
       # ── Pulumi stack ─────────────────────────────────────────────
