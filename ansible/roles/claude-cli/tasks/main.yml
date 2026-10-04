@@ -195,7 +195,6 @@
       network: "{{ openclaw_claude_cli_network }}"
       image: openclaw-claude-cli:latest
       homes: /home/ubuntu/.openclaw/claude-cli-homes
-      secure_storage: "{{ claude_secure_storage_dir }}"
       mcp_url: "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/openclaw/mcp"
       mcp_target: "{{ openclaw_claude_cli_mcp_target }}"
       guard_table: openclaw_claude_cli

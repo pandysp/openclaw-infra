@@ -135,6 +135,15 @@ class ProvisionTransportTests(unittest.TestCase):
         result=self.run_provisioner()
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+    def test_missing_setup_token_stops_before_ansible(self):
+        del self.env['PROVISION_CLAUDE_SETUP_TOKEN']
+        # A stored full login used to substitute for the token; it no longer does.
+        self.env['PROVISION_CLAUDE_OAUTH_CREDENTIALS'] = '{"claudeAiOauth": {}}'
+        result = self.run_provisioner()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('claudeSetupToken is empty', result.stdout)
+        self.assertFalse((self.root/'ansible-ran').exists())
+
     def test_missing_hostname_never_uses_default(self):
         del self.env['PROVISION_TAILSCALE_HOSTNAME']
         self.assertNotEqual(self.run_provisioner().returncode,0)

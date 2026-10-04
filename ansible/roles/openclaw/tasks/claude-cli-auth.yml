@@ -1,12 +1,7 @@
 ---
-# One login/storage/refresh-lock domain for native Claude and C. Settings and
-# transcripts remain in ~/.claude; only secure storage moves to shared/auth.
-- name: Determine whether the claude-cli runtime is configured
-  ansible.builtin.set_fact:
-    _claude_cli_configured: >-
-      {{ (claude_oauth_credentials | default('') | length > 0)
-         or (claude_setup_token | default('') | length > 0) }}
-
+# One login for native Claude and C, in ~/.claude/shared/auth. The containers
+# bind its parent, so they share Claude's own refresh lock files. Settings and
+# transcripts stay in ~/.claude.
 - name: Install the pinned Claude Code CLI
   community.general.npm:
     name: "@anthropic-ai/claude-code"
@@ -15,7 +10,6 @@
     state: present
   environment:
     PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-  when: _claude_cli_configured
   register: claude_cli_install
 
 - name: Verify the pinned claude CLI runs
@@ -26,7 +20,6 @@
   failed_when: claude_cli_version.rc != 0 or claude_code_version not in claude_cli_version.stdout
   environment:
     PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
-  when: _claude_cli_configured
 
 - name: Symlink claude to /usr/local/bin
   become: true
@@ -35,7 +28,6 @@
     dest: /usr/local/bin/claude
     state: link
     force: true
-  when: _claude_cli_configured
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
@@ -56,6 +48,73 @@
     tasks_from: cli-assets-changed.yml
   when: claude_cli_install.changed or claude_cli_settings.changed
 
-- name: Configure shared Claude secure storage
-  ansible.builtin.include_tasks: shared-auth.yml
-  when: _claude_cli_configured
+- name: Create the shared Claude login folder
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - /home/ubuntu/.claude/shared
+    - /home/ubuntu/.claude/shared/auth
+
+# The setup token only bootstraps a server without a login. An existing login
+# renews itself and is never replaced here; to replace it, sign in again
+# (`claude auth login`) or delete the file and provision.
+- name: Install the setup-token login only when none exists
+  ansible.builtin.copy:
+    content: "{{ _claude_setup_login | to_nice_json }}\n"
+    dest: /home/ubuntu/.claude/shared/auth/.credentials.json
+    mode: "0600"
+    force: false
+  vars:
+    _claude_setup_login:
+      claudeAiOauth:
+        accessToken: "{{ claude_setup_token }}"
+        refreshToken: ""
+        expiresAt: 1813499823032
+        scopes: [user:file_upload, user:inference, user:mcp_servers, user:profile, user:sessions:claude_code]
+        subscriptionType: max
+  no_log: true
+  notify: restart openclaw-gateway
+
+- name: Create the gateway drop-in directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d
+    state: directory
+    mode: "0755"
+
+- name: Point the gateway at the shared login
+  ansible.builtin.copy:
+    dest: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/claude-auth.conf
+    content: "[Service]\nEnvironment=CLAUDE_SECURESTORAGE_CONFIG_DIR=/home/ubuntu/.claude/shared/auth\n"
+    mode: "0644"
+  register: claude_auth_dropin
+  notify: restart openclaw-gateway
+
+- name: Reload systemd after the gateway drop-in changed
+  ansible.builtin.systemd:
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: claude_auth_dropin.changed
+
+- name: Point interactive and SSH shells at the shared login
+  ansible.builtin.blockinfile:
+    path: "/home/ubuntu/{{ item }}"
+    marker: "# {mark} ANSIBLE CLAUDE SECURE STORAGE"
+    insertbefore: BOF
+    create: true
+    mode: "0644"
+    block: export CLAUDE_SECURESTORAGE_CONFIG_DIR=/home/ubuntu/.claude/shared/auth
+  loop: [.bashrc, .profile]
+
+- name: Verify Claude reads the shared login
+  ansible.builtin.command: claude auth status
+  environment:
+    PATH: "/usr/local/bin:/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: /home/ubuntu/.claude/shared/auth
+  changed_when: false
+  register: claude_auth_check
+  failed_when: claude_auth_check.rc != 0 or not (claude_auth_check.stdout | from_json).loggedIn
+  no_log: true

@@ -217,7 +217,7 @@ XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 200
 
 **Symptom**: Agent turns fail with Claude auth errors (401) in the gateway log.
 
-Agent turns run through the Claude CLI, which reads only `~/.claude/.credentials.json`; re-running `openclaw onboard` does not reach it. Rotate the token as in [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation), then check the CLI directly:
+Agent turns run through the Claude CLI, which reads only `~/.claude/shared/auth/.credentials.json`; re-running `openclaw onboard` or changing `claudeSetupToken` does not replace it. Replace the login as in [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation), then check the CLI directly:
 
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd /tmp && echo "Reply OK" | claude -p'

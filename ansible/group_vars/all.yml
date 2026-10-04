@@ -59,16 +59,6 @@ claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
 # minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
 claude_code_auto_compact_window: 305000
-# One login for every Claude process on the host and in C containers: the
-# gateway, provisioning and each container point CLAUDE_SECURESTORAGE_CONFIG_DIR
-# here, so Claude's own OAuth refresh lock (mkdir <dir>/.oauth_refresh.lock plus
-# the legacy <dir>.lock sibling) serializes refreshes and rotations. The parent
-# directory is what C mounts, so the sibling lock is shared too.
-claude_secure_storage_dir: /home/ubuntu/.claude/shared/auth
-# Replace the live login with the configured seed (default false). true resets
-# once per seed; for another reset of the same seed use a new stable ID such as
-# "reset-2026-10-03", and reuse that ID when retrying.
-# claude_oauth_rotate_credentials: false
 
 # C is opt-in. With enabled true, activate true runs agent turns in containers and
 # false runs them natively (also switching an active C back); assets install either way.
