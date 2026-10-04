@@ -8,8 +8,13 @@
 #   # Edit openclaw.yml with your deployment-specific settings
 #   ./scripts/provision.sh
 
-# Enable remote Mac node exec (see docs/SECURITY.md §5 for risks)
-# node_exec_enabled: true
+# Run every agent turn in its own container (docs/SECURITY.md §4). Apply with
+# `./scripts/provision.sh --tags config,claude-cli`; set false and run
+# `--tags config` to switch back to native turns.
+# openclaw_claude_cli_enabled: true
+# Optional SSH access from the containers to a Mac (docs/NODE-EXEC.md):
+# openclaw_claude_cli_mac_host: my-mac     # SSH alias the provisioning machine can reach
+# openclaw_claude_cli_mac_user: my-account
 
 # Allow sandboxed agents to control browser on the host (native browser tool with target="host")
 # openclaw_browser_allow_host_control: true
