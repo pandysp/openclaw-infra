@@ -57,9 +57,9 @@
     - /home/ubuntu/.claude/shared
     - /home/ubuntu/.claude/shared/auth
 
-# The setup token only bootstraps a server without a login. An existing login
-# renews itself and is never replaced here; to replace it, sign in again
-# (`claude auth login`) or delete the file and provision.
+# The setup token only bootstraps a server without a login; provisioning never
+# replaces an existing login. A setup token cannot renew itself: sign in once
+# (`claude auth login`) for a login that does, or to replace any login.
 - name: Install the setup-token login only when none exists
   ansible.builtin.copy:
     content: "{{ _claude_setup_login | to_nice_json }}\n"

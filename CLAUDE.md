@@ -278,7 +278,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 
 ### Key Rotation
 
-Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude login: provisioning installs `claudeSetupToken` only on a server without a login, in `~/.claude/shared/auth/.credentials.json`; after that Claude renews its own login and provisioning never replaces it. To replace it, sign in on the VPS (`claude auth login`; the shell already points it at the shared folder), or delete that file and run `./scripts/provision.sh --tags openclaw`. After changing `claudeSetupToken`, `--tags config` refreshes the agents' Anthropic auth profiles. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
+Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude login: provisioning installs `claudeSetupToken` only on a server without a login, in `~/.claude/shared/auth/.credentials.json`, and never replaces an existing login. A setup token cannot renew itself; after a fresh install, sign in once on the VPS (`claude auth login`; the shell already points it at the shared folder) for a login that renews itself. To replace a login, sign in again, or delete that file and run `./scripts/provision.sh --tags openclaw` to fall back to the setup token. After changing `claudeSetupToken`, `--tags config` refreshes the agents' Anthropic auth profiles. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
 
 ## First-Time Setup
 
