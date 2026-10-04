@@ -29,7 +29,8 @@ class SmokeTests(unittest.TestCase):
                           'alsoAllow': ['group:plugins'] if case == 'unsafe_tool_allowlist' else []},
                 'agents': {'defaults': {'model': {'primary': 'anthropic/wrong-model' if case == 'wrong_configured_model' else 'anthropic/claude-sonnet-4-6'},
                             'models': {'anthropic/claude-sonnet-4-6': {'agentRuntime': {'id': 'claude-cli'}}},
-                            'cliBackends': {'claude-cli': {'args': native_args, 'resumeArgs': native_args+['--resume','{sessionId}']}}}}, 
+                            'cliBackends': {'claude-cli': {'command': 'claude' if case == 'native_backend' else str(state / 'claude-cli-container'),
+                                                           'args': native_args, 'resumeArgs': native_args+['--resume','{sessionId}']}}}},
                 'plugins': {'entries': {'openclaw-mcp-adapter': {'config': {'servers': [
                     {'name': 'github', 'env': {'GITHUB_PERSONAL_ACCESS_TOKEN': 'fixture-secret-pat'}}
                 ]}}}}
@@ -96,6 +97,15 @@ else:
  assert sys.argv[-3:]==['--tools','','--strict-mcp-config'], 'Native tools were not disabled'
  (pathlib.Path(os.environ['HOME'])/'native-tool-free').touch()
 ''',
+                '.openclaw/claude-cli-container': '''import hashlib,json,os,pathlib,subprocess,sys
+# Fixture launcher: runs the fake Claude CLI and logs the container it would start.
+if sys.argv[1:]==['--help']:print('--tools --strict-mcp-config');raise SystemExit
+home=pathlib.Path(os.environ['HOME'])
+if (home/'fixture-case').read_text()!='no_container_launch':
+ with (home/'.openclaw/claude-cli-invocations.jsonl').open('a') as f:
+  f.write(json.dumps({'agent':'main','session_hash':hashlib.sha256(os.environ['OPENCLAW_MCP_SESSION_KEY'].encode()).hexdigest()[:12]})+'\\n')
+raise SystemExit(subprocess.run(['claude',*sys.argv[1:]]).returncode)
+''',
                 'openclaw': '''import json,os,pathlib,subprocess,sys
 args=sys.argv[1:];root=pathlib.Path(os.environ['HOME']);mode=(root/'fixture-case').read_text()
 assert 'OPENCLAW_GATEWAY_URL' not in os.environ
@@ -118,10 +128,11 @@ elif args[:2]==['devices','approve']:
 elif args[:3]==['gateway','call','agent']:
  config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'Inference still has tools'
- subprocess.run([config['agents']['defaults']['cliBackends']['claude-cli']['command']],check=True,capture_output=True)
- assert (root/'native-tool-free').exists()
  assert '--expect-final' in args and args[args.index('--timeout')+1]=='150000'
  params=json.loads(args[args.index('--params')+1]);assert params['deliver'] is False and params['timeout']==120
+ subprocess.run([config['agents']['defaults']['cliBackends']['claude-cli']['command']],check=True,capture_output=True,
+                env={**os.environ,'OPENCLAW_MCP_SESSION_KEY':params['sessionKey']})
+ assert (root/'native-tool-free').exists()
  assert params['sessionKey']=='agent:main:phoenix-'+params['idempotencyKey']
  marker=params['message'].split('nothing else: ')[1]
  assert marker=='PHOENIX_INFERENCE_'+params['idempotencyKey']
@@ -169,7 +180,8 @@ else:raise AssertionError('Unexpected command')
                      'wrong_reply', 'extra_reply', 'wrong_model', 'wrong_configured_model', 'remote_gateway',
                      'no_auth', 'empty_gateway_token', 'unauthenticated_gateway_allowed',
                      'embedded_fallback', 'no_model_usage', 'invalid_usage', 'public_repo',
-                     'anonymous_allowed', 'mcp_failure', 'mcp_error_result', 'invalid_mcp_json', 'tools_not_disabled'):
+                     'anonymous_allowed', 'mcp_failure', 'mcp_error_result', 'invalid_mcp_json', 'tools_not_disabled',
+                     'native_backend', 'no_container_launch'):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertNotEqual(result.returncode, 0)

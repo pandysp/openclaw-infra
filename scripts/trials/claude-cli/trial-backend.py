@@ -25,17 +25,19 @@ def atomic_json(path, value):
 config_path = home / '.openclaw/openclaw.json'
 wrapper = str(scratch / 'restricted-dispatcher.py')
 desired = {'claude-cli': {'command': wrapper}}
+# Trials run with containers enabled (openclaw_claude_cli_enabled: true).
+containers = {'claude-cli': {'command': str(home / '.openclaw/claude-cli-container')}}
 config = json.loads(config_path.read_text())
 defaults = config['agents']['defaults']
 current = defaults.get('cliBackends')
 if sys.argv[1] == 'apply':
-    if current is not None:
-        raise SystemExit('ERROR: Trial backend is not originally unset; refusing to overwrite it')
+    if current != containers:
+        raise SystemExit('ERROR: Trials need the container backend; enable containers first')
     defaults['cliBackends'] = desired
 elif sys.argv[1] == 'restore':
-    if current is not None and current != desired:
+    if current not in (desired, containers):
         raise SystemExit('ERROR: Rollback found a different backend override; operator intervention required')
-    defaults.pop('cliBackends', None)
+    defaults['cliBackends'] = containers
 else:
     raise SystemExit('ERROR: Expected apply or restore')
 atomic_json(config_path, config)

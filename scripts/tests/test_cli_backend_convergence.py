@@ -33,7 +33,9 @@ class BackendConvergenceTest(unittest.TestCase):
         (root / 'tmp').mkdir()
         protected = {'channels': {'discord': {'token': 'synthetic-private-value'}}}
         config = root / '.openclaw/openclaw.json'
-        config.write_text(json.dumps({**protected, 'agents': {'defaults': {'cliBackends': current}}}))
+        # current=None means the setting is absent; {} and other values are written as they are.
+        defaults = {} if current is None else {'cliBackends': current}
+        config.write_text(json.dumps({**protected, 'agents': {'defaults': defaults}}))
         bin_dir = root / 'bin'
         bin_dir.mkdir()
         fake = bin_dir / 'openclaw'
@@ -97,7 +99,10 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
             path = self.play(root, 'play', backends, enabled)
             self.run_play(root, path, env)
             after = json.loads(config.read_text())
-            self.assertEqual(after['agents']['defaults'].get('cliBackends'), expected)
+            if expected is None:
+                self.assertNotIn('cliBackends', after['agents']['defaults'])
+            else:
+                self.assertEqual(after['agents']['defaults']['cliBackends'], expected)
             self.assertEqual(after['channels'], protected['channels'])
             writes = self.writes(root)
             self.run_play(root, path, env)
@@ -133,6 +138,10 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
     def test_disabled_keeps_other_backend_settings(self):
         self.check_backend({'claude-cli': {'command': COMMAND, 'modelArg': '--model'}},
                            {'claude-cli': {'modelArg': '--model'}}, {'claude-cli': {'modelArg': '--model'}}, enabled=False)
+
+    def test_disabled_removes_an_empty_setting(self):
+        self.check_backend({}, None, None, enabled=False)
+        self.check_backend({}, {}, None, enabled=False)
 
     def test_native_host_without_overrides_stays_unset(self):
         self.check_backend(None, None, None, enabled=False)
