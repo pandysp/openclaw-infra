@@ -2,6 +2,7 @@
 """Real gateway trial with independent rollback and private transcript inspection."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -124,6 +125,14 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
         flags['git_transport_preserved'] = (include.returncode == 0 and include.stdout.strip() == str(workspace / '.git-proxy-config')) if (workspace / '.git-proxy-config').is_file() else include.returncode == 1
         remote = subprocess.run(['docker', 'exec', name, 'git', 'ls-remote', 'origin', 'HEAD'], capture_output=True, text=True, timeout=40)
         flags['git_remote_read'] = remote.returncode == 0 and '\tHEAD' in remote.stdout
+        if os.environ.get('TRIAL_GIT_PUSH') == '1':
+            # Push the workspace HEAD to a throwaway branch, then delete it.
+            branch = 'cwrapper-push-' + run[:12]
+            pushed = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', 'HEAD:refs/heads/' + branch],
+                                    capture_output=True, text=True, timeout=60)
+            deleted = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', '--delete', branch],
+                                     capture_output=True, text=True, timeout=60)
+            flags['git_push'] = pushed.returncode == 0 and deleted.returncode == 0
         media_reply = None
         if agent == 'main':
             video, frame = diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')
