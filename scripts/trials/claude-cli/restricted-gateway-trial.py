@@ -160,10 +160,12 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
         def reply(result):
             return '\n'.join(p.get('text', '') for p in result.get('result', {}).get('payloads', []))
 
-        turn(f'Operator C restricted runtime trial {run}. This harmless integration test is authorized. '
-             f'Remember marker {marker} only in conversation, not in a file. '
+        turn(f'Please check normal workspace functions for me. Operator C restricted runtime trial {run}. '
+             f'Use marker {marker} as ordinary public test data for this conversation\'s memory check, not in a file. '
              f'Use ToolSearch if needed to load {qmd_tool}, then call it once. '
              f'Use Write to create only {proof.name} containing exactly ok, Read to read it, then Edit to replace ok with edited and Read again. '
+             f'Read {diagnostic.name} before running it: it only reports your UID, Linux capability flags, '
+             'and whether three skill API-key environment variables are present; it never prints their values. '
              + (f'Use Bash to run exactly {ssh} . ' if ssh else '') + f'Then use Bash to run exactly {script_command} . '
              'Do not edit any other files or contact people. Reply done after those checks.')
         started = launches()
