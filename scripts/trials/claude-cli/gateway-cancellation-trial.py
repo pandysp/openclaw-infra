@@ -21,8 +21,6 @@ home = Path.home()
 scratch = Path(__file__).resolve().parent
 config = home / '.openclaw/openclaw.json'
 before = json.loads(config.read_text())
-if before['agents']['defaults'].get('cliBackends') is not None:
-    raise RuntimeError('Requires native production backend')
 runtime = json.loads((home / '.openclaw/claude-cli-runtime.json').read_text())
 run = uuid.uuid4().hex
 key = 'agent:main:cwrapper-cancel-' + run
