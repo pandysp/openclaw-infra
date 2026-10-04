@@ -40,7 +40,7 @@
   ansible.builtin.set_fact:
     _claude_cli_mac_agents: >-
       {{ (openclaw_claude_cli_mac_host | length > 0)
-         | ternary(openclaw_agents | selectattr('mac_access', 'defined') | selectattr('mac_access')
+         | ternary(openclaw_agents | selectattr('mac_access', 'defined') | selectattr('mac_access', 'equalto', true)
                    | map(attribute='id') | list, []) }}
 
 - name: Bootstrap the approved Mac SSH identity and host pin

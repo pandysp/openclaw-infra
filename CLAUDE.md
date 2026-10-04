@@ -201,7 +201,7 @@ brew upgrade openclaw-cli
 openclaw security audit --deep
 ```
 
-**Expected output:** 0 critical. Run it **on the VPS via SSH** (running locally audits your Mac instead). Accepted warnings, all deliberate: `config.insecure_or_dangerous_flags` (`dangerouslyAllowExternalBindSources` for sandbox bind mounts), `tools.exec.security_full_configured` (gateway exec gated by `elevated=false` + node-side approvals), and `security.trust_model.multi_user_heuristic` (Telegram/Discord group allowlists — personal deployment, one trusted operator). `--deep` probes occasionally add a transient warning; rerun before acting on it.
+**Expected output:** 0 critical. Run it **on the VPS via SSH** (running locally audits your Mac instead). Accepted warnings, all deliberate: `config.insecure_or_dangerous_flags` (`dangerouslyAllowExternalBindSources` for sandbox bind mounts), `tools.exec.security_full_configured` (OpenClaw's own exec runs in the sandbox with `elevated=false`), and `security.trust_model.multi_user_heuristic` (Telegram/Discord group allowlists — personal deployment, one trusted operator). `--deep` probes occasionally add a transient warning; rerun before acting on it.
 
 ### Destroy Infrastructure
 

@@ -13,7 +13,8 @@ TEMPLATE = ROOT / 'ansible/roles/claude-cli/templates/ssh-config.j2'
 TASKS = ROOT / 'ansible/roles/claude-cli/tasks/main.yml'
 SELECT = 'Select the agents with Mac access'
 DERIVE = 'Derive per-agent SSH metadata from workspace definitions'
-AGENTS = [{'id': 'main', 'mac_access': True}, {'id': 'other'}, {'id': 'third', 'mac_access': False}]
+AGENTS = [{'id': 'main', 'mac_access': True}, {'id': 'other'}, {'id': 'third', 'mac_access': False},
+          {'id': 'quoted', 'mac_access': 'false'}]
 
 
 class SshConfigTest(unittest.TestCase):
@@ -51,7 +52,7 @@ class SshConfigTest(unittest.TestCase):
         self.assertIn('StrictHostKeyChecking yes', rendered)
 
     def test_agents_without_mac_access_get_no_mac_block(self):
-        for agent in ('other', 'third'):
+        for agent in ('other', 'third', 'quoted'):
             with self.subTest(agent=agent):
                 rendered = self.render(agent, repo_url='git@github.com:owner/repo.git')
                 self.assertNotIn('openclaw_mac_air', rendered)
@@ -74,7 +75,7 @@ class SshConfigTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout[-2000:])
             ssh = json.loads((root / 'ssh.json').read_text())
         self.assertEqual({agent: entry['mac_host'] for agent, entry in ssh.items()},
-                         {'main': 'mac-air', 'other': '', 'third': ''})
+                         {'main': 'mac-air', 'other': '', 'third': '', 'quoted': ''})
 
     def test_no_mac_host_means_no_mac_block_for_anyone(self):
         self.assertNotIn('openclaw_mac_air', self.render('main', mac_host=''))

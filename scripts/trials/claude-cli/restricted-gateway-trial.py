@@ -61,11 +61,10 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
 ''')
         active.append((key, run, project, proof, diagnostic, session_hash))
         qmd_tool = 'mcp__openclaw__' + ('qmd_status' if agent == 'main' else f'qmd-{agent}_status')
-        # The Mac check runs only when the runtime has a Mac host.
-        # With a Mac configured, agents with Mac access must reach it and all others must not.
-        mac_host = next((entry['mac_host'] for entry in runtime['ssh'].values() if entry['mac_host']), '')
+        # Agents with Mac access must reach it; the others' containers must hold no Mac
+        # key, pin or host entry (checked directly below, not through the agent).
+        mac_host = runtime['ssh'][agent]['mac_host']
         ssh = "ssh " + mac_host + " 'printf mac-ssh-ok'" if mac_host else None
-        mac_allowed = bool(runtime['ssh'][agent]['mac_host'])
         script_command = 'python3 ' + diagnostic.name
 
         def launches():
@@ -121,6 +120,12 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
         deleted = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', '--delete', branch],
                                  capture_output=True, text=True, timeout=60)
         flags['git_push'] = pushed.returncode == 0 and deleted.returncode == 0
+        if not mac_host:
+            mac_files = subprocess.run(['docker', 'exec', name, 'sh', '-c',
+                                        'ls ~/.ssh/id_ed25519_openclaw_mac_air ~/.ssh/known_hosts_openclaw_mac_air 2>/dev/null; '
+                                        'grep -ci mac /etc/hosts; grep -c "^Host .*mac" ~/.ssh/config'],
+                                       capture_output=True, text=True, timeout=20)
+            flags['no_mac_credentials'] = mac_files.stdout.split() == ['0', '0']
         media_reply = None
         if agent == 'main':
             video, frame = diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')
@@ -179,8 +184,7 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
             'warm_process_reused': warm_count == 1,
             'cold_resume_continuity': marker in reply(cold),
             'cold_launch_uses_resume': len(starts) == 2 and starts[-1]['resuming'],
-            **flags, **({'actual_mac_ssh_success': bool(ssh_calls) and any(success(call) and 'mac-ssh-ok' in content(call) for call in ssh_calls)} if ssh and mac_allowed else {}),
-            **({'mac_ssh_refused': bool(ssh_calls) and not any('mac-ssh-ok' in content(call) for call in ssh_calls)} if ssh and not mac_allowed else {}),
+            **flags, **({'actual_mac_ssh_success': bool(ssh_calls) and any(success(call) and 'mac-ssh-ok' in content(call) for call in ssh_calls)} if ssh else {}),
             'native_uid_1000': diagnostic_results.get('actual_uid_1000') is True,
             'native_all_caps_zero': diagnostic_results.get('actual_caps_zero') is True,
             'native_no_new_privileges': diagnostic_results.get('actual_no_new_privileges') is True,
