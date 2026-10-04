@@ -1,0 +1,8 @@
+[Unit]
+Description=Select the preserved Claude login before gateway startup
+Before=openclaw-gateway.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node /home/ubuntu/.local/bin/claude-oauth-seed select-storage /home/ubuntu/.claude {{ claude_secure_storage_dir }}
+TimeoutStartSec=420

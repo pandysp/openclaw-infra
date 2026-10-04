@@ -1,0 +1,41 @@
+---
+# Dynamic handler includes do not run block/always sections. Capture failures
+# are deferred only until the unconditional restart, then reported explicitly.
+- name: Reset this restart's credential capture
+  ansible.builtin.set_fact:
+    claude_auth_restart_nonce: {rc: 0, stdout: NONE}
+
+- name: Inspect the installed authentication helper
+  ansible.builtin.stat:
+    path: /home/ubuntu/.local/bin/claude-oauth-seed
+  register: claude_restart_helper
+  failed_when: false
+
+- name: Capture the credential restart request under SDK locks
+  ansible.builtin.command:
+    argv: [node, /home/ubuntu/.local/bin/claude-oauth-seed, restart-request, "{{ claude_secure_storage_dir }}"]
+  register: claude_auth_restart_nonce
+  changed_when: false
+  failed_when: false
+  when: claude_restart_helper.stat.exists | default(false)
+
+- name: Restart the gateway independently of credential capture failures
+  ansible.builtin.systemd:
+    name: openclaw-gateway
+    state: restarted
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  no_log: true
+
+- name: Acknowledge only a successful capture and gateway restart
+  ansible.builtin.command:
+    argv: [node, /home/ubuntu/.local/bin/claude-oauth-seed, ack-restart, "{{ claude_auth_restart_nonce.stdout }}", "{{ claude_secure_storage_dir }}"]
+  changed_when: claude_auth_restart_ack.stdout == 'ACKNOWLEDGED'
+  register: claude_auth_restart_ack
+  when: claude_auth_restart_nonce.rc | default(1) == 0 and claude_auth_restart_nonce.stdout | default('NONE') != 'NONE'
+
+- name: Report credential capture failure after independent gateway restart
+  ansible.builtin.fail:
+    msg: Gateway restart was attempted, but Claude restart-intent capture failed. Repair shared storage permissions and the pinned SDK locking dependency before retrying; restart intent was not acknowledged.
+  when: claude_restart_helper.stat is not defined or (not (claude_auth_restart_nonce.skipped | default(false)) and claude_auth_restart_nonce.rc | default(1) != 0)

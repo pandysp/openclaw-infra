@@ -44,6 +44,11 @@ if cmd=='ansible-playbook':
   subprocess.run(['ssh-keygen','-y','-f',str(key)],check=True,capture_output=True)
  for k,v in json.loads(os.environ['EXPECTED_SECRETS']).items():
   assert data[k]==v, 'Incorrect serialization: '+k
+ import fcntl
+ with open(pathlib.Path.home()/'.cache/openclaw-provision.lock','a') as other:
+  try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  except BlockingIOError:pass
+  else:sys.exit('Provisioning lock is not held while Ansible runs')
  keys=pathlib.Path(os.environ['OPENCLAW_SSH_KNOWN_HOSTS'])
  assert keys.stat().st_mode & 0o777==0o600
  assert keys.read_text()=='openclaw-vps.example.ts.net ssh-ed25519 AAAATEST\\n'
@@ -97,6 +102,20 @@ class ProvisionTransportTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertTrue((self.root/'ansible-ran').exists())
         self.assertNotIn('ssh',(self.root/'calls').read_text().splitlines())
+
+    def test_concurrent_run_is_refused_before_reading_anything(self):
+        import fcntl
+        lock = self.root/'.cache/openclaw-provision.lock'
+        lock.parent.mkdir()
+        with lock.open('a') as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result = self.run_provisioner()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Another provisioning run is active', result.stdout)
+        self.assertFalse((self.root/'calls').exists())
+        # Released by the other run's exit: the next run proceeds.
+        result = self.run_provisioner()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
     def test_online_peer_waits_for_key_publication(self):
         self.env['TAILSCALE_SEQUENCE']=json.dumps([

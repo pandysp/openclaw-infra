@@ -33,7 +33,7 @@
           Scheduler contract review {{ openclaw_docs_reviewed_version | default('missing') }}
           does not match the OpenClaw pin {{ openclaw_version }}, or
           openclaw_scheduled_automation_default is not a boolean. Review the
-          pinned heartbeat and cron contracts in docs/DOCS-REVIEW.md before provisioning.
+          pinned heartbeat and cron contract in scripts/check-openclaw-contract.sh before provisioning.
       tags: [always]
 
     - name: Validate scheduled automation collection shapes
@@ -159,6 +159,13 @@
       loop_control:
         label: "{{ _name }}"
       when: openclaw_mcp_servers is not defined
+      tags: [always]
+
+    # node-exec-mcp calls the removed `openclaw nodes run` command. Native
+    # Bash/SSH replaces it; filter legacy manual lists as well as defaults.
+    - name: Remove obsolete Mac MCP servers from derived configuration
+      ansible.builtin.set_fact:
+        _openclaw_mcp_servers: "{{ _openclaw_mcp_servers | rejectattr('type', 'equalto', 'node-exec') | list }}"
       tags: [always]
 
     # Workspaces: one per agent with mechanical naming
@@ -307,6 +314,9 @@
     # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
+    - role: claude-cli
+      tags: [claude-cli]
+      when: openclaw_claude_cli_enabled | bool
 
   post_tasks:
     # Workaround for openclaw/openclaw#6070: `openclaw config set` strips nested
@@ -398,7 +408,7 @@
             path: /tmp/ansible-sensitive-keys.json
             state: absent
           changed_when: false
-      tags: [config, agents, discord]
+      tags: [config, agents, discord, claude-cli]
 
     - name: Ensure openclaw-gateway is started and enabled
       ansible.builtin.systemd:
@@ -408,11 +418,11 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
 
     - name: Apply pending gateway restarts before verification
       ansible.builtin.meta: flush_handlers
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
 
     - name: Verify restarted gateway health
       ansible.builtin.command: openclaw health --json
@@ -427,7 +437,7 @@
       delay: 5
       no_log: true
       when: not ansible_check_mode
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
 
     # Device approvals require an operator to verify the matching request.
     # Provisioning authority does not authorize arbitrary pending clients.

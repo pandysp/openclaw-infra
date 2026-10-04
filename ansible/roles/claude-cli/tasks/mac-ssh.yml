@@ -1,0 +1,53 @@
+---
+- name: Create the dedicated VPS-to-Mac SSH key if absent
+  ansible.builtin.command:
+    argv: [ssh-keygen, -t, ed25519, -N, '', -C, openclaw-mac-air, -f, /home/ubuntu/.ssh/id_ed25519_openclaw_mac_air]
+    creates: /home/ubuntu/.ssh/id_ed25519_openclaw_mac_air
+  no_log: true
+  register: claude_cli_mac_key
+
+- name: Read the dedicated public key
+  ansible.builtin.slurp:
+    src: /home/ubuntu/.ssh/id_ed25519_openclaw_mac_air.pub
+  register: claude_cli_mac_public_key
+  no_log: true
+
+# The Mac is a laptop that may be asleep. Contact it only to bootstrap: when
+# the VPS has no pin yet or the key was just created. Delete the pin file to
+# bootstrap again.
+- name: Check for an existing Mac host pin
+  ansible.builtin.stat:
+    path: /home/ubuntu/.ssh/known_hosts_openclaw_mac_air
+  register: claude_cli_mac_existing_pin
+
+- name: Bootstrap dedicated Mac SSH
+  when: claude_cli_mac_key is changed or not claude_cli_mac_existing_pin.stat.exists
+  block:
+    - name: Read the Mac host public key through the controller's trusted SSH route
+      ansible.builtin.slurp:
+        src: /etc/ssh/ssh_host_ed25519_key.pub
+      delegate_to: "{{ openclaw_claude_cli_mac_host }}"
+      vars:
+        ansible_user: "{{ openclaw_claude_cli_mac_user }}"
+        ansible_python_interpreter: /opt/homebrew/bin/python3
+      register: claude_cli_mac_host_key
+      no_log: true
+
+    - name: Pin the Mac host key for dedicated agent SSH
+      ansible.builtin.copy:
+        content: "{{ openclaw_claude_cli_mac_host }} {{ (claude_cli_mac_host_key.content | b64decode).split()[:2] | join(' ') }}\n"
+        dest: /home/ubuntu/.ssh/known_hosts_openclaw_mac_air
+        mode: "0600"
+      register: claude_cli_mac_pin
+
+    - name: Authorize only the dedicated public key on the Mac
+      ansible.posix.authorized_key:
+        user: "{{ openclaw_claude_cli_mac_user }}"
+        key: "{{ claude_cli_mac_public_key.content | b64decode }}"
+        state: present
+        exclusive: false
+      delegate_to: "{{ openclaw_claude_cli_mac_host }}"
+      vars:
+        ansible_user: "{{ openclaw_claude_cli_mac_user }}"
+        ansible_python_interpreter: /opt/homebrew/bin/python3
+      no_log: true

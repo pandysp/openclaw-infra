@@ -99,7 +99,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Scenario**: OpenClaw has `tools.elevated.enabled: true` (default), giving it shell access. If the agent is manipulated via prompt injection, it could attempt to run destructive commands, exfiltrate data, or modify config.
 
-**Where agent turns run**: every agent turn uses the `claude-cli` runtime. Claude Code runs on the host as `ubuntu` in the agent's workspace, and its own tools (Bash, Read, Edit, Write, WebSearch) run there too, outside the Docker sandbox. Because exec is set to `tools.exec.security: "full"` and `ask: "off"` (for node exec), OpenClaw starts Claude Code with `--permission-mode bypassPermissions` ([OpenClaw CLI backends docs](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/gateway/cli-backends.md); the agents' Claude Code transcripts record `permissionMode: bypassPermissions`). `ubuntu` has passwordless sudo. A prompt-injected agent can therefore read everything on the server, including the Claude login, bot tokens, API keys, every agent's GitHub token, deploy keys and the [Tailscale auth key](../README.md#tailscale-auth-key-exposure), and can act as root. The Docker sandbox below applies to OpenClaw's own tools only. Ways to make it the boundary for agents: pass `--tools ""` through `openclaw_cli_backends` (staging does), or set a restrictive per-agent `agents.list[].tools.exec`, which starts Claude Code with `--permission-mode default`.
+**Where agent turns run**: every agent turn uses the `claude-cli` runtime. Claude Code runs on the host as `ubuntu` in the agent's workspace, and its own tools (Bash, Read, Edit, Write, WebSearch) run there too, outside the Docker sandbox. Because exec is set to `tools.exec.security: "full"` and `ask: "off"` (the agreed execution policy), OpenClaw starts Claude Code with `--permission-mode bypassPermissions` ([OpenClaw CLI backends docs](https://github.com/openclaw/openclaw/blob/v2026.6.6/docs/gateway/cli-backends.md); the agents' Claude Code transcripts record `permissionMode: bypassPermissions`). `ubuntu` has passwordless sudo. A prompt-injected agent can therefore read everything on the server, including the Claude login, bot tokens, API keys, every agent's GitHub token, deploy keys and the [Tailscale auth key](../README.md#tailscale-auth-key-exposure), and can act as root. The Docker sandbox below applies to OpenClaw's own tools only. Removing native tools with `--tools ""` prevents these operations but also removes needed file/shell capabilities; restrictive exec settings change permission prompts, not the operating-system boundary. Neither is a functional replacement for containerizing the Claude process. A per-agent Claude container (`openclaw_claude_cli_enabled`, see `ansible/group_vars/all.yml`) is opt-in and not the production default. It is practical containment, not a boundary against a hostile agent.
 
 **Mitigations in place**:
 - **`agents.defaults.sandbox.mode: "all"`** — OpenClaw's own tools run in Docker containers, without direct host access (Claude Code's tools do not; see above)
@@ -113,11 +113,11 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 - **`tools.sandbox.tools.allow`** — sandbox sessions have explicit access to all standard tool groups
 
 **Mitigations available but not enabled**:
-- `tools.elevated.enabled: false` — disables shell access entirely
+- `tools.elevated.enabled: false` — disables OpenClaw elevated execution, not Claude native Bash
 - `tools.elevated.allowFrom.<channel>` — restricts elevated tools to additional channels beyond Telegram
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
-**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers use the default Docker bridge; the plugins role explicitly permits access to the credential proxy for workspace Git operations. The proxy takes the agent ID from the URL and does not check the caller, so any sandbox can use any agent's GitHub token. Sandboxes can also read the server's cloud-init user data, including the [Tailscale auth key](../README.md#tailscale-auth-key-exposure). Do not treat the network name alone as a credential boundary. The separate workspace-sync containers block proxy access with their own outbound firewall. See [Autonomous Agent Safety](./AUTONOMOUS-SAFETY.md) for a multi-agent architecture that would further reduce risk by splitting the night shift into isolated agents.
+**Accepted risk**: All sandboxed sessions have workspace write access and bridge networking. A prompt-injected session could exfiltrate workspace data via HTTP or git push, or poison workspace content for future sessions. Host isolation prevents access to gateway config, credentials, and sudo. Sandbox containers use the default Docker bridge; the plugins role explicitly permits access to the credential proxy for workspace Git operations. The proxy takes the agent ID from the URL and does not check the caller, so any sandbox can use any agent's GitHub token. Sandboxes can also read the server's cloud-init user data, including the [Tailscale auth key](../README.md#tailscale-auth-key-exposure). Do not treat the network name alone as a credential boundary. The separate workspace-sync containers block proxy access with their own outbound firewall.
 
 **Prompt injection guidance** (from [official docs](https://docs.openclaw.ai/gateway/security)):
 - Lock down inbound DMs (we use allowlist — done)
@@ -134,15 +134,15 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 **Scenario**: If your Mac is added as an OpenClaw node and has access to the Pulumi backend, the agent (or an attacker via prompt injection) could read/modify Pulumi state, destroy infrastructure, or access locally stored secrets. The obsolete plaintext passphrase fields were removed from the current production checkpoint on 2026-09-18. Historical checkpoints, the backend backup, and earlier private exports still expose the same unrotated passphrase. Current-state repair does not contain that exposure; rotation and historical cleanup are outside this reconciliation's scope; the exposure remains. Exports without `--show-secrets` are also sensitive. Commands run with your user's full permissions — there is no sandbox.
 
-**Default state**: Node exec is **disabled by default** (`node_exec_enabled: false` in `ansible/group_vars/all.yml`). When disabled, no `tools.exec.*` gateway config is set, no node ID is pinned, no `node-exec-mcp` binary is installed, and no MCP servers are wired — the feature is completely inert.
+**Current route**: Claude-backed agents use native Bash and a dedicated pinned SSH identity, not node-exec MCP. The legacy `node_exec_enabled` flag does not grant these agents OpenClaw's excluded `exec` tool. Disabling node exec does not disable SSH.
 
-**Mitigations** (when enabled):
-- Don't add your infrastructure management machine as an OpenClaw node
-- Scope R2 access keys to the state bucket; do not expose backend credentials or the stack passphrase to the node
-- Use `tools.exec.host: sandbox` (default) so agents must explicitly switch per-session
-- Consider `tools.exec.security: allowlist` to restrict which commands can run
+**Controls**:
+- Pin the Mac host key through a trusted route; use a fixed user and identity.
+- Do not expose infrastructure credentials on a Mac account unless that access is intended.
+- Treat Mac-to-VPS SSH as an accepted route back to the VPS, including under C.
+- Keep the agreed `full/off` policy; it controls Claude permissions, not an SSH sandbox.
 
-**Residual Risk**: None when disabled. Medium if Mac is an OpenClaw node. Low if infrastructure management is isolated.
+**Residual Risk**: SSH commands have the Mac account's full permissions. The accepted reverse route means C is practical containment, not a hostile-agent boundary. See [Mac access](NODE-EXEC.md).
 
 ### 6. Lateral Movement
 
@@ -185,7 +185,7 @@ See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedu
 
 Plugins run in-process — they have the same access as the gateway itself (config, credentials, sessions, network, sudo). npm lifecycle scripts execute during installation before code review.
 
-**Current status**: Two non-bundled plugins run in-process: `openclaw-mcp-adapter` (per-agent GitHub, qmd and Mac MCP servers, run as host processes, not containers) and the official `@openclaw/whatsapp` channel plugin. Both are pinned and allowlisted.
+**Current status**: Two non-bundled plugins run in-process: `openclaw-mcp-adapter` (per-agent GitHub and qmd MCP servers, run as host processes, not containers) and the official `@openclaw/whatsapp` channel plugin. Both are pinned and allowlisted.
 
 **When adding plugins**:
 - Review source code before installing

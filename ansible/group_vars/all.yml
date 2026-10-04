@@ -59,8 +59,37 @@ claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
 # minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
 claude_code_auto_compact_window: 305000
+# One login for every Claude process on the host and in C containers: the
+# gateway, provisioning and each container point CLAUDE_SECURESTORAGE_CONFIG_DIR
+# here, so Claude's own OAuth refresh lock (mkdir <dir>/.oauth_refresh.lock plus
+# the legacy <dir>.lock sibling) serializes refreshes and rotations. The parent
+# directory is what C mounts, so the sibling lock is shared too.
+claude_secure_storage_dir: /home/ubuntu/.claude/shared/auth
+# Replace the live login with the configured seed (default false). true resets
+# once per seed; for another reset of the same seed use a new stable ID such as
+# "reset-2026-10-03", and reuse that ID when retrying.
+# claude_oauth_rotate_credentials: false
+
+# C remains opt-in until acceptance and rollout approval. Prepare assets without
+# changing the production backend with openclaw_claude_cli_activate=false.
+openclaw_claude_cli_enabled: false
+openclaw_claude_cli_activate: true
+openclaw_claude_cli_command: /home/ubuntu/.openclaw/claude-cli-container
+openclaw_claude_cli_network: openclaw-claude-cli
+openclaw_claude_cli_bridge_interface: oc-claude0
+openclaw_claude_cli_ipv4_subnet: 172.30.55.0/24
+openclaw_claude_cli_ipv6_subnet: fd27:0c1a:c100::/64
+openclaw_claude_cli_mcp_target: /home/ubuntu/.openclaw/claude-cli-mcp-target.json
+openclaw_claude_cli_mac_host: mac-air
+openclaw_claude_cli_mac_user: andreasspannagel
+# Inherited variables only; provider keys stay with the host's OpenClaw tools.
+openclaw_claude_cli_skill_env:
+  - GROQ_API_KEY
+  - GEMINI_API_KEY
+  - OPENAI_API_KEY
+  - NOTION_API_TOKEN
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
-# in docs/DOCS-REVIEW.md. Provisioning refuses scheduler changes on a mismatch.
+# in scripts/check-openclaw-contract.sh. Provisioning refuses scheduler changes on a mismatch.
 openclaw_docs_reviewed_version: "2026.6.6"
 # Agent existence never opts into autonomous work. Deployments must explicitly
 # enable scheduled automation per agent in group_vars/openclaw.yml.
@@ -101,8 +130,8 @@ node_exec_enabled: false
 # Node ID is NOT configured here — it's dynamic (changes on re-pairing).
 # Pin it manually after pairing: openclaw config set tools.exec.node <id>
 openclaw_exec_host: "sandbox"
-openclaw_exec_security: "full"       # Unrestricted in sandbox/node; gateway blocked by elevated=false
-openclaw_exec_ask: "off"             # No approval prompts (auto-approve node, auto-deny gateway)
+openclaw_exec_security: "full"       # Native Claude tools use bypassPermissions; C supplies OS containment.
+openclaw_exec_ask: "off"             # Native execution is not blocked by elevated=false; see SECURITY §4.
 
 # Sandbox settings
 openclaw_sandbox_mode: "all"
@@ -183,7 +212,6 @@ openclaw_mcp_adapter:
   npm_package: "@pandysp/openclaw-mcp-adapter@0.1.7"
   npm_packages:
     - "@modelcontextprotocol/server-github"
-    - "node-exec-mcp"
   tool_prefix: true
   codex_proxy_port: 8787         # mcp-auth-proxy port (GitHub token proxy for sandbox git)
   # Note: MCP servers are auto-generated from openclaw_agents × openclaw_mcp_server_types
@@ -197,8 +225,6 @@ openclaw_mcp_server_types:
     name_prefix: "github"
   - type: "qmd"
     name_prefix: "qmd"
-  - type: "node-exec"
-    name_prefix: "mac"
 
 # Obsidian Headless Sync (obsidian-headless npm package)
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.
