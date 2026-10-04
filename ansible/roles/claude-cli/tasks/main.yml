@@ -216,10 +216,12 @@
   when: claude_cli_backend_in_use.stdout == 'yes'
   notify: restart openclaw-gateway
 
-- name: Activate C using the shared backend configuration task
+# openclaw_claude_cli_activate switches agents between C and native both ways.
+- name: Apply the C activation setting through the shared backend task
   ansible.builtin.include_role:
     name: config
     tasks_from: cli-backends.yml
   vars:
-    _desired_cli_backends: "{{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}, recursive=true) }}"
-  when: openclaw_claude_cli_activate | bool
+    _desired_cli_backends: >-
+      {{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}
+         if openclaw_claude_cli_active | bool else {}, recursive=true) }}

@@ -35,13 +35,20 @@
         managed = os.environ['OPENCLAW_CLAUDE_CONTAINER_COMMAND']
         current_cli = (current or {}).get('claude-cli', {})
         wanted_cli = wanted.get('claude-cli', {})
-        # Normal configuration must not temporarily undo an already-active C
-        # backend. An explicitly configured replacement command still wins.
-        if current_cli.get('command') == managed and 'command' not in wanted_cli:
+        # While C is activated, normal configuration must not temporarily undo
+        # it. An explicitly configured replacement command still wins; with
+        # activation off, the managed command is dropped and agents run natively.
+        if (os.environ['OPENCLAW_CLAUDE_CLI_ACTIVE'] == 'True' and current_cli.get('command') == managed
+                and 'command' not in wanted_cli):
             wanted['claude-cli'] = {**wanted_cli, 'command': managed}
             batch.write_text(json.dumps([{'path': 'agents.defaults.cliBackends', 'value': wanted}]))
-        if current == wanted:
+        if current == wanted or (not wanted and current is None):
             print('OK')
+        elif not wanted:
+            # Nothing to override: return to the native OpenClaw defaults.
+            subprocess.run(['openclaw', 'config', 'unset', 'agents.defaults.cliBackends'],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            print('UPDATED: agents.defaults.cliBackends')
         else:
             subprocess.run(['openclaw', 'config', 'set', '--batch-file', str(batch)],
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -52,6 +59,7 @@
       environment:
         CLI_BACKENDS_BATCH: "{{ _cli_backends_batch.path }}"
         OPENCLAW_CLAUDE_CONTAINER_COMMAND: "{{ openclaw_claude_cli_command }}"
+        OPENCLAW_CLAUDE_CLI_ACTIVE: "{{ openclaw_claude_cli_active | bool }}"
       no_log: true
       register: cli_backends_result
       changed_when: "'UPDATED:' in cli_backends_result.stdout"

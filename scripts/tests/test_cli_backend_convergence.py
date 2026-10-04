@@ -35,13 +35,19 @@ class BackendConvergenceTest(unittest.TestCase):
         fake = bin_dir / 'openclaw'
         fake.write_text('''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
+p = pathlib.Path.home() / '.openclaw/openclaw.json'
+if sys.argv[1:] == ['config', 'unset', 'agents.defaults.cliBackends']:
+    c = json.loads(p.read_text())
+    c['agents']['defaults'].pop('cliBackends', None)
+    p.write_text(json.dumps(c))
+    with (pathlib.Path.home() / 'writes').open('a') as f: f.write('null\\n')
+    sys.exit(0)
 assert sys.argv[1:4] == ['config', 'set', '--batch-file']
 # Interleave: a peer provisioner runs completely while this one is applying.
 peer = os.environ.pop('PEER_PLAY', None)
 if peer:
     subprocess.run([os.environ['ANSIBLE_PLAYBOOK'], '-i', 'localhost,', peer], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-p = pathlib.Path.home() / '.openclaw/openclaw.json'
 c = json.loads(p.read_text())
 batch = json.loads(pathlib.Path(sys.argv[4]).read_text())
 assert batch[0]['path'] == 'agents.defaults.cliBackends'
@@ -56,9 +62,10 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
                'ANSIBLE_REMOTE_TEMP': str(root / 'remote')}
         return config, protected, env
 
-    def play(self, root, name, desired):
+    def play(self, root, name, desired, active=True):
         play = [{'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
-                 'vars': {'_desired_cli_backends': desired, 'openclaw_claude_cli_command': COMMAND},
+                 'vars': {'_desired_cli_backends': desired, 'openclaw_claude_cli_command': COMMAND,
+                          'openclaw_claude_cli_active': active},
                  'tasks': self.tasks, 'handlers': [{'name': 'restart openclaw-gateway',
                                                     'ansible.builtin.debug': {'msg': 'restart-boundary'}}]}]
         path = root / f'{name}.json'
@@ -77,14 +84,14 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
         path = root / 'writes'
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def check_backend(self, current, desired, expected):
+    def check_backend(self, current, desired, expected, active=True):
         with tempfile.TemporaryDirectory(prefix='cli-backend-') as directory:
             root = Path(directory)
             config, protected, env = self.fixture(root, current)
-            path = self.play(root, 'play', desired)
+            path = self.play(root, 'play', desired, active)
             self.run_play(root, path, env)
             after = json.loads(config.read_text())
-            self.assertEqual(after['agents']['defaults']['cliBackends'], expected)
+            self.assertEqual(after['agents']['defaults'].get('cliBackends'), expected)
             self.assertEqual(after['channels'], protected['channels'])
             writes = self.writes(root)
             self.run_play(root, path, env)
@@ -113,6 +120,16 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
     def test_explicit_replacement_command_wins(self):
         desired = {'claude-cli': {'command': '/usr/local/bin/claude'}}
         self.check_backend({'claude-cli': {'command': COMMAND}}, desired, desired)
+
+    def test_deactivation_returns_to_native_defaults(self):
+        self.check_backend({'claude-cli': {'command': COMMAND}}, {}, None, active=False)
+
+    def test_deactivation_keeps_other_backend_settings(self):
+        self.check_backend({'claude-cli': {'command': COMMAND, 'modelArg': '--model'}},
+                           {'claude-cli': {'modelArg': '--model'}}, {'claude-cli': {'modelArg': '--model'}}, active=False)
+
+    def test_native_host_without_overrides_stays_unset(self):
+        self.check_backend(None, {}, None, active=False)
 
     def test_activation_is_idempotent(self):
         desired = {'claude-cli': {'command': COMMAND}}
