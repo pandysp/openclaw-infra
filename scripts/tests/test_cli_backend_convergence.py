@@ -1,4 +1,4 @@
-"""Run the shared backend writer through Ansible with the CLI boundary faked."""
+"""Run the config role's backend include through Ansible with the OpenClaw CLI faked."""
 import json
 import os
 from pathlib import Path
@@ -9,7 +9,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-TASKS = ROOT / 'ansible/roles/config/tasks/cli-backends.yml'
+CONFIG = ROOT / 'ansible/roles/config/tasks/main.yml'
+INCLUDE = 'Apply the CLI backends, with containers when enabled'
 COMMAND = '/home/ubuntu/.openclaw/claude-cli-container'
 
 
@@ -20,8 +21,11 @@ class BackendConvergenceTest(unittest.TestCase):
         if not cls.ansible:
             raise RuntimeError('Install the project Ansible dependency')
         python = shlex.split(Path(cls.ansible).read_text().splitlines()[0].removeprefix('#!'))
-        cls.tasks = json.loads(subprocess.check_output([*python, '-c',
-            'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', str(TASKS)], text=True))
+        tasks = json.loads(subprocess.check_output([*python, '-c',
+            'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', str(CONFIG)], text=True))
+        include = next(task for task in tasks if task.get('name') == INCLUDE)
+        include['ansible.builtin.include_tasks'] = str(CONFIG.parent / include['ansible.builtin.include_tasks'])
+        cls.tasks = [include]
 
     def fixture(self, root, current):
         """Owned HOME, private TMPDIR and a fake OpenClaw CLI that records applied requests."""
@@ -29,7 +33,9 @@ class BackendConvergenceTest(unittest.TestCase):
         (root / 'tmp').mkdir()
         protected = {'channels': {'discord': {'token': 'synthetic-private-value'}}}
         config = root / '.openclaw/openclaw.json'
-        config.write_text(json.dumps({**protected, 'agents': {'defaults': {'cliBackends': current}}}))
+        # current=None means the setting is absent; {} and other values are written as they are.
+        defaults = {} if current is None else {'cliBackends': current}
+        config.write_text(json.dumps({**protected, 'agents': {'defaults': defaults}}))
         bin_dir = root / 'bin'
         bin_dir.mkdir()
         fake = bin_dir / 'openclaw'
@@ -62,10 +68,12 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
                'ANSIBLE_REMOTE_TEMP': str(root / 'remote')}
         return config, protected, env
 
-    def play(self, root, name, desired, active=True):
+    def play(self, root, name, backends, enabled=True):
+        variables = {'openclaw_claude_cli_enabled': enabled, 'openclaw_claude_cli_command': COMMAND}
+        if backends is not None:
+            variables['openclaw_cli_backends'] = backends
         play = [{'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
-                 'vars': {'_desired_cli_backends': desired, 'openclaw_claude_cli_command': COMMAND,
-                          'openclaw_claude_cli_active': active},
+                 'vars': variables,
                  'tasks': self.tasks, 'handlers': [{'name': 'restart openclaw-gateway',
                                                     'ansible.builtin.debug': {'msg': 'restart-boundary'}}]}]
         path = root / f'{name}.json'
@@ -84,14 +92,17 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
         path = root / 'writes'
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def check_backend(self, current, desired, expected, active=True):
+    def check_backend(self, current, backends, expected, enabled=True):
         with tempfile.TemporaryDirectory(prefix='cli-backend-') as directory:
             root = Path(directory)
             config, protected, env = self.fixture(root, current)
-            path = self.play(root, 'play', desired, active)
+            path = self.play(root, 'play', backends, enabled)
             self.run_play(root, path, env)
             after = json.loads(config.read_text())
-            self.assertEqual(after['agents']['defaults'].get('cliBackends'), expected)
+            if expected is None:
+                self.assertNotIn('cliBackends', after['agents']['defaults'])
+            else:
+                self.assertEqual(after['agents']['defaults']['cliBackends'], expected)
             self.assertEqual(after['channels'], protected['channels'])
             writes = self.writes(root)
             self.run_play(root, path, env)
@@ -104,36 +115,36 @@ with (pathlib.Path.home() / 'writes').open('a') as f: f.write(json.dumps(batch[0
             first = {'claude-cli': {'modelArg': '--first'}}
             peer = {'claude-cli': {'modelArg': '--peer'}}
             # The peer stages, applies and cleans up between this run's staging and apply.
-            self.run_play(root, self.play(root, 'first', first),
-                          {**env, 'PEER_PLAY': str(self.play(root, 'peer', peer))})
+            self.run_play(root, self.play(root, 'first', first, enabled=False),
+                          {**env, 'PEER_PLAY': str(self.play(root, 'peer', peer, enabled=False))})
             self.assertEqual(self.writes(root), [peer, first])
             self.assertEqual(json.loads(config.read_text())['agents']['defaults']['cliBackends'], first)
 
-    def test_normal_configuration_preserves_active_c_command(self):
-        self.check_backend({'claude-cli': {'command': COMMAND}}, {'claude-cli': {'modelArg': '--model'}},
+    def test_enabled_points_claude_cli_at_the_launcher(self):
+        self.check_backend(None, None, {'claude-cli': {'command': COMMAND}})
+
+    def test_enabled_keeps_other_backend_settings(self):
+        self.check_backend(None, {'claude-cli': {'modelArg': '--model'}},
                            {'claude-cli': {'command': COMMAND, 'modelArg': '--model'}})
 
-    def test_normal_configuration_does_not_activate_c_early(self):
-        desired = {'claude-cli': {'modelArg': '--model'}}
-        self.check_backend(None, desired, desired)
+    def test_enabled_replaces_an_explicit_native_command(self):
+        # Staging configures `command: claude` for native runs; the switch decides.
+        self.check_backend(None, {'claude-cli': {'command': 'claude', 'modelArg': '--model'}},
+                           {'claude-cli': {'command': COMMAND, 'modelArg': '--model'}})
 
-    def test_explicit_replacement_command_wins(self):
-        desired = {'claude-cli': {'command': '/usr/local/bin/claude'}}
-        self.check_backend({'claude-cli': {'command': COMMAND}}, desired, desired)
+    def test_disabled_returns_to_native_defaults(self):
+        self.check_backend({'claude-cli': {'command': COMMAND}}, None, None, enabled=False)
 
-    def test_deactivation_returns_to_native_defaults(self):
-        self.check_backend({'claude-cli': {'command': COMMAND}}, {}, None, active=False)
-
-    def test_deactivation_keeps_other_backend_settings(self):
+    def test_disabled_keeps_other_backend_settings(self):
         self.check_backend({'claude-cli': {'command': COMMAND, 'modelArg': '--model'}},
-                           {'claude-cli': {'modelArg': '--model'}}, {'claude-cli': {'modelArg': '--model'}}, active=False)
+                           {'claude-cli': {'modelArg': '--model'}}, {'claude-cli': {'modelArg': '--model'}}, enabled=False)
+
+    def test_disabled_removes_an_empty_setting(self):
+        self.check_backend({}, None, None, enabled=False)
+        self.check_backend({}, {}, None, enabled=False)
 
     def test_native_host_without_overrides_stays_unset(self):
-        self.check_backend(None, {}, None, active=False)
-
-    def test_activation_is_idempotent(self):
-        desired = {'claude-cli': {'command': COMMAND}}
-        self.check_backend(None, desired, desired)
+        self.check_backend(None, None, None, enabled=False)
 
 
 if __name__ == '__main__':

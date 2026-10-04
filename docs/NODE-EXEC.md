@@ -10,8 +10,10 @@ permissions; they are not sandboxed. Read [SECURITY §5](SECURITY.md#5-self-modi
 Claude native Bash → VPS SSH client → dedicated key + pinned host key → Mac account
 ```
 
-The managed C preparation includes SSH bootstrap in
-`ansible/roles/claude-cli/tasks/mac-ssh.yml`. It:
+Mac access is optional. Set `openclaw_claude_cli_mac_host` (an SSH alias the
+controller can reach) and `openclaw_claude_cli_mac_user` in `openclaw.yml`; with
+an empty host, agent containers get no Mac access at all. With a host, the
+container role bootstraps SSH in `ansible/roles/claude-cli/tasks/mac-ssh.yml`. It:
 
 - creates a dedicated VPS identity only if absent;
 - gets the Mac host's public key through the controller's trusted SSH route;

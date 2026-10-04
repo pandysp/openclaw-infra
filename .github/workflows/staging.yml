@@ -99,6 +99,9 @@ jobs:
           openclaw_tools_allow:
             - github_get_file_contents
             - github-test_get_file_contents
+          # Like production, every agent turn runs in its own container, here without a Mac.
+          openclaw_claude_cli_enabled: true
+
           # An override replaces OpenClaw's defaults, so this is production's exact
           # invocation (openclaw 2026.6.6, extensions/anthropic/cli-backend.ts) plus
           # only `--tools "" --strict-mcp-config`. Re-derive it on every version bump.

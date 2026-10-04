@@ -1,3 +1,4 @@
+{% if openclaw_claude_cli_mac_host | length > 0 %}
 Host {{ openclaw_claude_cli_mac_host }}
     User {{ openclaw_claude_cli_mac_user }}
     IdentityFile ~/.ssh/id_ed25519_openclaw_mac_air
@@ -7,6 +8,7 @@ Host {{ openclaw_claude_cli_mac_host }}
     BatchMode yes
     ForwardAgent no
     ConnectTimeout 10
+{% endif %}
 {% if item.repo_url | length > 0 %}
 
 Host github.com {{ item.ssh_alias }}

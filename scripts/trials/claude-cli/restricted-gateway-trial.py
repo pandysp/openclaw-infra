@@ -13,12 +13,13 @@ home = Path.home()
 scratch = Path(__file__).resolve().parent
 config_path = home / '.openclaw/openclaw.json'
 before = json.loads(config_path.read_text())
-if before['agents']['defaults'].get('cliBackends') is not None:
-    raise SystemExit('ERROR: Trial requires the original unset backend')
 entries = {entry['id']: entry for entry in before['agents']['list']}
 agents = sys.argv[1:] or list(entries)
 if any(agent not in entries for agent in agents):
     raise SystemExit('ERROR: Unknown trial agent')
+# The trial uses the installed container backend directly; no gateway restart.
+if before['agents']['defaults'].get('cliBackends') != {'claude-cli': {'command': str(home / '.openclaw/claude-cli-container')}}:
+    raise SystemExit('ERROR: Trials need the container backend; enable containers first')
 
 
 def command(args, timeout=40):
@@ -31,34 +32,13 @@ def gateway(method, params, timeout=200000):
     return json.loads(raw[raw.find('{'):])
 
 
-def ready():
-    for _ in range(30):
-        check = subprocess.run(['openclaw', 'gateway', 'call', 'health', '--json', '--timeout', '3000'],
-                               capture_output=True, text=True, timeout=15)
-        if check.returncode == 0 and json.loads(check.stdout[check.stdout.find('{'):]).get('ok'):
-            return
-        time.sleep(1)
-    raise RuntimeError('Restored gateway health failed; inspect the private service journal')
-
-
-raw = command(['openclaw', 'cron', 'list', '--all', '--json'])
-cron = json.loads(raw[raw.find('{'):])
-if any(job.get('state', {}).get('runningAtMs') for job in cron.get('jobs', [])):
-    raise SystemExit('ERROR: A scheduled job is running; refusing gateway restart')
-unit = 'openclaw-cwrapper-rollback-' + uuid.uuid4().hex[:10]
-command(['systemd-run', '--user', '--unit', unit, '--on-active=15m', '--timer-property=AccuracySec=1s',
-         '--timer-property=RandomizedDelaySec=0', '/usr/bin/python3', str(scratch / 'trial-backend.py'), 'restore'])
 active = []
 native_sessions = {}
 failed = []
 runtime = json.loads((home / '.openclaw/claude-cli-runtime.json').read_text())
 proof_log = Path(runtime['invocations'])
 try:
-    command(['python3', str(scratch / 'trial-backend.py'), 'apply'])
-    ready()
-    print('restricted-trial=active; production-sessions=native', flush=True)
     for agent in agents:
-        command(['systemctl', '--user', 'restart', unit + '.timer'])
         workspace = Path(entries[agent].get('workspace') or before['agents']['defaults']['workspace'])
         other = next(Path(entry.get('workspace') or before['agents']['defaults']['workspace'])
                      for entry in entries.values() if entry['id'] != agent)
@@ -81,7 +61,8 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
 ''')
         active.append((key, run, project, proof, diagnostic, session_hash))
         qmd_tool = 'mcp__openclaw__' + ('qmd_status' if agent == 'main' else f'qmd-{agent}_status')
-        ssh = "ssh " + runtime['mac_host'] + " 'printf mac-ssh-ok'"
+        # The Mac check runs only when the runtime has a Mac host.
+        ssh = "ssh " + runtime['mac_host'] + " 'printf mac-ssh-ok'" if runtime['mac_host'] else None
         script_command = 'python3 ' + diagnostic.name
 
         def launches():
@@ -99,7 +80,7 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
              f'Remember marker {marker} only in conversation, not in a file. '
              f'Use ToolSearch if needed to load {qmd_tool}, then call it once. '
              f'Use Write to create only {proof.name} containing exactly ok, Read to read it, then Edit to replace ok with edited and Read again. '
-             f'Use Bash to run exactly {ssh} . Then use Bash to run exactly {script_command} . '
+             + (f'Use Bash to run exactly {ssh} . ' if ssh else '') + f'Then use Bash to run exactly {script_command} . '
              'Do not edit any other files or contact people. Reply done after those checks.')
         started = launches()
         if len(started) != 1:
@@ -151,21 +132,9 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
                 f'Read that image using native Read. Reply with only the dominant color you see.')
         warm = turn('Reply only with the marker I asked you to remember.')
         warm_count = len(launches())
-        guard_recovered = None
-        if agent == 'main':
-            command(['sudo', '-n', 'nft', 'flush', 'chain', 'inet', runtime['guard_table'], 'input'])
-            deadline = time.monotonic() + 15
-            while True:
-                affected_exists = subprocess.run(['docker', 'inspect', name], capture_output=True).returncode == 0
-                guard_ready = subprocess.run(['systemctl', 'is-active', '--quiet', runtime['guard_service']]).returncode == 0
-                if not affected_exists and guard_ready:
-                    guard_recovered = True
-                    break
-                if time.monotonic() > deadline:
-                    raise RuntimeError('Warm guard recovery did not finish')
-                time.sleep(.1)
-        else:
-            command(['docker', 'stop', '--time', '5', name], timeout=25)
+        # Guard recovery is proven on a fixture table (guard-recovery-trial.py);
+        # flushing the installed guard would stop every live agent container.
+        command(['docker', 'stop', '--time', '5', name], timeout=25)
         time.sleep(2)
         cold = turn('Reply only with the marker I asked you to remember.')
         data = native_sessions[run].read_text()
@@ -207,7 +176,7 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
             'warm_process_reused': warm_count == 1,
             'cold_resume_continuity': marker in reply(cold),
             'cold_launch_uses_resume': len(starts) == 2 and starts[-1]['resuming'],
-            **flags, 'actual_mac_ssh_success': bool(ssh_calls) and any(success(call) and 'mac-ssh-ok' in content(call) for call in ssh_calls),
+            **flags, **({'actual_mac_ssh_success': bool(ssh_calls) and any(success(call) and 'mac-ssh-ok' in content(call) for call in ssh_calls)} if ssh else {}),
             'native_uid_1000': diagnostic_results.get('actual_uid_1000') is True,
             'native_all_caps_zero': diagnostic_results.get('actual_caps_zero') is True,
             'native_no_new_privileges': diagnostic_results.get('actual_no_new_privileges') is True,
@@ -216,7 +185,6 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
             frame = diagnostic.with_suffix('.png')
             evidence['checks']['native_video_frames_workflow'] = any(success(call) and 'frame.sh' in call.get('input', {}).get('command', '') for call in bash)
             evidence['checks']['native_image_read'] = any(call.get('name') == 'Read' and call.get('input', {}).get('file_path') == str(frame) and success(call) for call in calls) and frame.read_bytes().startswith(b'\x89PNG\r\n\x1a\n') and 'red' in reply(media_reply).lower()
-            evidence['checks']['warm_guard_recovery'] = guard_recovered
         (scratch / ('restricted-gateway-' + agent + '.json')).write_text(json.dumps(evidence) + '\n')
         print(json.dumps(evidence), flush=True)
         if not all(evidence['checks'].values()):
@@ -224,10 +192,6 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
     if failed:
         raise RuntimeError('Restricted gateway trial failed for ' + ', '.join(failed) + '; no production rollout')
 finally:
-    command(['python3', str(scratch / 'trial-backend.py'), 'restore'])
-    ready()
-    print('backend=original; gateway=healthy', flush=True)
-    command(['systemctl', '--user', 'stop', unit + '.timer'])
     for key, run, project, proof, diagnostic, session_hash in active:
         gateway('sessions.delete', {'key': key}, timeout=20000)
         for name in command(['docker', 'ps', '-aq', '--filter', 'label=openclaw.claude-session=' + session_hash]).split():

@@ -31,8 +31,8 @@ openclaw_agent_models:
 
 # CLI backend: OpenClaw shells out to the `claude` CLI binary which manages its own
 # OAuth auth (Claude Max subscription). No direct Anthropic API calls for the primary model.
-# The claude CLI is installed via npm (@anthropic-ai/claude-code) and authenticated via
-# ~/.claude/.credentials.json (OAuth access + refresh tokens from Pulumi secret).
+# The claude CLI is installed via npm (@anthropic-ai/claude-code) and reads its login from
+# ~/.claude/shared/auth (the Pulumi setup token on a fresh server; see CLAUDE.md Key Rotation).
 # Claude Code compacts claude-cli sessions itself (OpenClaw skips its own compaction
 # and memory flush for CLI turns); see claude_code_auto_compact_window below.
 #
@@ -60,19 +60,19 @@ claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
 claude_code_auto_compact_window: 305000
 
-# C is opt-in. With enabled true, activate true runs agent turns in containers and
-# false runs them natively (also switching an active C back); assets install either way.
+# true runs every agent turn in its own container (apply with --tags config,claude-cli);
+# false runs turns natively (apply with --tags config). Container files stay installed when off.
 openclaw_claude_cli_enabled: false
-openclaw_claude_cli_activate: true
-openclaw_claude_cli_active: "{{ openclaw_claude_cli_enabled | bool and openclaw_claude_cli_activate | bool }}"
 openclaw_claude_cli_command: /home/ubuntu/.openclaw/claude-cli-container
 openclaw_claude_cli_network: openclaw-claude-cli
 openclaw_claude_cli_bridge_interface: oc-claude0
 openclaw_claude_cli_ipv4_subnet: 172.30.55.0/24
 openclaw_claude_cli_ipv6_subnet: fd27:0c1a:c100::/64
 openclaw_claude_cli_mcp_target: /home/ubuntu/.openclaw/claude-cli-mcp-target.json
-openclaw_claude_cli_mac_host: mac-air
-openclaw_claude_cli_mac_user: andreasspannagel
+# Containers reach a Mac over SSH only when a host is set (an SSH alias the
+# controller can reach, e.g. "mac-air"), with the Mac account in mac_user.
+openclaw_claude_cli_mac_host: ""
+openclaw_claude_cli_mac_user: ""
 # Inherited variables only; provider keys stay with the host's OpenClaw tools.
 openclaw_claude_cli_skill_env:
   - GROQ_API_KEY
