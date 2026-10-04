@@ -86,6 +86,13 @@
       {%- endfor -%}
       {{ ns.found }}
 
+# Created before the token files; the proxy treats a missing directory as no tokens.
+- name: Ensure GitHub tokens directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw/github-tokens
+    state: directory
+    mode: "0700"
+
 - name: Write per-agent GitHub token files
   ansible.builtin.copy:
     content: "{{ lookup('vars', item.token_var, default='') }}"

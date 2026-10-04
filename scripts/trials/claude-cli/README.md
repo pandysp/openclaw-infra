@@ -17,7 +17,7 @@ need explicit keyboard-user permission; a passing trial is not rollout approval.
 |---|---|---|
 | `trial-backend.py apply\|restore` | Reversible `agents.defaults.cliBackends` override to `restricted-dispatcher.py`; refuses unexpected overrides; restores only its own | yes |
 | `restricted-dispatcher.py` | Routes only `agent:<id>:cwrapper-*` sessions to the installed launcher; `cwrapper-cancel-*` additionally prepends `cancel-bin/` to `PATH` | — |
-| `restricted-gateway-trial.py` | Per-agent feature suite through real gateway turns (native tools, scoped MCP, skills, Git reads, strict Mac SSH, warm/cold sessions) with an independent 15-minute rollback timer | yes |
+| `restricted-gateway-trial.py` | Per-agent feature suite through real gateway turns (native tools, scoped MCP, skills, Git read and push to a throwaway branch, strict Mac SSH, warm/cold sessions) with an independent 15-minute rollback timer | yes |
 | `gateway-cancellation-trial.py chat\|kill` | Foreground `chat.abort` cleanup, or explicit launcher SIGKILL via one validated pidfd; requires an actual live sleep PID; 5-minute rollback timer | yes |
 | `cancel-bin/docker` | Fault shim: an attach client that ignores quick cleanup, selected only for `cwrapper-cancel-*` | — |
 | `guard-launch-race-trial.py` | Stopped guard cannot admit a late `docker create` (real Docker, real guard service) | no |

@@ -1,10 +1,4 @@
 ---
-- name: Ensure GitHub tokens directory exists
-  ansible.builtin.file:
-    path: /home/ubuntu/.openclaw/github-tokens
-    state: directory
-    mode: "0700"
-
 - name: Get codex-proxy-net gateway IP
   ansible.builtin.shell: |
     docker network inspect codex-proxy-net --format '{{ '{{' }}range .IPAM.Config{{ '}}{{' }}.Gateway{{ '}}{{' }}end{{ '}}' }}'
