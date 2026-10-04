@@ -50,6 +50,7 @@ command(['systemd-run', '--user', '--unit', unit, '--on-active=15m', '--timer-pr
          '--timer-property=RandomizedDelaySec=0', '/usr/bin/python3', str(scratch / 'trial-backend.py'), 'restore'])
 active = []
 native_sessions = {}
+failed = []
 runtime = json.loads((home / '.openclaw/claude-cli-runtime.json').read_text())
 proof_log = Path(runtime['invocations'])
 try:
@@ -206,7 +207,9 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
         (scratch / ('restricted-gateway-' + agent + '.json')).write_text(json.dumps(evidence) + '\n')
         print(json.dumps(evidence), flush=True)
         if not all(evidence['checks'].values()):
-            raise RuntimeError('Restricted gateway trial acceptance failed; no production rollout')
+            failed.append(agent)
+    if failed:
+        raise RuntimeError('Restricted gateway trial failed for ' + ', '.join(failed) + '; no production rollout')
 finally:
     command(['python3', str(scratch / 'trial-backend.py'), 'restore'])
     ready()
