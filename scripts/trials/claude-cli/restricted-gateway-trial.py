@@ -121,11 +121,11 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
                                  capture_output=True, text=True, timeout=60)
         flags['git_push'] = pushed.returncode == 0 and deleted.returncode == 0
         if not mac_host:
-            mac_files = subprocess.run(['docker', 'exec', name, 'sh', '-c',
-                                        'ls ~/.ssh/id_ed25519_openclaw_mac_air ~/.ssh/known_hosts_openclaw_mac_air 2>/dev/null; '
-                                        'grep -ci mac /etc/hosts; grep -c "^Host .*mac" ~/.ssh/config'],
-                                       capture_output=True, text=True, timeout=20)
-            flags['no_mac_credentials'] = mac_files.stdout.split() == ['0', '0']
+            no_files = subprocess.run(['docker', 'exec', name, 'sh', '-c',
+                                       'test ! -e ~/.ssh/id_ed25519_openclaw_mac_air && test ! -e ~/.ssh/known_hosts_openclaw_mac_air'
+                                       ' && ! grep -qi "^Host .*mac" ~/.ssh/config'], timeout=20).returncode == 0
+            hosts = json.loads(command(['docker', 'inspect', '--format', '{{json .HostConfig.ExtraHosts}}', name]))
+            flags['no_mac_credentials'] = no_files and not hosts
         media_reply = None
         if agent == 'main':
             video, frame = diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')

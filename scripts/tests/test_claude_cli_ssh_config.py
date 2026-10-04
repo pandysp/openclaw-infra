@@ -58,7 +58,7 @@ class SshConfigTest(unittest.TestCase):
                 self.assertNotIn('openclaw_mac_air', rendered)
                 self.assertIn('Host github.com github-workspace-' + agent, rendered)
 
-    def test_launcher_runtime_gives_the_mac_host_only_to_agents_with_access(self):
+    def test_runtime_manifest_gives_the_mac_host_only_to_agents_with_access(self):
         with tempfile.TemporaryDirectory(prefix='ssh-runtime-') as directory:
             root = Path(directory)
             play = root / 'play.json'
