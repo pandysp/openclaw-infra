@@ -24,6 +24,9 @@ need explicit keyboard-user permission; a passing trial is not rollout approval.
 | `guard-held-create-trial.py LAUNCHER.py` | Holds the client return after real stopped creation; teardown waits on its lease, revoked admission refuses start, fixture removed. Not late daemon-completion proof; refuses teardown with other labelled runtimes | no |
 | `docker-cancellation-trial.py [LAUNCHER.py]` | SIGTERM/SIGINT during a real container run: exit 143/130 and container removed | no |
 | `guard-close-window-trial.py [--expect-closed]` | Linux-only kernel lock regression: final readiness-write EIO leaves byte `1`, but lifetime revocation before the exclusive wait still refuses new admission. Loads the **installed** guard and launcher; Docker, systemd and nft are mocked. Run with `sudo -n` | no |
+| `guard-recovery-trial.py` | A second guard on its own fixture table restarts and restores both tables after table deletion or flushed rules, removing only its labelled containers | no |
+| `guard-slow-cleanup-trial.py` | Slow Docker/nft boundaries: systemd stop still restores the policy past the old 25-second deadline | no |
+| `bridge-guard-trial.py` | Same- and custom-bridge peers, metadata, user data and direct qmd are blocked; proxy and public web stay reachable | no |
 
 ## Authentication cutover recovery
 
@@ -38,15 +41,6 @@ change. This proves isolated cutover recovery, not provider-authorized OAuth ref
 The helper verifies that no native Claude process can still write the legacy
 login, so the trial refuses to run while one exists. Never bypass or mock that
 check here; stop the writer (with permission) instead.
-
-## Prototype-dependent trials
-
-`guard-recovery-trial.py`, `guard-slow-cleanup-trial.py` and
-`bridge-guard-trial.py` read `restricted-runtime.json`,
-`network-guard-prototype.nft` and a scratch guard copy, and need the prototype
-network and services. Port them to the installed assets before reuse; they
-cover own-policy recovery timing, slow systemd/nft teardown and same-bridge
-isolation.
 
 ## Evidence
 

@@ -6,7 +6,7 @@ import subprocess
 import uuid
 
 s = Path(__file__).resolve().parent
-runtime = json.loads((s / 'restricted-runtime.json').read_text())
+runtime = json.loads((Path.home() / '.openclaw/claude-cli-runtime.json').read_text())
 suffix = uuid.uuid4().hex[:8]
 peer_network = 'c-peer-' + suffix
 containers = []

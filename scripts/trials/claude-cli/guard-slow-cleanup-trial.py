@@ -14,7 +14,8 @@ unit = 'openclaw-guard-slow-' + suffix + '.service'
 fixture = scratch / ('slow-' + suffix)
 fixture.mkdir()
 policy = fixture / 'policy.nft'
-policy.write_text((scratch / 'network-guard-prototype.nft').read_text().replace('openclaw_claude_prototype', table))
+runtime = json.loads((Path.home() / '.openclaw/claude-cli-runtime.json').read_text())
+policy.write_text(Path('/etc/openclaw/claude-cli-network.nft').read_text().replace(runtime['guard_table'], table))
 (fake := fixture / 'docker').write_text('''#!/usr/bin/python3
 import sys,time
 if sys.argv[1]=='ps': time.sleep(4); print('synthetic-container')
@@ -34,7 +35,7 @@ try:
     subprocess.run(['sudo','-n','systemd-run','--unit',unit,'--property=Type=notify',
         '--property=TimeoutStartSec=75','--property=TimeoutStopSec=60','--property=KillMode=mixed',
         '--setenv=PATH='+str(fixture)+':/usr/bin:/usr/sbin:/bin',
-        '/usr/bin/python3',str(scratch/'claude-cli-guard.py'),str(policy),table],
+        '/usr/bin/python3','/usr/local/lib/openclaw/claude-cli-guard.py',str(policy),table],
         check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=70)
     # Flushing our own fixture table then stopping tests final restoration,
     # not a second copy of the already-installed startup policy.

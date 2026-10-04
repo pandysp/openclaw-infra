@@ -7,9 +7,13 @@ import time
 import uuid
 
 scratch = Path(__file__).resolve().parent
-runtime = json.loads((scratch / 'restricted-runtime.json').read_text())
-table = runtime['guard_table']
-unit = 'openclaw-guard-recovery-' + uuid.uuid4().hex[:8]
+runtime = json.loads((Path.home() / '.openclaw/claude-cli-runtime.json').read_text())
+suffix = uuid.uuid4().hex[:8]
+# A second guard on its own fixture table, so the installed guard is untouched.
+table = 'openclaw_recovery_' + suffix
+unit = 'openclaw-guard-recovery-' + suffix
+policy = scratch / ('recovery-' + suffix + '.nft')
+policy.write_text(Path('/etc/openclaw/claude-cli-network.nft').read_text().replace(runtime['guard_table'], table))
 created = []
 
 
@@ -27,6 +31,16 @@ def fixture(guard):
     return name
 
 
+def restart_count():
+    return int(run(['systemctl', 'show', unit + '.service', '-p', 'NRestarts', '--value']) or 0)
+
+
+def has_rules(family):
+    listed = subprocess.run(['sudo', '-n', 'nft', '--json', 'list', 'table', family, table],
+                            capture_output=True, text=True, timeout=10)
+    return listed.returncode == 0 and any('rule' in entry for entry in json.loads(listed.stdout)['nftables'])
+
+
 def exists(name):
     return subprocess.run(['docker', 'inspect', name], stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, timeout=5).returncode == 0
@@ -35,22 +49,21 @@ def exists(name):
 try:
     run(['sudo', '-n', 'systemd-run', '--unit', unit, '--property=Type=notify', '--property=NotifyAccess=main',
          '--property=Restart=on-failure', '--property=RestartSec=1', '--property=TimeoutStartSec=45',
-         '/usr/bin/python3', str(scratch / 'claude-cli-guard.py'), str(scratch / 'network-guard-prototype.nft'), table])
+         '/usr/bin/python3', '/usr/local/lib/openclaw/claude-cli-guard.py', str(policy), table])
     unrelated = fixture('unrelated-' + uuid.uuid4().hex[:8])
     evidence = []
     for label, modification in [('inet_table_removed', ['delete', 'table', 'inet', table]),
                                  ('bridge_table_removed', ['delete', 'table', 'bridge', table]),
                                  ('input_rules_flushed', ['flush', 'chain', 'inet', table, 'input'])]:
         affected = fixture(table)
+        restarts = restart_count()
         started = time.monotonic()
         run(['sudo', '-n', 'nft', *modification])
+        # The guard stops affected containers and exits; systemd restarts it,
+        # and only a restarted, active guard with both tables counts.
         for _ in range(200):
             active = subprocess.run(['systemctl', 'is-active', '--quiet', unit + '.service'], timeout=5).returncode == 0
-            if not exists(affected) and active:
-                for family in ['inet', 'bridge']:
-                    restored = json.loads(run(['sudo', '-n', 'nft', '--json', 'list', 'table', family, table]))
-                    if not any('rule' in entry for entry in restored['nftables']):
-                        raise RuntimeError('Guard service became active without restored rules')
+            if not exists(affected) and active and restart_count() > restarts and all(has_rules(f) for f in ['inet', 'bridge']):
                 break
             time.sleep(.1)
         else:
@@ -63,6 +76,10 @@ try:
     (scratch / 'guard-recovery-evidence.json').write_text(json.dumps(evidence) + '\n')
 finally:
     subprocess.run(['sudo', '-n', 'systemctl', 'stop', unit + '.service'], check=True, timeout=30)
+    policy.unlink(missing_ok=True)
+    # A stopped guard keeps its policy (fail closed); remove this fixture's tables.
+    for family in ['inet', 'bridge']:
+        subprocess.run(['sudo', '-n', 'nft', 'delete', 'table', family, table], stderr=subprocess.DEVNULL, timeout=10)
     for name in created:
         if exists(name):
             run(['docker', 'rm', '-f', name])
