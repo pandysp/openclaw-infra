@@ -187,6 +187,18 @@ def run_container(command, name, prepare=None):
                 subprocess.run(['docker', 'rm', '-f', name], check=True, stdout=subprocess.DEVNULL, timeout=15)
 
 
+def mac_access(mac_host, mount):
+    """Mount the dedicated Mac SSH files and pin the host's address; nothing without a host."""
+    if not mac_host:
+        return []
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*', mac_host):
+        raise SystemExit('ERROR: Invalid configured Mac SSH hostname')
+    mount(HOME / '.ssh/id_ed25519_openclaw_mac_air')
+    mount(HOME / '.ssh/known_hosts_openclaw_mac_air')
+    address = socket.getaddrinfo(mac_host, 22, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+    return ['--add-host', mac_host + ':' + address]
+
+
 def main(args, runtime_path=RUNTIME):
     if args in [['--version'], ['--help']]:
         os.execv(str(NATIVE), [str(NATIVE), *args])
@@ -231,8 +243,7 @@ def main(args, runtime_path=RUNTIME):
     # Directory bind shares atomic credential replacements and both SDK locks.
     mount(SECURE_STORAGE.parent, writable=True)
     mount(HOME / '.claude/settings.json')
-    mount(HOME / '.ssh/id_ed25519_openclaw_mac_air')
-    mount(HOME / '.ssh/known_hosts_openclaw_mac_air')
+    mac_options = mac_access(runtime['mac_host'], mount)
     ssh = runtime['ssh'][agent]
     mount(ssh['config'], HOME / '.ssh/config')
     if ssh['workspace_key'] is not None:
@@ -315,11 +326,6 @@ def main(args, runtime_path=RUNTIME):
             rewritten_git = Path(artifacts.name) / 'git-proxy-config'
             rewritten_git.write_text(content)
             mount(rewritten_git, git_proxy)
-    mac_host = runtime['mac_host']
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*', mac_host):
-        raise SystemExit('ERROR: Invalid configured Mac SSH hostname')
-    mac = socket.getaddrinfo(mac_host, 22, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
-
     session_hash = hashlib.sha256(key.encode()).hexdigest()[:12]
     name = 'openclaw-claude-' + uuid.uuid4().hex[:12]
     command = ['docker', 'create', '--rm', '-i', '--name', name, '--network', runtime['network'],
@@ -329,7 +335,7 @@ def main(args, runtime_path=RUNTIME):
                '--user', '1000:1000', '--read-only', '--cap-drop', 'ALL',
                '--security-opt', 'no-new-privileges', '--stop-timeout', '10',
                '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=256m', '--tmpfs', '/run:rw,noexec,nosuid,size=1m',
-               '--add-host', mac_host + ':' + mac,
+               *mac_options,
                '-e', 'HOME=/home/ubuntu', '-e', 'CLAUDE_SECURESTORAGE_CONFIG_DIR=' + str(SECURE_STORAGE),
                '-e', 'GIT_TERMINAL_PROMPT=0',
                '-e', f'GIT_CONFIG_COUNT={3 if has_pat else 2}', '-e', 'GIT_CONFIG_KEY_0=user.name', '-e', 'GIT_CONFIG_VALUE_0=OpenClaw Agent',

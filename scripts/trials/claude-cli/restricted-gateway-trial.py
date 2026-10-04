@@ -81,7 +81,8 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
 ''')
         active.append((key, run, project, proof, diagnostic, session_hash))
         qmd_tool = 'mcp__openclaw__' + ('qmd_status' if agent == 'main' else f'qmd-{agent}_status')
-        ssh = "ssh " + runtime['mac_host'] + " 'printf mac-ssh-ok'"
+        # The Mac check runs only when the runtime has a Mac host.
+        ssh = "ssh " + runtime['mac_host'] + " 'printf mac-ssh-ok'" if runtime['mac_host'] else None
         script_command = 'python3 ' + diagnostic.name
 
         def launches():
@@ -99,7 +100,7 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
              f'Remember marker {marker} only in conversation, not in a file. '
              f'Use ToolSearch if needed to load {qmd_tool}, then call it once. '
              f'Use Write to create only {proof.name} containing exactly ok, Read to read it, then Edit to replace ok with edited and Read again. '
-             f'Use Bash to run exactly {ssh} . Then use Bash to run exactly {script_command} . '
+             + (f'Use Bash to run exactly {ssh} . ' if ssh else '') + f'Then use Bash to run exactly {script_command} . '
              'Do not edit any other files or contact people. Reply done after those checks.')
         started = launches()
         if len(started) != 1:
@@ -207,7 +208,7 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
             'warm_process_reused': warm_count == 1,
             'cold_resume_continuity': marker in reply(cold),
             'cold_launch_uses_resume': len(starts) == 2 and starts[-1]['resuming'],
-            **flags, 'actual_mac_ssh_success': bool(ssh_calls) and any(success(call) and 'mac-ssh-ok' in content(call) for call in ssh_calls),
+            **flags, **({'actual_mac_ssh_success': bool(ssh_calls) and any(success(call) and 'mac-ssh-ok' in content(call) for call in ssh_calls)} if ssh else {}),
             'native_uid_1000': diagnostic_results.get('actual_uid_1000') is True,
             'native_all_caps_zero': diagnostic_results.get('actual_caps_zero') is True,
             'native_no_new_privileges': diagnostic_results.get('actual_no_new_privileges') is True,

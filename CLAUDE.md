@@ -21,7 +21,7 @@ Your Machine (Tailscale) → Hetzner VPS → Gateway (systemd, localhost:18789) 
 | Network (infrastructure) | Hetzner cloud firewall blocks ALL inbound |
 | Network (host) | UFW: deny incoming, allow only tailscale0 interface |
 | Access | Tailscale-only (no public SSH, no public ports) |
-| Process | Runs as the `ubuntu` user (passwordless sudo). Agent turns run Claude Code on the host; OpenClaw's own tools run [sandboxed](#sandboxing) in Docker ([details](./docs/SECURITY.md#4-agent-host-command-abuse)) |
+| Process | Runs as the `ubuntu` user (passwordless sudo). Agent turns run Claude Code on the host, or in a per-agent container with `openclaw_claude_cli_enabled: true`; OpenClaw's own tools run [sandboxed](#sandboxing) in Docker ([details](./docs/SECURITY.md#4-agent-host-command-abuse)) |
 | Auth | Tailscale identity + device pairing |
 | Secrets | Pulumi encrypted config (never in git) |
 | Gateway | Binds localhost only, proxied via Tailscale Serve |
@@ -462,13 +462,13 @@ MCP servers, workspaces, deny rules, and token mappings are generated automatica
 
 ### Role Ordering
 
-`config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `qmd` -> `plugins` -> `sandbox` -> `workspace`
+`workspace` -> `openclaw` -> `config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `qmd` -> `plugins` -> `sandbox` -> `claude-cli`
 
-Telegram must run immediately after agents (prevents message misrouting). Plugins after qmd (qmd binary needed for MCP registration).
+Telegram must run immediately after agents (prevents message misrouting). Plugins after qmd (qmd binary needed for MCP registration). `claude-cli` needs the plugins proxy and the sandbox image; `config` already points the backend at its launcher, so the first switch-on has a few minutes where turns fail until `claude-cli` has run.
 
 ## Sandboxing
 
-OpenClaw's own tools run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain. Agent turns themselves run through Claude Code on the host, and its tools (Bash, Read, Edit, Write) are not sandboxed: see [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse).
+OpenClaw's own tools run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain. Agent turns themselves run through Claude Code on the host, and its tools (Bash, Read, Edit, Write) are not sandboxed: see [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse). `openclaw_claude_cli_enabled: true` runs each turn in its own container instead (`./scripts/provision.sh --tags config,claude-cli`); `false` switches back (`--tags config`).
 
 | | OpenClaw's sandboxed tools |
 |---|---|

@@ -14,6 +14,11 @@
       - openclaw_claude_cli_bridge_interface != 'docker0'
     fail_msg: Container CLI requires the existing Git/MCP proxy and a dedicated bridge.
 
+- name: Require the Mac account whenever a Mac host is set
+  ansible.builtin.assert:
+    that: openclaw_claude_cli_mac_host | length == 0 or openclaw_claude_cli_mac_user | length > 0
+    fail_msg: Set openclaw_claude_cli_mac_user to the Mac account, or leave openclaw_claude_cli_mac_host empty.
+
 - name: Read the current backend using the shared configuration task
   ansible.builtin.include_role:
     name: config
@@ -32,6 +37,7 @@
 
 - name: Bootstrap the approved Mac SSH identity and host pin
   ansible.builtin.include_tasks: mac-ssh.yml
+  when: openclaw_claude_cli_mac_host | length > 0
 
 - name: Install per-agent SSH configuration
   ansible.builtin.template:
@@ -211,16 +217,6 @@
   changed_when: >-
     claude_cli_launcher.changed or claude_cli_manifest.changed
     or claude_cli_image_after.changed or claude_cli_ssh_configs.changed
-    or claude_cli_mac_pin.changed or claude_cli_mac_key.changed
+    or (claude_cli_mac_pin.changed | default(false)) or (claude_cli_mac_key.changed | default(false))
   when: claude_cli_backend_in_use.stdout == 'yes'
   notify: restart openclaw-gateway
-
-# openclaw_claude_cli_activate switches agents between C and native both ways.
-- name: Apply the C activation setting through the shared backend task
-  ansible.builtin.include_role:
-    name: config
-    tasks_from: cli-backends.yml
-  vars:
-    _desired_cli_backends: >-
-      {{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}
-         if openclaw_claude_cli_active | bool else {}, recursive=true) }}

@@ -118,5 +118,29 @@ class ContainerCancellationTest(unittest.TestCase):
                 signal.signal(s, handler)
 
 
+
+class MacAccessTest(unittest.TestCase):
+    """Mac SSH is optional: without a host, nothing Mac-related reaches the container."""
+
+    def test_no_host_means_no_mounts_lookup_or_host_entry(self):
+        mounts = []
+        with patch.object(launcher.socket, 'getaddrinfo') as lookup:
+            self.assertEqual(launcher.mac_access('', mounts.append), [])
+        lookup.assert_not_called()
+        self.assertEqual(mounts, [])
+
+    def test_configured_host_mounts_key_and_pin_and_pins_its_address(self):
+        mounts = []
+        with patch.object(launcher.socket, 'getaddrinfo', return_value=[(None, None, None, None, ('100.64.0.7', 22))]):
+            options = launcher.mac_access('mac-air', mounts.append)
+        self.assertEqual(options, ['--add-host', 'mac-air:100.64.0.7'])
+        self.assertEqual(mounts, [launcher.HOME / '.ssh/id_ed25519_openclaw_mac_air',
+                                  launcher.HOME / '.ssh/known_hosts_openclaw_mac_air'])
+
+    def test_invalid_host_fails_loudly(self):
+        with self.assertRaises(SystemExit):
+            launcher.mac_access('bad host;', lambda path: None)
+
+
 if __name__ == '__main__':
     unittest.main()

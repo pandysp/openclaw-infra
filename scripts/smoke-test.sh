@@ -190,6 +190,10 @@ try {
     const marker = `PHOENIX_INFERENCE_${runId}`;
     const expectedModel = intendedModel.split('/')[1];
     console.log(`    Inference run: ${runId}`);
+    // With containers enabled the configured command is the launcher; prove the turn entered one.
+    const launches = path.join(os.homedir(), '.openclaw/claude-cli-invocations.jsonl');
+    const containerTurn = nativeCli === path.join(os.homedir(), '.openclaw/claude-cli-container');
+    const launchesBefore = containerTurn && fs.existsSync(launches) ? fs.readFileSync(launches, 'utf8') : '';
     const response = run(['gateway', 'call', 'agent', '--expect-final', '--timeout', '150000', '--json', '--params', JSON.stringify({
       agentId: 'main', sessionKey: `agent:main:phoenix-${runId}`,
       idempotencyKey: runId, deliver: false, timeout: 120,
@@ -200,6 +204,11 @@ try {
     assert(response.status === 'ok');
     step = 'native tool-free backend invocation';
     assert(fs.readFileSync(nativeProof, 'utf8') === 'done');
+    if (containerTurn) {
+      step = 'inference ran in an agent container';
+      const added = fs.readFileSync(launches, 'utf8').slice(launchesBefore.length).trim().split('\n');
+      assert(added.some(line => line && JSON.parse(line).agent === 'main'));
+    }
     step = 'exact inference reply';
     assert(response.result.payloads.length === 1 && response.result.payloads[0].text?.trim() === marker);
     step = 'expected inference model';

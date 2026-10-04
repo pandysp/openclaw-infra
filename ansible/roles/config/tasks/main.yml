@@ -524,11 +524,14 @@
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
 
-- name: Apply explicitly configured CLI backends
+# The only writer of agents.defaults.cliBackends. With containers enabled, the
+# launcher replaces just the claude-cli command; everything else is as configured.
+- name: Apply the CLI backends, with containers when enabled
   ansible.builtin.include_tasks: cli-backends.yml
   vars:
-    _desired_cli_backends: "{{ openclaw_cli_backends }}"
-  when: openclaw_cli_backends is defined
+    _desired_cli_backends: >-
+      {{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}
+         if openclaw_claude_cli_enabled | bool else {}, recursive=true) }}
 
 - name: Enforce agent auth-profiles — setup token present, api-key profile absent
   ansible.builtin.shell: |
