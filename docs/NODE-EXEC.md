@@ -34,7 +34,7 @@ accepted route; this is practical containment, not a hostile-agent boundary.
 Run from the VPS or from an agent's native Bash tool:
 
 ```bash
-ssh -o BatchMode=yes mac-air 'printf "mac-ssh-ok\n"'
+ssh -o BatchMode=yes <openclaw_claude_cli_mac_host> 'printf "mac-ssh-ok\n"'
 ```
 
 Use an explicit Mac working directory in remote commands. A VPS workspace path
