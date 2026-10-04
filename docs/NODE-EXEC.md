@@ -19,6 +19,10 @@ The managed C preparation includes SSH bootstrap in
 - authorizes only the dedicated public key, without replacing existing keys;
 - configures strict host-key checks, a fixed identity/user and batch mode.
 
+It contacts the Mac only when the VPS has no pin yet, so a sleeping Mac does
+not block provisioning. To bootstrap again, delete
+`~/.ssh/known_hosts_openclaw_mac_air` on the VPS while the Mac is awake.
+
 Private keys stay on the machines, never in Git. C binds only the selected
 SSH configuration, identity and host pins. Mac-to-VPS SSH remains an explicitly
 accepted route; this is practical containment, not a hostile-agent boundary.
