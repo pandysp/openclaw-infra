@@ -70,10 +70,11 @@ claude_secure_storage_dir: /home/ubuntu/.claude/shared/auth
 # "reset-2026-10-03", and reuse that ID when retrying.
 # claude_oauth_rotate_credentials: false
 
-# C remains opt-in until acceptance and rollout approval. Prepare assets without
-# changing the production backend with openclaw_claude_cli_activate=false.
+# C is opt-in. With enabled true, activate true runs agent turns in containers and
+# false runs them natively (also switching an active C back); assets install either way.
 openclaw_claude_cli_enabled: false
 openclaw_claude_cli_activate: true
+openclaw_claude_cli_active: "{{ openclaw_claude_cli_enabled | bool and openclaw_claude_cli_activate | bool }}"
 openclaw_claude_cli_command: /home/ubuntu/.openclaw/claude-cli-container
 openclaw_claude_cli_network: openclaw-claude-cli
 openclaw_claude_cli_bridge_interface: oc-claude0
