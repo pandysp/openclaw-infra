@@ -1,5 +1,6 @@
 """Cancellation regression tests with real child processes; Docker is the boundary."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import signal
@@ -140,6 +141,108 @@ class MacAccessTest(unittest.TestCase):
     def test_invalid_host_fails_loudly(self):
         with self.assertRaises(SystemExit):
             launcher.mac_access('bad host;', lambda path: None)
+
+
+class LauncherMacScopeTest(unittest.TestCase):
+    """Exercise main() through Docker's command boundary, not just mac_access()."""
+
+    def launch(self, agent, mac_host):
+        with tempfile.TemporaryDirectory(prefix='launcher-mac-') as directory:
+            home = Path(directory).resolve()
+            workspace = home / 'workspace'
+            workspace.mkdir()
+            auth = home / '.claude/shared/auth'
+            auth.mkdir(parents=True)
+            (auth / '.credentials.json').write_text('{}')
+            (home / '.claude/settings.json').write_text('{}')
+            native = home / 'native'
+            native.write_text('fixture')
+            ssh = home / '.ssh'
+            ssh.mkdir()
+            for name in ('config', 'id_ed25519_openclaw_mac_air', 'known_hosts_openclaw_mac_air'):
+                (ssh / name).write_text('fixture')
+            state = home / '.openclaw'
+            state.mkdir()
+            (state / 'openclaw.json').write_text(json.dumps({'agents': {
+                'list': [{'id': agent, 'workspace': str(workspace)}], 'defaults': {}}}))
+            entry = {'config': str(ssh / 'config'), 'workspace_key': None}
+            if mac_host is not None:
+                entry['mac_host'] = mac_host
+            runtime = state / 'runtime.json'
+            runtime.write_text(json.dumps({
+                'homes': str(home / 'homes'), 'ssh': {agent: entry},
+                'guard_table': 'fixture', 'guard_service': 'fixture.service',
+                'network': 'fixture', 'image': 'fixture', 'env_names': [],
+                'mcp_url': 'http://172.30.0.1:8787/openclaw/mcp',
+                'mcp_target': str(state / 'target.json'), 'invocations': str(state / 'invocations.jsonl'),
+            }))
+            with tempfile.TemporaryDirectory(prefix='openclaw-main-test-', dir='/tmp') as artifacts:
+                mcp = Path(artifacts) / 'mcp.json'
+                mcp.write_text(json.dumps({'mcpServers': {'openclaw': {
+                    'type': 'http', 'url': 'http://127.0.0.1:1234/mcp'}}}))
+                read_text, resolve = Path.read_text, Path.resolve
+                temporary_directory = tempfile.TemporaryDirectory
+
+                def read(path, *args, **kwargs):
+                    if str(path) == '/proc/self/stat':
+                        return '1 (fixture) ' + ' '.join(['0'] * 20)
+                    return read_text(path, *args, **kwargs)
+
+                def canonical(path, *args, **kwargs):
+                    # Linux /tmp is canonical; macOS /tmp is a symlink.
+                    if str(path).startswith('/tmp/openclaw-main-test-'):
+                        return path
+                    return resolve(path, *args, **kwargs)
+
+                def docker_output(command):
+                    if command[:3] == ['docker', 'network', 'inspect']:
+                        return json.dumps([{'Id': 'fixture', 'Driver': 'bridge', 'EnableIPv6': True,
+                            'Options': {'com.docker.network.bridge.name': 'fixture'}}])
+                    return '{"nftables": []}'
+
+                with patch.object(launcher, 'HOME', home), patch.object(launcher, 'SECURE_STORAGE', auth), \
+                     patch.object(launcher, 'NATIVE', native), \
+                     patch.dict(os.environ, {'OPENCLAW_MCP_AGENT_ID': agent,
+                         'OPENCLAW_MCP_SESSION_KEY': f'agent:{agent}:fixture'}, clear=True), \
+                     patch.object(Path, 'cwd', return_value=workspace), \
+                     patch.object(Path, 'read_text', read), patch.object(Path, 'resolve', canonical), \
+                     patch.object(launcher.tempfile, 'TemporaryDirectory', side_effect=lambda **kwargs:
+                         temporary_directory(prefix=kwargs['prefix'], dir=home)), \
+                     patch.object(launcher.socket, 'getaddrinfo', return_value=[(None, None, None, None, ('100.64.0.7', 22))]) as dns, \
+                     patch.object(launcher, 'output', side_effect=docker_output), \
+                     patch.object(launcher.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='active\n')), \
+                     patch.object(launcher, 'validate_guard'), \
+                     patch.object(launcher, 'create_guarded') as create, \
+                     patch.object(launcher, 'run_container', side_effect=lambda *args, prepare: prepare() or 0) as run:
+                    if mac_host is None:
+                        with self.assertRaisesRegex(KeyError, 'mac_host'):
+                            launcher.main(['--mcp-config', str(mcp)], runtime)
+                        create.assert_not_called()
+                        run.assert_not_called()
+                        return
+                    launcher.main(['--mcp-config', str(mcp)], runtime)
+                    command = create.call_args.args[0]
+                    bindings = [command[i + 1] for i, value in enumerate(command) if value == '--mount']
+                    mac_bindings = [value for value in bindings if 'openclaw_mac_air' in value]
+                    if mac_host:
+                        self.assertEqual(mac_bindings, [
+                            f'type=bind,source={ssh / name},target={ssh / name},readonly'
+                            for name in ('id_ed25519_openclaw_mac_air', 'known_hosts_openclaw_mac_air')])
+                        self.assertEqual(command[command.index('--add-host') + 1], 'mac-air:100.64.0.7')
+                        dns.assert_called_once()
+                    else:
+                        self.assertEqual(mac_bindings, [])
+                        self.assertNotIn('--add-host', command)
+                        dns.assert_not_called()
+
+    def test_main_gets_mac_key_pin_and_host_entry(self):
+        self.launch('main', 'mac-air')
+
+    def test_other_agent_gets_no_mac_mounts_lookup_or_host_entry(self):
+        self.launch('other', '')
+
+    def test_old_manifest_fails_before_docker_creation(self):
+        self.launch('other', None)
 
 
 if __name__ == '__main__':

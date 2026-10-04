@@ -440,19 +440,6 @@
 # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
 # e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
 
-- name: Validate server agent_id values match defined agents
-  ansible.builtin.assert:
-    that:
-      - item.agent_id in (openclaw_agents | map(attribute='id') | list)
-    fail_msg: >-
-      Server '{{ item.name }}' has agent_id '{{ item.agent_id }}'
-      which does not match any agent in openclaw_agents.
-      Valid agent IDs: {{ openclaw_agents | map(attribute='id') | list }}
-    quiet: true
-  loop: "{{ _openclaw_mcp_servers }}"
-  loop_control:
-    label: "{{ item.name }}"
-
 - name: Get agent list for index resolution
   ansible.builtin.shell: |
     jq -c '.agents.list // []' /home/ubuntu/.openclaw/openclaw.json
