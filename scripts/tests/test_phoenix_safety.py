@@ -921,7 +921,6 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.env['PROVISION_GITHUB_TOKEN'] = 'fixture-inherited-must-clear'
         values = {
             'claudeSetupToken': ('PROVISION_CLAUDE_SETUP_TOKEN', 'fixture-claude'),
-            'claudeOAuthCredentials': ('PROVISION_CLAUDE_OAUTH_CREDENTIALS', '{"accessToken":"fixture-oauth"}'),
             'telegramBotToken': ('PROVISION_TELEGRAM_BOT_TOKEN', 'fixture-telegram'),
             'telegramUserId': ('PROVISION_TELEGRAM_USER_ID', '12345'),
             'telegramGroupId': ('PROVISION_TELEGRAM_GROUP_ID', '-12345'),

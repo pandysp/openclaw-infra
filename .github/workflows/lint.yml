@@ -64,9 +64,6 @@ jobs:
       - name: Test scheduled automation reconciliation
         run: ./scripts/test-scheduled-automation.sh
 
-      - name: Install pinned test dependencies
-        run: npm ci --ignore-scripts
-
       - name: Safety regression tests
         run: python3 -m unittest discover -s scripts/tests -v
 

@@ -114,7 +114,6 @@ else
         exit 1
     }
     PROVISION_CLAUDE_SETUP_TOKEN=$(config_value claudeSetupToken)
-    PROVISION_CLAUDE_OAUTH_CREDENTIALS=$(config_value claudeOAuthCredentials)
     PROVISION_TELEGRAM_BOT_TOKEN=$(config_value telegramBotToken)
     PROVISION_TELEGRAM_USER_ID=$(config_value telegramUserId)
     PROVISION_TELEGRAM_GROUP_ID=$(config_value telegramGroupId)
@@ -130,7 +129,7 @@ else
     PROVISION_DISCORD_USER_ID=$(config_value discordUserId)
     PROVISION_WORKSPACE_DEPLOY_KEY=$(workspace_key main workspaceDeployPrivateKey)
     export PROVISION_GATEWAY_TOKEN PROVISION_TAILSCALE_HOSTNAME \
-        PROVISION_CLAUDE_SETUP_TOKEN PROVISION_CLAUDE_OAUTH_CREDENTIALS \
+        PROVISION_CLAUDE_SETUP_TOKEN \
         PROVISION_TELEGRAM_BOT_TOKEN PROVISION_TELEGRAM_USER_ID PROVISION_TELEGRAM_GROUP_ID \
         PROVISION_WORKSPACE_REPO_URL PROVISION_WORKSPACE_DEPLOY_KEY \
         PROVISION_XAI_API_KEY PROVISION_GROQ_API_KEY PROVISION_GEMINI_API_KEY PROVISION_GITHUB_TOKEN \
@@ -191,9 +190,8 @@ if [ -z "$gateway_token" ]; then
     echo "ERROR: gateway_token is empty."
     exit 1
 fi
-claude_oauth_credentials=$(read_env PROVISION_CLAUDE_OAUTH_CREDENTIALS)
-if [ -z "$claude_setup_token" ] && [ -z "$claude_oauth_credentials" ]; then
-    echo "ERROR: neither claudeSetupToken nor claudeOAuthCredentials is set. At least one is required."
+if [ -z "$claude_setup_token" ]; then
+    echo "ERROR: claudeSetupToken is empty. Create one with 'claude setup-token' and set it with 'pulumi config set claudeSetupToken --secret'."
     exit 1
 fi
 
@@ -230,8 +228,7 @@ fi
 
 # Status summary
 echo "  gateway_token: set"
-echo "  claude_setup_token: $([ -n "$claude_setup_token" ] && echo "set" || echo "skipped")"
-echo "  claude_oauth: $([ -n "$claude_oauth_credentials" ] && echo "set" || echo "skipped")"
+echo "  claude_setup_token: set"
 echo "  telegram: $([ -n "$(read_env PROVISION_TELEGRAM_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  discord: $([ -n "$(read_env PROVISION_DISCORD_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (main): $([ -n "$(read_env PROVISION_WORKSPACE_REPO_URL)" ] && echo "configured" || echo "skipped")"
@@ -262,7 +259,6 @@ import json, sys, os
 static = [
     ('gateway_token', 'PROVISION_GATEWAY_TOKEN'),
     ('claude_setup_token', 'PROVISION_CLAUDE_SETUP_TOKEN'),
-    ('claude_oauth_credentials', 'PROVISION_CLAUDE_OAUTH_CREDENTIALS'),
     ('telegram_bot_token', 'PROVISION_TELEGRAM_BOT_TOKEN'),
     ('telegram_user_id', 'PROVISION_TELEGRAM_USER_ID'),
     ('telegram_group_id', 'PROVISION_TELEGRAM_GROUP_ID'),

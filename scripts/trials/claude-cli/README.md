@@ -28,20 +28,6 @@ need explicit keyboard-user permission; a passing trial is not rollout approval.
 | `guard-slow-cleanup-trial.py` | Slow Docker/nft boundaries: systemd stop still restores the policy past the old 25-second deadline | no |
 | `bridge-guard-trial.py` | Same- and custom-bridge peers, metadata, user data and direct qmd are blocked; proxy and public web stay reachable | no |
 
-## Authentication cutover recovery
-
-`shared-auth-recovery-trial.py HELPER.cjs [STARTUP.service.j2]` runs on Linux with the checksum codec
-next to the supplied candidate helper. It uses an owned fake home and real
-user-systemd fixture service/timer. One validated pidfd kills the fixture driver;
-a recurring timer must still restore service access after an earlier firing,
-preserve login bytes and select the surviving storage. With the startup template,
-the persistent dependency must select working credentials with the timer stopped. The production gateway InvocationID must not
-change. This proves isolated cutover recovery, not provider-authorized OAuth refresh.
-
-The helper verifies that no native Claude process can still write the legacy
-login, so the trial refuses to run while one exists. Never bypass or mock that
-check here; stop the writer (with permission) instead.
-
 ## Evidence
 
 Each script writes a small JSON evidence file next to itself with booleans and

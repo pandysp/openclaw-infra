@@ -18,6 +18,8 @@ import uuid
 HOME = Path('/home/ubuntu')
 NATIVE = HOME / '.npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
 RUNTIME = HOME / '.openclaw/claude-cli-runtime.json'
+# The one login; containers bind its parent to share Claude's refresh locks.
+SECURE_STORAGE = HOME / '.claude/shared/auth'
 
 
 def atomic_json(path, value):
@@ -215,9 +217,8 @@ def main(args, runtime_path=RUNTIME):
             raise SystemExit('ERROR: Conflicting CLI container mounts')
         mounts[target] = value
 
-    secure_storage = Path(runtime['secure_storage'])
-    if secure_storage != HOME / '.claude/shared/auth' or not (secure_storage / '.credentials.json').is_file():
-        raise SystemExit('ERROR: CLI shared authentication is missing or mismatched; run claude-auth provisioning')
+    if not (SECURE_STORAGE / '.credentials.json').is_file():
+        raise SystemExit('ERROR: The shared Claude login is missing; run ./scripts/provision.sh --tags openclaw')
     container_home = Path(runtime['homes']) / agent
     for directory in [container_home, container_home / '.claude', container_home / '.claude/projects', container_home / '.claude/shared', container_home / '.ssh']:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -228,7 +229,7 @@ def main(args, runtime_path=RUNTIME):
     mount(workspace, writable=True)
     mount(project, writable=True)
     # Directory bind shares atomic credential replacements and both SDK locks.
-    mount(secure_storage.parent, writable=True)
+    mount(SECURE_STORAGE.parent, writable=True)
     mount(HOME / '.claude/settings.json')
     mount(HOME / '.ssh/id_ed25519_openclaw_mac_air')
     mount(HOME / '.ssh/known_hosts_openclaw_mac_air')
@@ -329,7 +330,7 @@ def main(args, runtime_path=RUNTIME):
                '--security-opt', 'no-new-privileges', '--stop-timeout', '10',
                '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=256m', '--tmpfs', '/run:rw,noexec,nosuid,size=1m',
                '--add-host', mac_host + ':' + mac,
-               '-e', 'HOME=/home/ubuntu', '-e', 'CLAUDE_SECURESTORAGE_CONFIG_DIR=' + str(secure_storage),
+               '-e', 'HOME=/home/ubuntu', '-e', 'CLAUDE_SECURESTORAGE_CONFIG_DIR=' + str(SECURE_STORAGE),
                '-e', 'GIT_TERMINAL_PROMPT=0',
                '-e', f'GIT_CONFIG_COUNT={3 if has_pat else 2}', '-e', 'GIT_CONFIG_KEY_0=user.name', '-e', 'GIT_CONFIG_VALUE_0=OpenClaw Agent',
                '-e', 'GIT_CONFIG_KEY_1=user.email', '-e', 'GIT_CONFIG_VALUE_1=openclaw@localhost']
