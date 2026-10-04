@@ -30,10 +30,12 @@ not block provisioning. To bootstrap again, delete
 
 Withholding the key is the whole boundary: a container without access gets no
 credential, but nothing blocks the network path. After taking Mac access away
-from an agent, rotate the key so a copy it kept stops working: remove the
-`openclaw-mac-air` line from the Mac account's `~/.ssh/authorized_keys`, delete
-`~/.ssh/id_ed25519_openclaw_mac_air*` and `~/.ssh/known_hosts_openclaw_mac_air`
-on the VPS, then run `./scripts/provision.sh --tags claude-cli` with the Mac awake.
+from an agent, rotate the key so a copy it kept stops working: remove the line
+holding the key from the VPS's `~/.ssh/id_ed25519_openclaw_mac_air.pub` from the
+Mac account's `~/.ssh/authorized_keys` (match the key itself, not its comment),
+delete `~/.ssh/id_ed25519_openclaw_mac_air*` and
+`~/.ssh/known_hosts_openclaw_mac_air` on the VPS, then run
+`./scripts/provision.sh --tags claude-cli` with the Mac awake.
 
 Private keys stay on the machines, never in Git. C binds only the selected
 SSH configuration, identity and host pins. Mac-to-VPS SSH remains an explicitly

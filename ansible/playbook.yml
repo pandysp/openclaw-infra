@@ -161,6 +161,25 @@
       when: openclaw_mcp_servers is not defined
       tags: [always]
 
+    - name: Validate supported MCP server definitions before provisioning
+      ansible.builtin.assert:
+        that:
+          - (_openclaw_mcp_servers | type_debug) == 'list'
+          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github', 'qmd']) | list | length) == (_openclaw_mcp_servers | length)
+          - (_openclaw_mcp_servers | selectattr('name', 'defined') | list | length) == (_openclaw_mcp_servers | length)
+          - (_openclaw_mcp_servers | selectattr('agent_id', 'defined') | selectattr('agent_id', 'in', openclaw_agents | map(attribute='id') | list) | list | length) == (_openclaw_mcp_servers | length)
+          - >-
+            (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github')
+             | selectattr('token_var', 'defined') | map(attribute='token_var')
+             | select('string') | reject('equalto', '') | list | length)
+            == (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | list | length)
+        fail_msg: >-
+          MCP servers must use type github or qmd, have a name, and have an
+          agent_id from openclaw_agents. GitHub definitions also need a nonempty
+          string token_var. Remove unsupported server types and
+          update manual openclaw_mcp_servers overrides before provisioning.
+      tags: [always]
+
     # Workspaces: one per agent with mechanical naming
     - name: Initialize workspace metadata
       ansible.builtin.set_fact:

@@ -28,6 +28,30 @@ need explicit keyboard-user permission; a passing trial is not rollout approval.
 | `guard-slow-cleanup-trial.py` | Slow Docker/nft boundaries: systemd stop still restores the policy past the old 25-second deadline | no |
 | `bridge-guard-trial.py` | Same- and custom-bridge peers, metadata, user data and direct qmd are blocked; proxy and public web stay reachable | no |
 
+## Mac access expectations
+
+The gateway trial checks the runtime's permitted agents against an explicit
+expectation. For main-only Mac access:
+
+```bash
+python3 restricted-gateway-trial.py --expect-mac-agent main
+# To run only main's checks:
+python3 restricted-gateway-trial.py --expect-mac-agent main main
+```
+
+Repeat `--expect-mac-agent` for additional permitted agents. Omit it only when
+Mac access is disabled for everyone. An unexpected grant, or missing access
+for an expected agent, fails before any gateway turn. Denied agents are checked directly for
+key/pin content, SSH configuration and Mac host entries; empty Docker mountpoint
+files and unrelated host entries are not credentials. When no Mac hostname is
+known, the host-entry check is listed under `unverified_checks`, not claimed as
+passing.
+
+Passing per-agent results do not prove cleanup finished. Require the trial to
+exit successfully. It attempts independent cleanup even after a failure and
+reports all cleanup errors together; a timed-out Git push still attempts to
+delete its throwaway branch.
+
 ## Evidence
 
 Each script writes a small JSON evidence file next to itself with booleans and

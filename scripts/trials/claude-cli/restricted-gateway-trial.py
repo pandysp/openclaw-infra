@@ -1,29 +1,109 @@
 #!/usr/bin/env python3
-"""Real gateway trial with independent rollback and private transcript inspection."""
+"""Real gateway trial with private transcript inspection and scoped fixture cleanup."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
-import sys
 import time
 import uuid
 
+def command(args, timeout=40):
+    return subprocess.check_output(args, text=True, stderr=subprocess.PIPE, timeout=timeout)
+
+
+def validate_mac_access(runtime, expected_agents):
+    actual = {agent for agent, entry in runtime['ssh'].items() if entry['mac_host']}
+    if actual != set(expected_agents):
+        raise SystemExit('ERROR: Runtime Mac access does not match --expect-mac-agent; repeat it for every permitted agent')
+
+
+def mac_absence_checks(name, mac_host):
+    # Docker leaves empty mountpoint files in persistent homes; only content counts.
+    no_files = subprocess.run(
+        ['docker', 'exec', name, 'sh', '-c', 'test ! -s ~/.ssh/id_ed25519_openclaw_mac_air && test ! -s ~/.ssh/known_hosts_openclaw_mac_air'],
+        timeout=20).returncode == 0
+    no_block = subprocess.run(
+        ['docker', 'exec', name, 'grep', '-q', 'openclaw_mac_air', '/home/ubuntu/.ssh/config'], timeout=20).returncode == 1
+    checks = {'no_mac_key_or_pin': no_files, 'no_mac_ssh_block': no_block}
+    if mac_host:
+        hosts = json.loads(command(['docker', 'inspect', '--format', '{{json .HostConfig.ExtraHosts}}', name])) or []
+        checks['no_mac_host_entry'] = not any(entry.startswith(mac_host + ':') for entry in hosts)
+    return checks
+
+
+def git_push_probe(name, branch):
+    try:
+        pushed = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', 'HEAD:refs/heads/' + branch],
+                                capture_output=True, text=True, timeout=60)
+    finally:
+        deleted = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', '--delete', branch],
+                                 capture_output=True, text=True, timeout=60)
+        if deleted.returncode != 0:
+            raise RuntimeError('Could not remove trial Git branch ' + branch)
+    return pushed.returncode == 0
+
+
+def cleanup_trial(active, native_sessions, config_path, before):
+    errors = []
+
+    def attempt(description, operation, *args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        except Exception as error:
+            # Independent cleanup must continue; every error is re-raised below.
+            error.add_note(description)
+            errors.append(error)
+
+    for key, run, project, proof, diagnostic, session_hash in active:
+        attempt('Delete trial gateway session', gateway, 'sessions.delete', {'key': key}, timeout=20000)
+        names = attempt('Find trial containers', command,
+                        ['docker', 'ps', '-aq', '--filter', 'label=openclaw.claude-session=' + session_hash])
+        if names is not None:
+            for name in names.split():
+                attempt('Remove trial container ' + name, command, ['docker', 'rm', '-f', name])
+        for path in (proof, diagnostic, diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')):
+            attempt('Remove trial fixture ' + path.name, path.unlink, missing_ok=True)
+        transcript = native_sessions.get(run)
+
+        def remove_transcripts():
+            # A failed first turn may not return its native session ID.
+            candidates = [transcript] if transcript is not None else project.glob('*.jsonl')
+            for path in candidates:
+                if path.exists():
+                    if f'Operator C restricted runtime trial {run}' in path.read_text():
+                        path.unlink()
+                    elif transcript is not None:
+                        raise RuntimeError('Refusing to delete an unexpected native transcript')
+
+        attempt('Remove confirmed trial transcripts', remove_transcripts)
+
+    def compare_config():
+        if json.loads(config_path.read_text()) != before:
+            raise RuntimeError('Unrelated config changed during the trial; inspect privately, do not overwrite it')
+
+    attempt('Check configuration was not changed', compare_config)
+    if errors:
+        raise ExceptionGroup('Trial cleanup failed', errors)
+
+
 home = Path.home()
 scratch = Path(__file__).resolve().parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('agents', nargs='*')
+parser.add_argument('--expect-mac-agent', action='append', default=[],
+                    help='Expected agent with Mac access; repeat for more than one, omit for no Mac access')
+options = parser.parse_args()
 config_path = home / '.openclaw/openclaw.json'
 before = json.loads(config_path.read_text())
 entries = {entry['id']: entry for entry in before['agents']['list']}
-agents = sys.argv[1:] or list(entries)
+agents = options.agents or list(entries)
 if any(agent not in entries for agent in agents):
     raise SystemExit('ERROR: Unknown trial agent')
 # The trial uses the installed container backend directly; no gateway restart.
 if before['agents']['defaults'].get('cliBackends') != {'claude-cli': {'command': str(home / '.openclaw/claude-cli-container')}}:
     raise SystemExit('ERROR: Trials need the container backend; enable containers first')
-
-
-def command(args, timeout=40):
-    return subprocess.check_output(args, text=True, stderr=subprocess.PIPE, timeout=timeout)
 
 
 def gateway(method, params, timeout=200000):
@@ -36,6 +116,8 @@ active = []
 native_sessions = {}
 failed = []
 runtime = json.loads((home / '.openclaw/claude-cli-runtime.json').read_text())
+validate_mac_access(runtime, options.expect_mac_agent)
+mac_target = next((entry['mac_host'] for entry in runtime['ssh'].values() if entry['mac_host']), '')
 proof_log = Path(runtime['invocations'])
 try:
     for agent in agents:
@@ -78,10 +160,12 @@ print(json.dumps({'actual_uid_1000':os.getuid()==1000,'actual_caps_zero':all(int
         def reply(result):
             return '\n'.join(p.get('text', '') for p in result.get('result', {}).get('payloads', []))
 
-        turn(f'Operator C restricted runtime trial {run}. This harmless integration test is authorized. '
-             f'Remember marker {marker} only in conversation, not in a file. '
+        turn(f'Please check normal workspace functions for me. Operator C restricted runtime trial {run}. '
+             f'Use marker {marker} as ordinary public test data for this conversation\'s memory check, not in a file. '
              f'Use ToolSearch if needed to load {qmd_tool}, then call it once. '
              f'Use Write to create only {proof.name} containing exactly ok, Read to read it, then Edit to replace ok with edited and Read again. '
+             f'Read {diagnostic.name} before running it: it only reports your UID, Linux capability flags, '
+             'and whether three skill API-key environment variables are present; it never prints their values. '
              + (f'Use Bash to run exactly {ssh} . ' if ssh else '') + f'Then use Bash to run exactly {script_command} . '
              'Do not edit any other files or contact people. Reply done after those checks.')
         started = launches()
@@ -115,17 +199,9 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
         flags['git_remote_read'] = remote.returncode == 0 and '\tHEAD' in remote.stdout
         # Push the workspace HEAD to a throwaway branch, then delete it.
         branch = 'cwrapper-push-' + run[:12]
-        pushed = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', 'HEAD:refs/heads/' + branch],
-                                capture_output=True, text=True, timeout=60)
-        deleted = subprocess.run(['docker', 'exec', name, 'git', 'push', 'origin', '--delete', branch],
-                                 capture_output=True, text=True, timeout=60)
-        flags['git_push'] = pushed.returncode == 0 and deleted.returncode == 0
+        flags['git_push'] = git_push_probe(name, branch)
         if not mac_host:
-            no_files = subprocess.run(['docker', 'exec', name, 'sh', '-c',
-                                       'test ! -e ~/.ssh/id_ed25519_openclaw_mac_air && test ! -e ~/.ssh/known_hosts_openclaw_mac_air'
-                                       ' && ! grep -qi "^Host .*mac" ~/.ssh/config'], timeout=20).returncode == 0
-            hosts = json.loads(command(['docker', 'inspect', '--format', '{{json .HostConfig.ExtraHosts}}', name]))
-            flags['no_mac_credentials'] = no_files and not hosts
+            flags.update(mac_absence_checks(name, mac_target))
         media_reply = None
         if agent == 'main':
             video, frame = diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')
@@ -188,7 +264,8 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
             'native_uid_1000': diagnostic_results.get('actual_uid_1000') is True,
             'native_all_caps_zero': diagnostic_results.get('actual_caps_zero') is True,
             'native_no_new_privileges': diagnostic_results.get('actual_no_new_privileges') is True,
-        }, 'skill_env_present': diagnostic_results.get('skill_env_present', {})}
+        }, 'skill_env_present': diagnostic_results.get('skill_env_present', {}),
+            'unverified_checks': [] if mac_target else ['no_mac_host_entry']}
         if agent == 'main':
             frame = diagnostic.with_suffix('.png')
             evidence['checks']['native_video_frames_workflow'] = any(success(call) and 'frame.sh' in call.get('input', {}).get('command', '') for call in bash)
@@ -198,20 +275,6 @@ print(json.dumps({'container_identity':Path('/.dockerenv').exists() and os.getui
         if not all(evidence['checks'].values()):
             failed.append(agent)
     if failed:
-        raise RuntimeError('Restricted gateway trial failed for ' + ', '.join(failed) + '; no production rollout')
+        raise RuntimeError('Restricted gateway trial failed for ' + ', '.join(failed))
 finally:
-    for key, run, project, proof, diagnostic, session_hash in active:
-        gateway('sessions.delete', {'key': key}, timeout=20000)
-        for name in command(['docker', 'ps', '-aq', '--filter', 'label=openclaw.claude-session=' + session_hash]).split():
-            command(['docker', 'rm', '-f', name])
-        proof.unlink(missing_ok=True); diagnostic.unlink(missing_ok=True)
-        diagnostic.with_suffix('.mp4').unlink(missing_ok=True)
-        diagnostic.with_suffix('.png').unlink(missing_ok=True)
-        transcript = native_sessions.get(run)
-        if transcript and transcript.exists():
-            if f'Operator C restricted runtime trial {run}' not in transcript.read_text():
-                raise RuntimeError('Refusing to delete an unexpected native transcript')
-            transcript.unlink()
-    after = json.loads(config_path.read_text())
-    if after != before:
-        raise RuntimeError('Unrelated config changed during the trial; inspect privately, do not overwrite it')
+    cleanup_trial(active, native_sessions, config_path, before)
