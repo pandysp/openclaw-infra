@@ -1,0 +1,22 @@
+Host {{ openclaw_claude_cli_mac_host }}
+    User {{ openclaw_claude_cli_mac_user }}
+    IdentityFile ~/.ssh/id_ed25519_openclaw_mac_air
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.ssh/known_hosts_openclaw_mac_air
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ForwardAgent no
+    ConnectTimeout 10
+{% if item.repo_url | length > 0 %}
+
+Host github.com {{ item.ssh_alias }}
+    HostName github.com
+    User git
+    IdentityFile /run/openclaw-ssh/workspace-key
+    IdentitiesOnly yes
+    UserKnownHostsFile /run/openclaw-ssh/github-known-hosts
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ForwardAgent no
+    ConnectTimeout 15
+{% endif %}

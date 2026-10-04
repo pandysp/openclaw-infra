@@ -1,0 +1,40 @@
+---
+# Provider config powers OpenClaw tools; native skill scripts need process env.
+# Keep secrets outside C's writable auth bind and forward only its approved keys.
+- name: Create the host-only native skill environment directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/openclaw
+    state: directory
+    mode: "0700"
+
+- name: Write configured Groq and Gemini credentials for native skill scripts
+  ansible.builtin.copy:
+    dest: /home/ubuntu/.config/openclaw/claude-skills.env
+    content: |
+      GROQ_API_KEY={{ groq_api_key | default('') | to_json }}
+      GEMINI_API_KEY={{ gemini_api_key | default('') | to_json }}
+    mode: "0600"
+  no_log: true
+  notify: restart openclaw-gateway
+
+- name: Create the gateway environment drop-in directory
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d
+    state: directory
+    mode: "0755"
+
+- name: Make approved skill credentials available to native Claude and C children
+  ansible.builtin.copy:
+    dest: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/claude-skills.conf
+    content: "[Service]\nEnvironmentFile=/home/ubuntu/.config/openclaw/claude-skills.env\n"
+    mode: "0600"
+  register: claude_skill_dropin
+  notify: restart openclaw-gateway
+
+- name: Reload systemd after skill environment drop-in changes
+  ansible.builtin.systemd:
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: claude_skill_dropin.changed

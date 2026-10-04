@@ -1,0 +1,20 @@
+#!/usr/bin/python3
+"""Scoped trial fault: an attach client that cannot finish cleanup in five seconds."""
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import time
+
+marker=pathlib.Path(__file__).resolve().parents[1]/'cancel-cleanup-started'
+if sys.argv[1:3]==['start','--attach']:
+    # Only the cwrapper-cancel-* dispatcher installs this PATH. Keep the real
+    # Docker client's normal signals; delay the wrapper's cleanup explicitly.
+    signal.signal(signal.SIGTERM,lambda *_:marker.touch())
+    client=subprocess.Popen(['/usr/bin/docker',*sys.argv[1:]])
+    result=client.wait()
+    marker.touch()
+    time.sleep(12)
+    raise SystemExit(result)
+os.execv('/usr/bin/docker',['/usr/bin/docker',*sys.argv[1:]])

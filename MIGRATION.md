@@ -13,7 +13,7 @@ claude-cli turns, which Claude Code compacts itself
 ### What happens automatically on your next playbook run
 
 - the MCP adapter config is rewritten without the `claude*`, `codex*` and `pi*` servers
-- `mcp-auth-proxy` is redeployed with only the GitHub route
+- the obsolete provider routes stay removed; the GitHub proxy remains, and C preparation adds a fixed-target OpenClaw MCP relay (not a general-purpose destination proxy)
 
 ### What stays on your host (manual cleanup)
 
@@ -29,7 +29,7 @@ rm -rf ~/.openclaw/claude-code-mcp-build ~/.openclaw/claude-code-plugins \
        ~/.openclaw/codex-mcp-build ~/.openclaw/pi-mcp-build ~/.openclaw/codex-config.toml
 rm -f ~/.openclaw/anthropic-auth-token
 rm -rf ~/.codex            # Codex login plus the CLI's own state (logs, memories, skills)
-rm -rf ~/.claude/plugins   # plugin marketplaces cloned for the old plugin install; no plugin is enabled
+rm -rf ~/.claude/plugins   # old plugin marketplaces; Claude Code may recreate this directory
 npm uninstall -g @openai/codex
 
 # OpenClaw compaction keys (no effect on claude-cli turns)
@@ -39,6 +39,11 @@ openclaw config unset agents.defaults.compaction
 sudo ufw status numbered | grep 8787    # find the codex-proxy-net subnet rule
 sudo ufw delete <N>
 ```
+
+Claude Code automatically recreates `~/.claude/plugins/synced/`, sometimes
+with an empty sync marker. This is harmless bookkeeping, not a restored
+plugin installation. Do not repeat cleanup just because the directory
+reappears.
 
 Also delete the `CODEX_AUTH_JSON` secret from the repository's GitHub Actions
 settings if you set it for staging.

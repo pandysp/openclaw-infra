@@ -1,4 +1,7 @@
 ---
+- name: Provide configured credentials to native skill scripts
+  ansible.builtin.include_tasks: skill-environment.yml
+
 - name: Write secrets and config to temp files
   ansible.builtin.copy:
     content: "{{ item.content }}"
@@ -296,9 +299,6 @@
         check_set_json tools.alsoAllow '["group:plugins"]'
         {% endif %}
 
-        {% if openclaw_cli_backends is defined %}
-        check_set_json agents.defaults.cliBackends '{{ openclaw_cli_backends | to_json }}'
-        {% endif %}
 
         # Plugin loading allowlist — only trusted plugins can load into gateway
         # Includes bundled plugins (device-pair, memory-core, etc.) because
@@ -523,6 +523,12 @@
         - /tmp/ansible-groq-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
+
+- name: Apply explicitly configured CLI backends
+  ansible.builtin.include_tasks: cli-backends.yml
+  vars:
+    _desired_cli_backends: "{{ openclaw_cli_backends }}"
+  when: openclaw_cli_backends is defined
 
 - name: Enforce agent auth-profiles — setup token present, api-key profile absent
   ansible.builtin.shell: |

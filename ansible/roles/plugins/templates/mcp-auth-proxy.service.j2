@@ -12,6 +12,9 @@ Environment=NODE_ENV=production
 Environment=CODEX_PROXY_LISTEN={{ codex_proxy_gateway_ip }}
 Environment=CODEX_PROXY_PORT={{ openclaw_mcp_adapter.codex_proxy_port }}
 Environment=GITHUB_TOKENS_DIR=/home/ubuntu/.openclaw/github-tokens
+{% if openclaw_claude_cli_enabled | bool %}
+Environment=OPENCLAW_CLI_MCP_TARGET={{ openclaw_claude_cli_mcp_target }}
+{% endif %}
 
 [Install]
 WantedBy=default.target

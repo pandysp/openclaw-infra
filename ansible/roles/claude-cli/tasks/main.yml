@@ -1,0 +1,225 @@
+---
+- name: Configure the existing shared proxy for container CLI use
+  ansible.builtin.include_role:
+    name: plugins
+    tasks_from: mcp-auth-proxy.yml
+
+- name: Validate container CLI configuration
+  ansible.builtin.assert:
+    that:
+      - codex_proxy_gateway_ip is defined
+      - openclaw_mcp_adapter.codex_proxy_port | int > 0
+      - openclaw_claude_cli_network is match('^[a-zA-Z0-9_-]+$')
+      - openclaw_claude_cli_bridge_interface is match('^[a-zA-Z0-9_-]{1,15}$')
+      - openclaw_claude_cli_bridge_interface != 'docker0'
+    fail_msg: Container CLI requires the existing Git/MCP proxy and a dedicated bridge.
+
+- name: Read the current backend using the shared configuration task
+  ansible.builtin.include_role:
+    name: config
+    tasks_from: cli-backend-state.yml
+
+- name: Ensure container CLI support directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - /home/ubuntu/.openclaw/claude-cli-build
+    - /home/ubuntu/.openclaw/claude-cli-homes
+    - /home/ubuntu/.openclaw/claude-cli-ssh
+    - /home/ubuntu/.ssh
+
+- name: Bootstrap the approved Mac SSH identity and host pin
+  ansible.builtin.include_tasks: mac-ssh.yml
+
+- name: Install per-agent SSH configuration
+  ansible.builtin.template:
+    src: ssh-config.j2
+    dest: "/home/ubuntu/.openclaw/claude-cli-ssh/{{ item.agent_id }}.conf"
+    mode: "0600"
+  loop: "{{ _openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  register: claude_cli_ssh_configs
+
+- name: Install container CLI image sources
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/home/ubuntu/.openclaw/claude-cli-build/{{ item }}"
+    mode: "0644"
+  loop:
+    - Dockerfile
+    - claude-cli-ready.py
+
+- name: Inspect the existing container CLI image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, openclaw-claude-cli:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
+  register: claude_cli_image_before
+  changed_when: false
+  # Only a missing image may proceed to the first build; daemon and
+  # permission errors must stop here.
+  failed_when: >-
+    claude_cli_image_before.rc != 0 and not (claude_cli_image_before.rc == 1
+    and 'No such image: openclaw-claude-cli:latest' in claude_cli_image_before.stderr)
+
+- name: Build container CLI image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - build
+      # Local-only image: timestamped attestations change its ID on cache hits.
+      - --provenance=false
+      - --tag
+      - openclaw-claude-cli:latest
+      - /home/ubuntu/.openclaw/claude-cli-build
+  changed_when: false
+
+- name: Inspect the built container CLI image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, openclaw-claude-cli:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
+  register: claude_cli_image_after
+  changed_when: claude_cli_image_before.rc != 0 or claude_cli_image_before.stdout != claude_cli_image_after.stdout
+
+- name: Create dedicated dual-stack container CLI network
+  community.docker.docker_network:
+    name: "{{ openclaw_claude_cli_network }}"
+    driver: bridge
+    enable_ipv6: true
+    driver_options:
+      com.docker.network.bridge.name: "{{ openclaw_claude_cli_bridge_interface }}"
+    ipam_config:
+      - subnet: "{{ openclaw_claude_cli_ipv4_subnet }}"
+      - subnet: "{{ openclaw_claude_cli_ipv6_subnet }}"
+
+- name: Derive container CLI proxy and network metadata
+  ansible.builtin.set_fact:
+    claude_cli_bridge_interface: "{{ openclaw_claude_cli_bridge_interface }}"
+    claude_cli_http_endpoints:
+      - address: "{{ codex_proxy_gateway_ip }}"
+        port: "{{ openclaw_mcp_adapter.codex_proxy_port | int }}"
+
+- name: Admit only the intended proxy traffic from the CLI bridge
+  become: true
+  community.general.ufw:
+    rule: allow
+    interface_in: "{{ openclaw_claude_cli_bridge_interface }}"
+    from_ip: "{{ openclaw_claude_cli_ipv4_subnet }}"
+    to_ip: "{{ codex_proxy_gateway_ip }}"
+    port: "{{ openclaw_mcp_adapter.codex_proxy_port }}"
+    proto: tcp
+    comment: Claude CLI MCP and Git proxy
+
+- name: Install nftables
+  become: true
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Ensure network policy directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/openclaw
+    state: directory
+    mode: "0755"
+
+- name: Ensure guard program directory exists
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/lib/openclaw
+    state: directory
+    mode: "0755"
+
+- name: Install container CLI guard supervisor
+  become: true
+  ansible.builtin.copy:
+    src: claude-cli-guard.py
+    dest: /usr/local/lib/openclaw/claude-cli-guard.py
+    mode: "0755"
+  register: claude_cli_guard_program
+
+- name: Install source-bridge-only container CLI network guard
+  become: true
+  ansible.builtin.template:
+    src: network-guard.nft.j2
+    dest: /etc/openclaw/claude-cli-network.nft
+    mode: "0644"
+    validate: /usr/sbin/nft --check --file %s
+  register: claude_cli_network_guard
+
+- name: Install container CLI network guard service
+  become: true
+  ansible.builtin.copy:
+    src: network-guard.service
+    dest: /etc/systemd/system/openclaw-claude-cli-network.service
+    mode: "0644"
+  register: claude_cli_network_unit
+
+- name: Apply container CLI network guard before activation
+  become: true
+  ansible.builtin.systemd:
+    name: openclaw-claude-cli-network
+    enabled: true
+    daemon_reload: "{{ claude_cli_network_unit.changed }}"
+    state: "{{ 'restarted' if claude_cli_network_guard.changed or claude_cli_network_unit.changed or claude_cli_guard_program.changed else 'started' }}"
+
+- name: Install host-side container CLI launcher
+  ansible.builtin.copy:
+    src: claude-cli-container.py
+    dest: "{{ openclaw_claude_cli_command }}"
+    mode: "0755"
+  register: claude_cli_launcher
+
+- name: Initialize per-agent SSH metadata
+  ansible.builtin.set_fact:
+    _claude_cli_ssh: {}
+
+- name: Derive per-agent SSH metadata from workspace definitions
+  ansible.builtin.set_fact:
+    _claude_cli_ssh: >-
+      {{ _claude_cli_ssh | combine({item.agent_id: {
+        'config': '/home/ubuntu/.openclaw/claude-cli-ssh/' ~ item.agent_id ~ '.conf',
+        'workspace_key': '/home/ubuntu/.ssh/' ~ item.key_file if item.repo_url | length > 0 else none
+      }}) }}
+  loop: "{{ _openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+
+- name: Install container CLI runtime manifest
+  ansible.builtin.copy:
+    content: "{{ _runtime | to_nice_json }}\n"
+    dest: /home/ubuntu/.openclaw/claude-cli-runtime.json
+    mode: "0600"
+  vars:
+    _runtime:
+      network: "{{ openclaw_claude_cli_network }}"
+      image: openclaw-claude-cli:latest
+      homes: /home/ubuntu/.openclaw/claude-cli-homes
+      secure_storage: "{{ claude_secure_storage_dir }}"
+      mcp_url: "http://{{ codex_proxy_gateway_ip }}:{{ openclaw_mcp_adapter.codex_proxy_port }}/openclaw/mcp"
+      mcp_target: "{{ openclaw_claude_cli_mcp_target }}"
+      guard_table: openclaw_claude_cli
+      guard_service: openclaw-claude-cli-network.service
+      mac_host: "{{ openclaw_claude_cli_mac_host }}"
+      ssh: "{{ _claude_cli_ssh }}"
+      env_names: "{{ openclaw_claude_cli_skill_env }}"
+      invocations: /home/ubuntu/.openclaw/claude-cli-invocations.jsonl
+  register: claude_cli_manifest
+
+- name: Queue a gateway restart only for changed assets used by C
+  ansible.builtin.set_fact:
+    _claude_cli_restart_requested: true
+  changed_when: >-
+    claude_cli_launcher.changed or claude_cli_manifest.changed
+    or claude_cli_image_after.changed or claude_cli_ssh_configs.changed
+    or claude_cli_mac_pin.changed or claude_cli_mac_key.changed
+  when: claude_cli_backend_in_use.stdout == 'yes'
+  notify: restart openclaw-gateway
+
+- name: Activate C using the shared backend configuration task
+  ansible.builtin.include_role:
+    name: config
+    tasks_from: cli-backends.yml
+  vars:
+    _desired_cli_backends: "{{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}, recursive=true) }}"
+  when: openclaw_claude_cli_activate | bool

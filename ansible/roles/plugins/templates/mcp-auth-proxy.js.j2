@@ -5,9 +5,10 @@
 // Routes:
 //   /health         → health check
 //   /github-<id>/*  → github.com (per-agent PAT injection for git clone/push)
+//   /openclaw/mcp   → authenticated OpenClaw loopback MCP (when configured)
 //
 // Zero npm dependencies. Listens on the codex-proxy-net gateway IP; ufw admits
-// only the default Docker bridge (sandbox containers) to the port. Each
+// the default sandbox bridge and, when provisioned, the dedicated CLI bridge. Each
 // workspace's .git-proxy-config rewrites github.com URLs to its /github-<id>/ route.
 //
 // Managed by Ansible — do not edit on the server.
@@ -39,6 +40,8 @@ const GITHUB_TOKENS_DIR = process.env.GITHUB_TOKENS_DIR || '/home/ubuntu/.opencl
 const GITHUB_OVERALL_TIMEOUT_MS = 600000; // 10 min for large git pushes
 const githubTokenCache = new Map(); // agent-id → { token, mtime }
 
+// Returns null only when the agent has no token. Read failures throw, so a
+// broken token store is never reported as an unknown agent.
 function getGitHubToken(agentId) {
   const filePath = path.join(GITHUB_TOKENS_DIR, agentId);
   try {
@@ -51,17 +54,20 @@ function getGitHubToken(agentId) {
     log('info', 'Loaded GitHub token', { agent: agentId });
     return token;
   } catch (err) {
-    if (err.code !== 'ENOENT') log('error', 'Failed to read GitHub token', { agent: agentId, error: err.message });
-    return null;
+    if (err.code === 'ENOENT') return null;
+    log('error', 'Failed to read GitHub token', { agent: agentId, code: err.code || 'unknown' });
+    throw err;
   }
 }
 
+// A missing directory means no PATs are configured; other errors throw.
 function getGitHubAgents() {
   try {
     return fs.readdirSync(GITHUB_TOKENS_DIR).filter(f => !f.startsWith('.'));
   } catch (err) {
-    if (err.code !== 'ENOENT') log('warn', 'Cannot read GitHub tokens directory', { error: err.message });
-    return [];
+    if (err.code === 'ENOENT') return [];
+    log('error', 'Cannot read GitHub tokens directory', { code: err.code || 'unknown' });
+    throw err;
   }
 }
 
@@ -91,7 +97,20 @@ function proxyGitHubRequest(clientReq, clientRes) {
 
   const agentId = match[1];
   const upstreamPath = match[2] || '/';
-  const token = getGitHubToken(agentId);
+  // Dot names are the token directory itself, its parent or hidden files.
+  if (agentId.startsWith('.')) {
+    clientRes.writeHead(400, { 'Content-Type': 'application/json' });
+    clientRes.end(JSON.stringify({ error: 'bad_request', detail: 'Invalid agent id' }));
+    return;
+  }
+  let token;
+  try {
+    token = getGitHubToken(agentId);
+  } catch {
+    clientRes.writeHead(500, { 'Content-Type': 'application/json' });
+    clientRes.end(JSON.stringify({ error: 'token_unavailable', detail: 'GitHub token could not be read' }));
+    return;
+  }
   if (!token) {
     clientRes.writeHead(404, { 'Content-Type': 'application/json' });
     clientRes.end(JSON.stringify({ error: 'no_token', detail: `No GitHub token for agent '${agentId}'` }));
@@ -124,10 +143,10 @@ function proxyGitHubRequest(clientReq, clientRes) {
 
   upReq.on('timeout', () => upReq.destroy(new Error('GitHub connect timeout')));
   upReq.on('socket', (socket) => {
-    socket.once('connect', () => {
-      upReq.setTimeout(RESPONSE_TIMEOUT_MS, () =>
-        upReq.destroy(new Error('GitHub response timeout')));
-    });
+    const connected = () => upReq.setTimeout(RESPONSE_TIMEOUT_MS, () =>
+      upReq.destroy(new Error('GitHub response timeout')));
+    if (socket.connecting) socket.once('connect', connected);
+    else connected();
   });
   upReq.on('error', (err) => {
     log('error', 'GitHub upstream error', { error: err.message, path: upstreamPath, agent: agentId });
@@ -154,17 +173,80 @@ function proxyGitHubRequest(clientReq, clientRes) {
   clientRes.on('close', () => clearTimeout(overallTimer));
 }
 
+// --- OpenClaw MCP relay (fixed path, host-controlled target, unchanged auth) ---
+
+const OPENCLAW_MCP_TARGET = process.env.OPENCLAW_CLI_MCP_TARGET;
+
+function proxyOpenClawRequest(clientReq, clientRes) {
+  let port;
+  try {
+    const target = JSON.parse(fs.readFileSync(OPENCLAW_MCP_TARGET, 'utf8'));
+    port = target.port;
+    if (Object.keys(target).length !== 1 || !Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Error('Invalid MCP target');
+  } catch (err) {
+    log('error', 'OpenClaw MCP target unavailable', { code: err.code || 'invalid_target' });
+    clientRes.writeHead(err.code === 'ENOENT' ? 503 : 500, { 'Content-Type': 'application/json' });
+    clientRes.end(JSON.stringify({ error: 'mcp_target_unavailable' }));
+    return;
+  }
+
+  const headers = Object.assign({}, clientReq.headers, { host: `127.0.0.1:${port}` });
+  const upReq = http.request({
+    hostname: '127.0.0.1', port, path: '/mcp', method: clientReq.method,
+    headers, timeout: CONNECT_TIMEOUT_MS,
+  }, (upRes) => {
+    clientRes.writeHead(upRes.statusCode, upRes.headers);
+    pipeline(upRes, clientRes, (err) => {
+      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE')
+        log('error', 'OpenClaw MCP stream error', { code: err.code });
+    });
+  });
+  upReq.on('socket', (socket) => {
+    if (socket.connecting) socket.once('connect', () => upReq.setTimeout(0));
+    else upReq.setTimeout(0);
+  });
+  upReq.on('timeout', () => upReq.destroy(new Error('MCP connect timeout')));
+  upReq.on('error', (err) => {
+    log('error', 'OpenClaw MCP upstream error', { code: err.code || 'upstream_error' });
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { 'Content-Type': 'application/json' });
+      clientRes.end(JSON.stringify({ error: 'mcp_upstream_unavailable' }));
+    } else {
+      clientRes.destroy();
+    }
+  });
+  clientReq.on('error', () => upReq.destroy());
+  clientReq.on('aborted', () => upReq.destroy());
+  clientRes.on('close', () => upReq.destroy());
+  clientReq.pipe(upReq);
+}
+
 // --- HTTP server ---
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health' && req.method === 'GET') {
-    const githubAgents = getGitHubAgents();
-    const healthy = githubAgents.length > 0;
+    let githubAgents = [];
+    let readable = true;
+    try {
+      githubAgents = getGitHubAgents();
+    } catch {
+      readable = false;
+    }
+    const hasTokens = githubAgents.length > 0;
+    const healthy = readable && (hasTokens || Boolean(OPENCLAW_MCP_TARGET));
     res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: healthy ? 'healthy' : 'unhealthy',
-      github: { agents: githubAgents, hasTokens: healthy },
+      github: { agents: githubAgents, hasTokens, readable },
+      mcp: { configured: Boolean(OPENCLAW_MCP_TARGET) },
     }));
+    return;
+  }
+
+  if (OPENCLAW_MCP_TARGET && req.url === '/openclaw/mcp'
+      && ['GET', 'POST', 'DELETE'].includes(req.method)) {
+    proxyOpenClawRequest(req, res);
     return;
   }
 
@@ -175,7 +257,7 @@ const server = http.createServer((req, res) => {
   }
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'not_found', detail: 'Only /health and /github-<agent>/ are served' }));
+  res.end(JSON.stringify({ error: 'not_found', detail: 'Only /health, /github-<agent>/ and configured /openclaw/mcp are served' }));
 
 });
 

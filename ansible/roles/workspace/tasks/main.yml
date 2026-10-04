@@ -89,6 +89,7 @@
   loop: "{{ active_workspaces }}"
   loop_control:
     label: "{{ item.agent_id }}"
+  register: workspace_deploy_keys
 
 - name: Read official GitHub SSH host keys
   ansible.builtin.uri:
@@ -108,6 +109,14 @@
     content: "{{ (workspace_github_meta.json.ssh_keys | map('regex_replace', '^', 'github.com ') | join('\n')) ~ '\n' }}"
     dest: /home/ubuntu/.ssh/workspace-github-known-hosts
     mode: "0644"
+  register: workspace_github_pins
+
+# Warm C sessions bind individual SSH files and retain their old inodes.
+- name: Refresh C bindings after workspace SSH changes
+  ansible.builtin.include_role:
+    name: config
+    tasks_from: cli-assets-changed.yml
+  when: workspace_deploy_keys.changed or workspace_github_pins.changed
 
 - name: Install workspace sync image sources
   ansible.builtin.copy:

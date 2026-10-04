@@ -1,0 +1,31 @@
+# Only traffic originating from the Claude CLI bridge is restricted.
+# Atomic replacement touches only these tables, not Docker/UFW/Tailscale tables.
+destroy table inet openclaw_claude_cli
+destroy table bridge openclaw_claude_cli
+table inet openclaw_claude_cli {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        comment "openclaw-cli:{{ claude_cli_bridge_interface }}"
+        iifname "{{ claude_cli_bridge_interface }}" ct state established,related accept
+{% for endpoint in claude_cli_http_endpoints %}
+        iifname "{{ claude_cli_bridge_interface }}" ip daddr {{ endpoint.address }} tcp dport {{ endpoint.port }} accept
+{% endfor %}
+        iifname "{{ claude_cli_bridge_interface }}" icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept
+        iifname "{{ claude_cli_bridge_interface }}" reject
+    }
+    chain forward {
+        type filter hook forward priority -10; policy accept;
+        comment "openclaw-cli:{{ claude_cli_bridge_interface }}"
+        iifname "{{ claude_cli_bridge_interface }}" ip daddr 169.254.169.254 reject
+        iifname "{{ claude_cli_bridge_interface }}" meta oifkind "bridge" reject
+    }
+}
+# Same-bridge packets do not necessarily traverse inet hooks (br_netfilter may
+# be absent). Bridge forwarding covers lateral traffic without relying on it.
+table bridge openclaw_claude_cli {
+    chain forward {
+        type filter hook forward priority -200; policy accept;
+        comment "openclaw-cli:{{ claude_cli_bridge_interface }}"
+        meta ibrname "{{ claude_cli_bridge_interface }}" drop
+    }
+}

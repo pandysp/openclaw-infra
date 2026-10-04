@@ -1,0 +1,22 @@
+[Unit]
+Description=Restrict Claude CLI bridge access to VPS services and cloud metadata
+After=docker.service ufw.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 /usr/local/lib/openclaw/claude-cli-guard.py /etc/openclaw/claude-cli-network.nft openclaw_claude_cli
+Restart=on-failure
+RestartSec=1
+# SIGTERM goes only to the supervisor, so its bounded children can finish.
+# systemd still kills the entire group if the deadline is exceeded.
+KillMode=mixed
+# Startup/failure: bounded Docker cleanup, nft apply and both table reads.
+# Shutdown: an in-flight read, Docker cleanup and independent nft restoration.
+TimeoutStartSec=100
+TimeoutStopSec=100
+
+[Install]
+WantedBy=multi-user.target docker.service

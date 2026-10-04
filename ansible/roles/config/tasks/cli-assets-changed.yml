@@ -1,0 +1,10 @@
+---
+# Atomic replacements of individual bind sources leave warm C mounts stale.
+- name: Read the backend after mounted CLI assets change
+  ansible.builtin.include_tasks: cli-backend-state.yml
+
+- name: Queue a gateway restart for active C bindings
+  ansible.builtin.set_fact:
+    _claude_cli_restart_requested: true
+  changed_when: claude_cli_backend_in_use.stdout == 'yes'
+  notify: restart openclaw-gateway

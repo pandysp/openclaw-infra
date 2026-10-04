@@ -6,7 +6,11 @@
   ansible.builtin.include_tasks: patch-heartbeat-group-fix.yml
 
 - name: Set up Claude CLI auth
-  ansible.builtin.include_tasks: claude-cli-auth.yml
+  ansible.builtin.include_tasks:
+    file: claude-cli-auth.yml
+    apply:
+      tags: [claude-auth]
+  tags: [claude-auth]
 
 - name: Onboard OpenClaw
   ansible.builtin.include_tasks: onboard.yml

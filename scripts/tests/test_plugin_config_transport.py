@@ -217,7 +217,7 @@ p.write_text(json.dumps(cfg))
                                     timeout=60, umask=0o022)
             self.assertFalse("fixture-" in result.stdout + result.stderr, "Synthetic credential appeared in task output")
             self.assertFalse((root / "argv-leak").exists(), "Credential reached process argv")
-            success = case in ("fresh", "existing_0644", "node_exec", "minimal_servers", "minimal_node_exec",
+            success = case in ("fresh", "existing_0644", "node_exec", "node_exec_empty_token", "minimal_servers", "minimal_node_exec",
                                "disabled", "enabled_only", "upgrade", "force_reinstall", "global_disabled", "global_enabled")
             if success:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -231,10 +231,10 @@ p.write_text(json.dumps(cfg))
                 self.assertEqual((root / "installed").exists(), case in ("upgrade", "force_reinstall"))
                 config = actual["plugins"]["entries"]["openclaw-mcp-adapter"]["config"]
                 self.assertEqual(config["toolPrefix"], True)
-                names = ["github", "github-test"] + (["node-exec"] if case == "node_exec" else [])
-                self.assertEqual([s["name"] for s in config["servers"]], names)
-                if case == "node_exec":
-                    self.assertTrue(config["servers"][2]["env"]["OPENCLAW_GATEWAY_TOKEN"] == "fixture-gateway")
+                self.assertEqual([s["name"] for s in config["servers"]], ["github", "github-test"])
+                self.assertFalse(any('OPENCLAW_GATEWAY_TOKEN' in server.get('env', {})
+                                     for server in config['servers']),
+                                 'Retired Mac MCP transport forwarded the gateway token')
                 self.assertTrue(config["servers"][0]["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"] == "fixture-main")
                 self.assertTrue(config["servers"][1]["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"] == "fixture-test")
                 calls = [json.loads(line) for line in (root / "cli-calls").read_text().splitlines()]
@@ -302,10 +302,10 @@ p.write_text(json.dumps(cfg))
             with self.subTest(case=case):
                 self.run_tasks(case)
 
-    def test_node_exec_gateway_token_does_not_reach_process_arguments(self):
+    def test_legacy_node_exec_configuration_cannot_restore_retired_mac_servers(self):
         self.run_tasks("node_exec")
 
-    def test_node_exec_requires_a_gateway_token(self):
+    def test_retired_mac_servers_do_not_require_or_forward_a_gateway_token(self):
         self.run_tasks("node_exec_empty_token")
 
     def test_symlink_is_rejected_without_touching_its_target(self):
