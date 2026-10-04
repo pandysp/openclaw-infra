@@ -2,7 +2,7 @@
 # Insurance: after bindings are set, verify that each group agent's main session
 # has the correct delivery target. If not, delete the stale session so the next
 # heartbeat creates a fresh one with the correct target.
-# Related to upstream bug #18573. See docs/HEARTBEAT-GROUP-DELIVERY-FIX.md.
+# Companion to the openclaw role's patch-heartbeat-group-fix.yml.
 
 - name: Write agent config for session check
   ansible.builtin.copy:

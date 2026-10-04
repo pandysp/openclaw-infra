@@ -55,8 +55,8 @@ openclaw-infra/
 │   ├── tests/              # Unit tests: python3 -m unittest discover -s scripts/tests
 │   └── ...                 # Setup, staging and check scripts; each starts with a usage comment
 │
-└── docs/                   # Topic guides; INVESTIGATION-*, UPGRADE-*, *-FIX and
-                            # *-audit files are dated records, not current docs
+└── docs/                   # Durable topic guides only; investigations, specs,
+                            # evidence and handoffs belong in scratch
 ```
 
 ### Ansible Tags
@@ -69,14 +69,15 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `docker` | docker | Docker upgrade or group changes |
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall/update OpenClaw binary |
-| `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings, node exec |
+| `claude-auth` | openclaw | Shared Claude login/SDK locking; controlled cutover, no C activation |
+| `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
 | `agents` | agents | Add/remove non-default agents, update Telegram bindings |
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
 | `whatsapp` | whatsapp | Configure WhatsApp channel for agents using `deliver_channel: whatsapp` |
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
 | `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
-| `plugins` | plugins | MCP adapter, GitHub/qmd/Mac MCP servers, GitHub token proxy for sandbox git, deny rules |
+| `plugins` | plugins | MCP adapter, GitHub/qmd servers, GitHub token proxy for sandbox git, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
@@ -448,7 +449,7 @@ even while its agent is enabled.
 
 | Resource | main | other (e.g., `bob`) |
 |---|---|---|
-| MCP server | `github`, `qmd`, `mac` | `github-bob`, `qmd-bob`, `mac-bob` |
+| MCP server | `github`, `qmd` | `github-bob`, `qmd-bob` |
 | Workspace dir | `~/.openclaw/workspace` | `~/.openclaw/workspace-bob` |
 | Deploy key var | `workspace_deploy_key` | `workspace_bob_deploy_key` |
 | GitHub token var | `github_token` | `github_token_bob` |
@@ -500,11 +501,9 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 ## Remote Node Control (Mac)
 
-> **Disabled by default.** Node exec runs arbitrary shell commands on your Mac with full user permissions — no sandbox. Enable with `node_exec_enabled: true` in `group_vars/openclaw.yml`. Read [docs/SECURITY.md](./docs/SECURITY.md) section 5 first.
+Claude-backed agents use native Bash → pinned SSH → the Mac account, with that account's full permissions. The retired Mac MCP package calls a removed command; `node_exec_enabled` does not restore it or expose OpenClaw's `exec` tool to this harness.
 
-Architecture: agent → `mac_run` MCP tool (`node-exec-mcp` on the VPS) → gateway over Tailscale Serve → LaunchAgent on the Mac.
-
-**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** first-time setup, debugging connection failures, resetting node ID after re-pairing, changing exec approval settings, or recovering a wiped node token.
+**Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** setting up the dedicated SSH identity, checking host pins, debugging Mac access or distinguishing SSH from an optional OpenClaw node host. The Mac-to-VPS route is accepted; see [SECURITY §5](./docs/SECURITY.md#5-self-modification-via-node-control).
 
 ## Semantic Search (qmd)
 

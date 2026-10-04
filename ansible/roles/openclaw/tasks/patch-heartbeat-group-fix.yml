@@ -3,7 +3,6 @@
 # falls back to the default user's DM because resolveHeartbeatSenderId()
 # returns allowList[0] when the group ID doesn't match allowFrom.
 # Fix: prefer candidates[0] (deliveryTo) over allowList fallback.
-# See docs/HEARTBEAT-GROUP-DELIVERY-FIX.md for full details.
 #
 # NOTE: there is no tracking issue — #18573 (previously referenced here) is a
 # different cron-announce bug, closed not_planned. Removal trigger is a code

@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # Check that the pinned OpenClaw version matches the reviewed heartbeat and cron
-# contracts (docs/DOCS-REVIEW.md) and that the roles still honour them.
-# --latest-docs also diffs the pinned heartbeat and cron docs against OpenClaw main.
+# contract and that the roles still honour it. The contract, as of v2026.6.6:
+# - Upstream runs a 30-minute heartbeat when cadence is omitted; IaC sets the
+#   default to 0m and each agent opts in explicitly.
+# - Heartbeats live in agents.list[]; once any entry has a heartbeat block,
+#   only entries with a block run.
+# - `cron list` omits disabled jobs; use `cron list --all`. `cron edit
+#   --enable/--disable` keeps IDs and history; missing jobs are created with
+#   --disabled. Never edit scheduler storage directly.
+# After reviewing a new version, bump openclaw_docs_reviewed_version in
+# ansible/group_vars/all.yml.
+# --latest-docs also diffs the pinned docs against OpenClaw main, where the
+# known drift is agents.entries.* and `openclaw automations`.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ALL_VARS="$REPO_DIR/ansible/group_vars/all.yml"
-DOCS_REVIEW="$REPO_DIR/docs/DOCS-REVIEW.md"
 AGENTS_TASKS="$REPO_DIR/ansible/roles/agents/tasks/main.yml"
 CONFIG_TASKS="$REPO_DIR/ansible/roles/config/tasks/main.yml"
 CRON_TASKS="$REPO_DIR/ansible/roles/telegram/tasks/cron.yml"
@@ -27,11 +36,9 @@ fi
 
 IAC_VERSION=$(sed -nE 's/^openclaw_version: "([^"]+)"/\1/p' "$ALL_VARS")
 REVIEWED_VERSION=$(sed -nE 's/^openclaw_docs_reviewed_version: "([^"]+)"/\1/p' "$ALL_VARS")
-DOCS_VERSION=$(sed -nE 's/^- Reviewed OpenClaw version: `([^`]+)`.*/\1/p' "$DOCS_REVIEW")
 
 [ -n "$IAC_VERSION" ] || fail "openclaw_version is missing"
 [ "$REVIEWED_VERSION" = "$IAC_VERSION" ] || fail "IaC pins $IAC_VERSION but contract review pins ${REVIEWED_VERSION:-missing}"
-[ "$DOCS_VERSION" = "$IAC_VERSION" ] || fail "DOCS-REVIEW.md covers ${DOCS_VERSION:-missing}, expected $IAC_VERSION"
 
 grep -q 'agents.defaults.heartbeat.*0m\|every.*0m' "$AGENTS_TASKS" || fail "agents role does not enforce the 0m heartbeat default"
 if grep -q 'agents.defaults.heartbeat' "$CONFIG_TASKS"; then

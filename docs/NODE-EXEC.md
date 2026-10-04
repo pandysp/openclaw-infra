@@ -1,88 +1,54 @@
-# Remote Node Control (Mac)
+# Mac command access
 
-> **Disabled by default.** Node exec lets agents run arbitrary shell commands on your local machine with your user's full permissions — no sandbox. Enable with `node_exec_enabled: true` in `ansible/group_vars/openclaw.yml` (the default in `all.yml` is `false`) only after reading the security warnings in [docs/SECURITY.md](./SECURITY.md) section 5.
+Claude-backed agents use **native Bash and pinned SSH**, not `mac_run` MCP
+or OpenClaw's node execution tool. Commands run with the Mac account's full
+permissions; they are not sandboxed. Read [SECURITY §5](SECURITY.md#5-self-modification-via-node-control).
 
-Agents can run shell commands on your Mac via the node host feature. This enables tmux-based workflows where a VPS agent controls a Claude Code session on your local machine.
+## Current transport
 
-Agents access node exec via the `mac_run` MCP tool (provided by `node-exec-mcp`), not the built-in exec tool. Each agent gets its own scoped tool: `mac_run` (main), `mac-manon_run`, etc.
-
-```
-┌──────────────────────┐     ┌────────────────────────┐     ┌──────────────────────┐
-│  VPS Agent           │     │  MCP Adapter           │     │  Mac (Node Host)     │
-│  (sandbox)           │────▶│  node-exec-mcp (stdio) │────▶│  openclaw node run   │
-│                      │     │                        │     │  (LaunchAgent)       │
-│  calls mac_run tool  │     │  OPENCLAW_GATEWAY_TOKEN│     │  tmux, claude        │
-│  (cwd defaults /tmp) │     │  Tailscale Serve       │     │  /opt/homebrew/bin   │
-└──────────────────────┘     └────────────────────────┘     └──────────────────────┘
+```text
+Claude native Bash → VPS SSH client → dedicated key + pinned host key → Mac account
 ```
 
-## Setup
+The managed C preparation includes SSH bootstrap in
+`ansible/roles/claude-cli/tasks/mac-ssh.yml`. It:
 
-**1. Enable in config** (edit `ansible/group_vars/openclaw.yml`):
-```yaml
-node_exec_enabled: true
-```
+- creates a dedicated VPS identity only if absent;
+- gets the Mac host's public key through the controller's trusted SSH route;
+- pins that key instead of trusting an unverified network scan;
+- authorizes only the dedicated public key, without replacing existing keys;
+- configures strict host-key checks, a fixed identity/user and batch mode.
 
-**2. One-time Mac setup:**
-```bash
-./scripts/setup-mac-node.sh
+Private keys stay on the machines, never in Git. C binds only the selected
+SSH configuration, identity and host pins. Mac-to-VPS SSH remains an explicitly
+accepted route; this is practical containment, not a hostile-agent boundary.
 
-# Then approve pairing on the VPS:
-ssh ubuntu@openclaw-vps 'openclaw devices list'
-ssh ubuntu@openclaw-vps 'openclaw devices approve <request-id>'
+## Check access
 
-# Re-provision to install node-exec-mcp and auto-discover the node ID:
-./scripts/provision.sh --tags config,plugins
-```
-
-**What `setup-mac-node.sh` does:**
-1. Resolves gateway hostname from Tailscale
-2. Installs a persistent LaunchAgent (`ai.openclaw.node.plist`)
-3. Patches LaunchAgent to use stable Homebrew symlink (survives `brew upgrade`)
-4. Sets node-side exec approvals to auto-approve all commands (`defaults.security: full`)
-
-## Config
-
-Gateway-side (set by Ansible):
-```
-tools.exec.host: sandbox        # Built-in exec stays sandboxed (agents use mac_run MCP tool instead)
-tools.exec.security: full       # Tighten to "allowlist" after testing
-tools.exec.ask: off             # Tighten to "on-miss" after testing
-                                # full + off also starts Claude Code with bypassPermissions (SECURITY.md §4)
-tools.exec.node: <auto>         # Auto-discovered during provisioning; used by node-exec-mcp
-```
-
-Node-side (set by `setup-mac-node.sh`):
-- `~/.openclaw/exec-approvals.json` — `defaults.security: full` (auto-approve all commands)
-
-**How auth works:** The `node-exec-mcp` server receives `OPENCLAW_GATEWAY_TOKEN` (the gateway token) as an env var, which `openclaw nodes run` uses to authenticate with the gateway. Without this token, the connection fails with "pairing required".
-
-**Two approval layers:** Both the gateway (`tools.exec.security/ask`) AND the node (`exec-approvals.json`) must allow a command. Configure both.
-
-**CWD defaults to `/tmp`:** The gateway sends the agent's VPS workspace path as CWD, which doesn't exist on Mac. The `node-exec-mcp` server uses `DEFAULT_CWD=/tmp` as a workaround. Pass `workdir=/Users/<you>` explicitly when needed.
-
-## Operations
+Run from the VPS or from an agent's native Bash tool:
 
 ```bash
-# Check node status
-ssh ubuntu@openclaw-vps 'openclaw nodes status'
-
-# Test from VPS
-ssh ubuntu@openclaw-vps 'openclaw nodes run --cwd /tmp echo hello'
-
-# Manage Mac node host
-openclaw node status          # Check LaunchAgent
-openclaw node restart         # Restart after updates
-openclaw node stop            # Stop the service
-
-# Reset node ID pin (e.g., after re-pairing)
-ssh ubuntu@openclaw-vps 'openclaw config unset tools.exec.node'
-./scripts/provision.sh --tags config   # Re-discovers and pins
-
-# View node host logs
-tail -f ~/.openclaw/logs/node.log
+ssh -o BatchMode=yes mac-air 'printf "mac-ssh-ok\n"'
 ```
 
-**Token wipe danger:** An empty `gateway.remote.token` in the Mac's `~/.openclaw/openclaw.json` breaks the node host's authentication. The [Local CLI setup](../CLAUDE.md#local-cli) rejects an empty token, and `setup-mac-node.sh` detects and recovers a wiped token. Backups live in `.bak` files next to the config.
+Use an explicit Mac working directory in remote commands. A VPS workspace path
+does not exist on the Mac. If authentication fails, check the dedicated public
+key's authorization. If host-key verification fails, verify the new public key
+through the trusted controller route before updating the pin.
 
-**Note:** The node host disconnects on gateway restarts but auto-reconnects (LaunchAgent handles restarts). If the node ID changes (re-pairing), re-run `./scripts/provision.sh --tags config` to update the pin.
+## Retired node/MCP route
+
+`node-exec-mcp@0.1.1` calls the removed `openclaw nodes run` command.
+`nodes invoke` rejects reserved `system.run`; it is not a replacement.
+Provisioning no longer generates Mac MCP registrations or their deny patterns.
+The next `--tags plugins` run removes live leftovers: it replaces the adapter
+configuration and each agent's deny list as a whole.
+
+`node_exec_enabled` and `tools.exec.node` do **not** give Claude-backed agents
+OpenClaw's `exec` tool: the MCP adapter excludes it for this harness.
+Keep the agreed `tools.exec.security: full` and `tools.exec.ask: off`; changing
+those affects Claude's permission mode, not SSH isolation.
+
+An OpenClaw node host may still be paired for other clients. Its LaunchAgent,
+pairing and token checks are separate from this SSH route. Do not reinstall
+the retired MCP package or reset a node pin to repair Claude's Mac access.
