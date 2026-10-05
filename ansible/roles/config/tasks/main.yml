@@ -193,6 +193,7 @@
     - name: Configure gateway settings
       ansible.builtin.shell: |
         set -euo pipefail
+        {% set whatsapp_used = openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
         export XDG_RUNTIME_DIR=/run/user/1000
         CHANGED=""
 
@@ -317,7 +318,7 @@
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
-        {% if openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
+        {% if whatsapp_used %}
         {%   set _ = plugin_allow.append("whatsapp") %}
         {% endif %}
         {% if discord_bot_token is defined and discord_bot_token | length > 0 %}
@@ -422,11 +423,11 @@
 
         # Health monitor: faster detection of silent channel disconnections
         check_set gateway.channelStaleEventThresholdMinutes "{{ openclaw_health_monitor_stale_minutes }}"
-        {% if openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
+        {% if whatsapp_used %}
         {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
         check_set_json channels.whatsapp.healthMonitor.enabled 'false'
         {% else %}
-        {# Any channels.whatsapp key makes OpenClaw 2026.7.1+ install the newest WhatsApp plugin at startup, which can refuse an older core. #}
+        {# After an upgrade, startup migrations (2026.7.1+) install any configured but missing channel plugin at its newest version; if that build needs a newer core, the gateway refuses to start. #}
         check_unset channels.whatsapp
         {% endif %}
 
