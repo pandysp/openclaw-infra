@@ -74,6 +74,7 @@ if [ "$CHECK_LATEST_DOCS" = true ]; then
             || fail "$docs heartbeat docs no longer state the per-agent heartbeat allowlist; review the contract"
         grep -Fq 'heartbeat monitor scratch' "$DOCS_TMP/$docs-heartbeat.md" \
             || fail "$docs heartbeat docs no longer keep instructions in the monitor scratch; review the contract"
+        # shellcheck disable=SC2016  # literal Markdown backticks, not a command
         grep -Fq '`openclaw cron` remains an alias' "$DOCS_TMP/$docs-cron.md" \
             || fail "$docs scheduler docs no longer keep the cron alias; review the contract"
     done
