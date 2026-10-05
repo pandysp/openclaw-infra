@@ -422,7 +422,11 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    LOGS=$(journalctl --user -u openclaw-gateway --since "30 seconds ago" --no-pager)
+    # Only the lines of the running gateway: since 2026.9.8 a clean shutdown of the previous
+    # process logs "[mcp-adapter] qmd transport error" while it closes its connections.
+    PID=$(systemctl --user show -p MainPID --value openclaw-gateway)
+    [ "$PID" -gt 0 ] || { echo "ERROR: gateway has no running process" >&2; exit 1; }
+    LOGS=$(journalctl --user -u openclaw-gateway _PID="$PID" --no-pager)
     if echo "$LOGS" | grep -qi "mcp.*error\|error.*mcp\|failed.*mcp-adapter\|docker.*error\|container.*failed\|image.*not found"; then
         echo "ERROR: Gateway logs contain MCP adapter errors:"
         echo "$LOGS" | grep -i "mcp"
