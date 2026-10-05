@@ -44,6 +44,18 @@
         path: /tmp/openclaw-backup
         state: absent
 
+    # Upstream's npm upgrade order (docs/install/updating.md): stop the gateway, replace the
+    # package, run doctor, start. A running older gateway also keeps the new doctor waiting
+    # on it indefinitely. playbook.yml's post_tasks start it again.
+    - name: Stop the gateway before replacing OpenClaw
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: stopped
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      when: openclaw_binary.stat.exists
+
     - name: Backup existing installation
       ansible.builtin.command: cp -a /home/ubuntu/.npm-global/lib/node_modules/openclaw /tmp/openclaw-backup
       when: openclaw_binary.stat.exists
@@ -124,6 +136,18 @@
         PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
       when: openclaw_backup.stat.exists | default(false)
 
+    # The old package is back and nothing was migrated yet: bring the stopped gateway back.
+    - name: Start the restored gateway
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: started
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      when:
+        - openclaw_backup.stat.exists | default(false)
+        - openclaw_restored_version.rc | default(-1) == 0
+
     - name: Report restore result
       ansible.builtin.debug:
         msg: >-
@@ -154,10 +178,17 @@
 # Deliberately OUTSIDE the install block: a migration failure must be visible
 # and must NOT trigger the rescue path (restoring the old binary against an
 # already-migrated, version-stamped config would be a split-brain).
+# The channel plugins and the MCP adapter are still the old builds at this point; the
+# plugin roles install their pinned versions next. Doctor migrates anyway and then reports
+# exactly that ("Doctor finished with plugin load errors."); any other failure stops here.
 - name: Run config migrations (doctor --fix)
   ansible.builtin.command: openclaw doctor --fix --non-interactive
   register: openclaw_doctor_fix
   changed_when: false
+  timeout: 900
+  failed_when: >-
+    openclaw_doctor_fix.rc != 0
+    and 'Doctor finished with plugin load errors.' not in (openclaw_doctor_fix.stdout + openclaw_doctor_fix.stderr)
   environment:
     XDG_RUNTIME_DIR: /run/user/1000
     PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
