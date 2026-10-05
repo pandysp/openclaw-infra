@@ -288,7 +288,9 @@ def main(args, runtime_path=RUNTIME):
                 if skill.is_symlink():
                     target = skill.resolve(strict=True)
                     if not target.is_relative_to(workspace):
-                        if not (target.is_relative_to(HOME / '.openclaw/skills') or target.is_relative_to(HOME / '.npm-global/lib/node_modules/openclaw/skills')):
+                        # Since 2026.7.1, channel plugins' skills live in their installed packages.
+                        roots = [HOME / '.openclaw/skills', HOME / '.npm-global/lib/node_modules/openclaw/skills', HOME / '.openclaw/npm/projects']
+                        if not any(target.is_relative_to(root) for root in roots):
                             raise SystemExit('ERROR: CLI skill source is outside expected skill roots')
                         mount(target)
     if not mcp_found:

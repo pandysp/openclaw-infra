@@ -146,7 +146,7 @@ class MacAccessTest(unittest.TestCase):
 class LauncherMacScopeTest(unittest.TestCase):
     """Exercise main() through Docker's command boundary, not just mac_access()."""
 
-    def launch(self, agent, mac_host):
+    def launch(self, agent, mac_host, skill_root=None):
         with tempfile.TemporaryDirectory(prefix='launcher-mac-') as directory:
             home = Path(directory).resolve()
             workspace = home / 'workspace'
@@ -180,6 +180,14 @@ class LauncherMacScopeTest(unittest.TestCase):
                 mcp = Path(artifacts) / 'mcp.json'
                 mcp.write_text(json.dumps({'mcpServers': {'openclaw': {
                     'type': 'http', 'url': 'http://127.0.0.1:1234/mcp'}}}))
+                args = ['--mcp-config', str(mcp)]
+                if skill_root is not None:
+                    skill = home / skill_root / 'skills/discord'
+                    skill.mkdir(parents=True)
+                    plugin = Path(artifacts) / 'plugin'
+                    (plugin / 'skills').mkdir(parents=True)
+                    (plugin / 'skills/discord').symlink_to(skill)
+                    args += ['--plugin-dir', str(plugin)]
                 read_text, resolve = Path.read_text, Path.resolve
                 temporary_directory = tempfile.TemporaryDirectory
 
@@ -190,7 +198,7 @@ class LauncherMacScopeTest(unittest.TestCase):
 
                 def canonical(path, *args, **kwargs):
                     # Linux /tmp is canonical; macOS /tmp is a symlink.
-                    if str(path).startswith('/tmp/openclaw-main-test-'):
+                    if str(path).startswith('/tmp/openclaw-main-test-') and not path.is_symlink():
                         return path
                     return resolve(path, *args, **kwargs)
 
@@ -220,10 +228,18 @@ class LauncherMacScopeTest(unittest.TestCase):
                         create.assert_not_called()
                         run.assert_not_called()
                         return
-                    launcher.main(['--mcp-config', str(mcp)], runtime)
+                    if skill_root == 'elsewhere':
+                        with self.assertRaisesRegex(SystemExit, 'outside expected skill roots'):
+                            launcher.main(args, runtime)
+                        create.assert_not_called()
+                        return
+                    launcher.main(args, runtime)
                     command = create.call_args.args[0]
                     bindings = [command[i + 1] for i, value in enumerate(command) if value == '--mount']
                     mac_bindings = [value for value in bindings if 'openclaw_mac_air' in value]
+                    if skill_root is not None:
+                        skill = home / skill_root / 'skills/discord'
+                        self.assertIn(f'type=bind,source={skill},target={skill},readonly', bindings)
                     if mac_host:
                         self.assertEqual(mac_bindings, [
                             f'type=bind,source={ssh / name},target={ssh / name},readonly'
@@ -240,6 +256,13 @@ class LauncherMacScopeTest(unittest.TestCase):
 
     def test_other_agent_gets_no_mac_mounts_lookup_or_host_entry(self):
         self.launch('other', '')
+
+    def test_plugin_package_skill_is_mounted_read_only(self):
+        # From 2026.7.1, channel plugins ship skills that OpenClaw links from their installed package.
+        self.launch('main', 'mac-air', '.openclaw/npm/projects/openclaw-discord-fixture/node_modules/@openclaw/discord')
+
+    def test_skill_outside_known_roots_is_refused(self):
+        self.launch('main', 'mac-air', 'elsewhere')
 
     def test_old_manifest_fails_before_docker_creation(self):
         self.launch('other', None)
