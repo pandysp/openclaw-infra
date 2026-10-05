@@ -422,8 +422,13 @@
 
         # Health monitor: faster detection of silent channel disconnections
         check_set gateway.channelStaleEventThresholdMinutes "{{ openclaw_health_monitor_stale_minutes }}"
+        {% if openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
         {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
         check_set_json channels.whatsapp.healthMonitor.enabled 'false'
+        {% else %}
+        {# Any channels.whatsapp key makes OpenClaw 2026.7.1+ install the newest WhatsApp plugin at startup, which can refuse an older core. #}
+        check_unset channels.whatsapp
+        {% endif %}
 
         # Key names only (never values), so drift is visible in public CI logs.
         if [ -n "$CHANGED" ]; then echo "UPDATED:$CHANGED"; else echo "OK"; fi
