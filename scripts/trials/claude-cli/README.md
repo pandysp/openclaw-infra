@@ -17,7 +17,8 @@ need explicit keyboard-user permission; a passing trial is not rollout approval.
 |---|---|---|
 | `trial-backend.py apply\|restore` | Reversible `agents.defaults.cliBackends` override to `restricted-dispatcher.py`; requires the container backend and restores it | yes |
 | `restricted-dispatcher.py` | Runs every session through the installed launcher; `cwrapper-cancel-*` sessions also get `cancel-bin/` first in `PATH` | — |
-| `restricted-gateway-trial.py` | Per-agent feature suite through real gateway turns (native tools, scoped MCP, skills, Git read and push to a throwaway branch, strict Mac SSH, warm/cold sessions) on the installed container backend; needs containers enabled | no |
+| `restricted-gateway-trial.py` | Per-agent feature suite through real gateway turns (native tools, scoped MCP, skills, Git read and push to a throwaway branch, strict Mac SSH, resumed sessions) on the installed container backend; needs containers enabled | no |
+| `container-probe.py` | Copied into each workspace by the gateway trial and run by the agent inside its own container during the turn, since from 2026.7.1 the container ends with its turn: privileges, hidden host files, Git read and throwaway push, Mac absence. Prints booleans only | — |
 | `gateway-cancellation-trial.py chat\|kill` | Foreground `chat.abort` cleanup, or explicit launcher SIGKILL via one validated pidfd; requires an actual live sleep PID; 5-minute rollback timer | yes |
 | `cancel-bin/docker` | Fault shim: an attach client that ignores quick cleanup, selected only for `cwrapper-cancel-*` | — |
 | `guard-launch-race-trial.py` | Stopped guard cannot admit a late `docker create` (real Docker, real guard service) | no |

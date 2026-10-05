@@ -1,6 +1,5 @@
-"""Run the live trial's Mac checks with real files and shell commands; Docker is the boundary."""
-import json
-import os
+"""Run the live trial's helpers and its in-container probe with real files; Git is the boundary."""
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,11 +10,15 @@ SOURCE = Path(__file__).resolve().parents[1] / 'trials/claude-cli/restricted-gat
 trial = {}
 # Load only the helpers, before the trial reads the deployment or sends gateway turns.
 exec(compile(SOURCE.read_text().split('\nhome = Path.home()\n', 1)[0], str(SOURCE), 'exec'), trial)
-REAL_RUN = subprocess.run
+probe = importlib.util.module_from_spec(importlib.util.spec_from_file_location(
+    'container_probe', SOURCE.with_name('container-probe.py')))
+probe.__spec__.loader.exec_module(probe)
 
 
 class MacAbsenceTest(unittest.TestCase):
-    def check(self, key='', pin='', config='Host github.com\n', hosts=None):
+    """The in-container probe reads real files; no Docker boundary is mocked."""
+
+    def check(self, key='', pin='', config='Host github.com\n', hosts='127.0.0.1 localhost\n', mac_host='mac-air'):
         with tempfile.TemporaryDirectory(prefix='trial-mac-') as directory:
             home = Path(directory)
             ssh = home / '.ssh'
@@ -24,30 +27,12 @@ class MacAbsenceTest(unittest.TestCase):
             (ssh / 'known_hosts_openclaw_mac_air').write_text(pin)
             if config is not None:
                 (ssh / 'config').write_text(config)
-
-            def docker_exec(args, **kwargs):
-                self.assertEqual(args[:3], ['docker', 'exec', 'fixture'])
-                command = args[3:]
-                if command[0] == 'grep':
-                    self.assertEqual(command[-1], '/home/ubuntu/.ssh/config')
-                    command[-1] = str(ssh / 'config')
-                return REAL_RUN(command, env={**os.environ, 'HOME': str(home)},
-                                capture_output=True, text=True, **kwargs)
-
-            def docker_inspect(args):
-                self.assertEqual(args, ['docker', 'inspect', '--format', '{{json .HostConfig.ExtraHosts}}', 'fixture'])
-                return json.dumps(hosts)
-
-            with patch.object(subprocess, 'run', side_effect=docker_exec), \
-                 patch.dict(trial, {'command': docker_inspect}):
-                return trial['mac_absence_checks']('fixture', 'mac-air')
+            (home / 'hosts').write_text(hosts)
+            return probe.mac_absence(home, home / 'hosts', mac_host)
 
     def test_empty_mountpoint_stubs_and_unrelated_host_are_allowed(self):
-        self.assertEqual(self.check(hosts=['github-fixture:192.0.2.1']), {
+        self.assertEqual(self.check(hosts='127.0.0.1 localhost\n192.0.2.1 github-fixture\n'), {
             'no_mac_key_or_pin': True, 'no_mac_ssh_block': True, 'no_mac_host_entry': True})
-
-    def test_null_extra_hosts_is_allowed(self):
-        self.assertTrue(self.check()['no_mac_host_entry'])
 
     def test_key_and_pin_content_each_fail(self):
         for value in ({'key': 'fixture-key'}, {'pin': 'fixture-pin'}):
@@ -61,26 +46,13 @@ class MacAbsenceTest(unittest.TestCase):
         self.assertFalse(self.check(config=None)['no_mac_ssh_block'])
 
     def test_mac_host_entry_fails(self):
-        self.assertFalse(self.check(hosts=['mac-air:100.64.0.7'])['no_mac_host_entry'])
+        self.assertFalse(self.check(hosts='127.0.0.1 localhost\n100.64.0.7\tmac-air\n')['no_mac_host_entry'])
 
-    def test_docker_failure_is_not_proof_of_denial(self):
-        with patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 125)), \
-             patch.dict(trial, {'command': lambda args: 'null'}):
-            result = trial['mac_absence_checks']('fixture', 'mac-air')
-        self.assertFalse(result['no_mac_key_or_pin'])
-        self.assertFalse(result['no_mac_ssh_block'])
+    def test_commented_host_entry_is_not_an_entry(self):
+        self.assertTrue(self.check(hosts='# 100.64.0.7 mac-air\n')['no_mac_host_entry'])
 
     def test_unknown_host_does_not_claim_host_entry_was_checked(self):
-        with patch.object(subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 0),
-                                                        subprocess.CompletedProcess([], 1)]), \
-             patch.dict(trial, {'command': lambda args: self.fail('No known Mac hostname to inspect')}):
-            result = trial['mac_absence_checks']('fixture', '')
-        self.assertNotIn('no_mac_host_entry', result)
-
-    def test_timeout_is_not_swallowed(self):
-        with patch.object(subprocess, 'run', side_effect=subprocess.TimeoutExpired('docker', 20)):
-            with self.assertRaises(subprocess.TimeoutExpired):
-                trial['mac_absence_checks']('fixture', 'mac-air')
+        self.assertNotIn('no_mac_host_entry', self.check(mac_host=''))
 
 
 class MacExpectationTest(unittest.TestCase):
@@ -173,24 +145,35 @@ class TrialCleanupTest(unittest.TestCase):
             trial['cleanup_trial']([], {}, config, {})
 
 
-class GitPushProbeTest(unittest.TestCase):
+class GitProbeTest(unittest.TestCase):
+    READS = [subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0, stdout='abc\tHEAD\n')]
+
+    def git(self, *results):
+        with patch.object(probe.subprocess, 'run', side_effect=[*self.READS, *results]) as run:
+            return probe.git_checks('', 'fixture-branch'), run
+
     def test_push_timeout_still_attempts_branch_deletion(self):
-        with patch.object(subprocess, 'run', side_effect=[subprocess.TimeoutExpired('git push', 60),
-                                                        subprocess.CompletedProcess([], 0)]) as run:
+        with patch.object(probe.subprocess, 'run', side_effect=[*self.READS, subprocess.TimeoutExpired('git push', 60),
+                                                              subprocess.CompletedProcess([], 0)]) as run:
             with self.assertRaises(subprocess.TimeoutExpired):
-                trial['git_push_probe']('fixture', 'fixture-branch')
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args.args[0], ['docker', 'exec', 'fixture', 'git', 'push', 'origin', '--delete', 'fixture-branch'])
+                probe.git_checks('', 'fixture-branch')
+        self.assertEqual(run.call_args.args[0], ['git', 'push', 'origin', '--delete', 'fixture-branch'])
 
     def test_failed_branch_deletion_is_reported(self):
-        with patch.object(subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 0),
-                                                        subprocess.CompletedProcess([], 1)]):
-            with self.assertRaisesRegex(RuntimeError, 'Could not remove trial Git branch'):
-                trial['git_push_probe']('fixture', 'fixture-branch')
+        checks, _ = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 1, stderr='denied'))
+        self.assertTrue(checks['git_push'])
+        self.assertFalse(checks['git_branch_removed'])
+
+    def test_failed_push_with_no_branch_left_is_clean(self):
+        checks, _ = self.git(subprocess.CompletedProcess([], 1),
+                             subprocess.CompletedProcess([], 1, stderr='error: unable to delete: remote ref does not exist'))
+        self.assertFalse(checks['git_push'])
+        self.assertTrue(checks['git_branch_removed'])
 
     def test_successful_push_and_delete_pass(self):
-        with patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
-            self.assertTrue(trial['git_push_probe']('fixture', 'fixture-branch'))
+        checks, _ = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0))
+        self.assertEqual(checks, {'git_transport_preserved': True, 'git_remote_read': True,
+                                  'git_push': True, 'git_branch_removed': True})
 
 
 if __name__ == '__main__':
