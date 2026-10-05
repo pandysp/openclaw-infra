@@ -440,39 +440,22 @@
 # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
 # e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
 
-- name: Get agent list for index resolution
-  ansible.builtin.shell: |
-    jq -c '.agents.list // []' /home/ubuntu/.openclaw/openclaw.json
-  args:
-    executable: /bin/bash
-  register: agents_list_json
-  changed_when: false
-
-- name: Write agents list to temp file for deny rules
-  ansible.builtin.copy:
-    content: "{{ agents_list_json.stdout }}"
-    dest: /tmp/ansible-agents-list.json
-    mode: "0600"
-  changed_when: false
-
 - name: Set per-agent tool deny rules for MCP tools
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    AGENTS_JSON=$(cat /tmp/ansible-agents-list.json)
-    AGENT_INDEX=$(echo "$AGENTS_JSON" | jq -r 'to_entries[] | select(.value.id == "{{ item.id }}") | .key')
-    if [ -z "$AGENT_INDEX" ]; then
-        echo "SKIP: Agent '{{ item.id }}' not found in agents list"
-        exit 0
-    fi
-    CURRENT=$(jq -c ".agents.list[${AGENT_INDEX}].tools.deny // []" /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || CURRENT="[]"
+    # A missing agent would run without its deny rules: stop instead.
+    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
+        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
+        exit 1
+    }
     DESIRED='{{ deny_list | to_json }}'
     C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
     if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
         echo "OK"
     else
-        openclaw config set "agents.list.${AGENT_INDEX}.tools.deny" --json "$DESIRED"
+        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
         echo "UPDATED"
     fi
   args:
@@ -491,16 +474,10 @@
   changed_when: "'UPDATED' in deny_result.stdout"
   notify: restart openclaw-gateway
 
-- name: Clean up agents list temp file
-  ansible.builtin.file:
-    path: /tmp/ansible-agents-list.json
-    state: absent
-  changed_when: false
-
-# --- Disable built-in memorySearch when qmd servers are registered ---
+# --- Disable built-in memory search (memory.search) when qmd servers are registered ---
 # Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are
 # confirmed in the plugin config. If provisioning fails between qmd and plugins,
-# agents still have memorySearch as fallback.
+# agents still have built-in memory search as fallback.
 
 - name: Check if qmd servers are in plugin config
   ansible.builtin.shell: |
@@ -513,12 +490,12 @@
   register: qmd_server_count
   changed_when: false
 
-- name: Check current memorySearch state
+- name: Check current built-in memory search state
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
     # The jq // operator treats false as "missing" and returns the RHS, so we
     # use an explicit null check to distinguish false from an absent key.
-    RESULT=$(jq -r '.agents.defaults.memorySearch.enabled | if . == null then "unset" else tostring end' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "unset")
+    RESULT=$(jq -r '.memory.search.enabled | if . == null then "unset" else tostring end' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "unset")
     echo "$RESULT"
   args:
     executable: /bin/bash
@@ -526,10 +503,10 @@
   changed_when: false
   when: (qmd_server_count.stdout | int) > 0
 
-- name: Disable built-in memorySearch (replaced by qmd)
+- name: Disable built-in memory search (replaced by qmd)
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw config set agents.defaults.memorySearch.enabled false
+    openclaw config set memory.search.enabled false
   args:
     executable: /bin/bash
   when:

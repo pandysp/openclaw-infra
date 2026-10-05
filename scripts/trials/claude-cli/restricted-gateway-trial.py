@@ -89,7 +89,7 @@ parser.add_argument('--expect-mac-agent', action='append', default=[],
 options = parser.parse_args()
 config_path = home / '.openclaw/openclaw.json'
 before = json.loads(config_path.read_text())
-entries = {entry['id']: entry for entry in before['agents']['list']}
+entries = before['agents']['entries']
 agents = options.agents or list(entries)
 if any(agent not in entries for agent in agents):
     raise SystemExit('ERROR: Unknown trial agent')
@@ -115,7 +115,7 @@ try:
     for agent in agents:
         workspace = Path(entries[agent].get('workspace') or before['agents']['defaults']['workspace'])
         other = next(Path(entry.get('workspace') or before['agents']['defaults']['workspace'])
-                     for entry in entries.values() if entry['id'] != agent)
+                     for entry_id, entry in entries.items() if entry_id != agent)
         project = home / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
         run = uuid.uuid4().hex
         key = f'agent:{agent}:cwrapper-' + run

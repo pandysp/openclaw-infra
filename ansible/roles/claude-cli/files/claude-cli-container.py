@@ -206,10 +206,10 @@ def main(args, runtime_path=RUNTIME):
     config = json.loads((HOME / '.openclaw/openclaw.json').read_text())
     agent = os.environ.get('OPENCLAW_MCP_AGENT_ID', '')
     key = os.environ.get('OPENCLAW_MCP_SESSION_KEY', '')
-    selected = [entry for entry in config['agents']['list'] if entry['id'] == agent]
-    if len(selected) != 1 or not re.fullmatch(r'[A-Za-z0-9_-]+', agent) or not key.startswith(f'agent:{agent}:'):
+    entry = config['agents']['entries'].get(agent)
+    if entry is None or not re.fullmatch(r'[A-Za-z0-9_-]+', agent) or not key.startswith(f'agent:{agent}:'):
         raise SystemExit('ERROR: Missing or invalid CLI agent scope; refusing native execution')
-    workspace = Path(selected[0].get('workspace') or config['agents']['defaults']['workspace'])
+    workspace = Path(entry.get('workspace') or config['agents']['defaults']['workspace'])
     if Path.cwd() != workspace or workspace.resolve() != workspace:
         raise SystemExit('ERROR: CLI workspace must be the canonical configured agent workspace')
     project = HOME / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(workspace))

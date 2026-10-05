@@ -5,12 +5,11 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        AGENT_INDEX=$(jq -r --arg id {{ _heartbeat_agent.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
-        if [ -z "$AGENT_INDEX" ]; then
+        jq -e --arg id {{ _heartbeat_agent.id | quote }} 'any(.[]; .id == $id)' /tmp/ansible_agents_current.json >/dev/null || {
             echo "ERROR: agent {{ _heartbeat_agent.id }} is missing from the validated agent list" >&2
             exit 1
-        fi
-        KEY="agents.list.${AGENT_INDEX}.heartbeat"
+        }
+        KEY="agents.entries.{{ _heartbeat_agent.id }}.heartbeat"
         CURRENT=$(openclaw config get "$KEY" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
             if echo "$CURRENT" | grep -qiE '^Config path not found:'; then
                 CURRENT="{}"

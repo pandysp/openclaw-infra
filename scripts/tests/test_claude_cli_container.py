@@ -164,7 +164,7 @@ class LauncherMacScopeTest(unittest.TestCase):
             state = home / '.openclaw'
             state.mkdir()
             (state / 'openclaw.json').write_text(json.dumps({'agents': {
-                'list': [{'id': agent, 'workspace': str(workspace)}], 'defaults': {}}}))
+                'entries': {agent: {'workspace': str(workspace)}}, 'defaults': {}}}))
             entry = {'config': str(ssh / 'config'), 'workspace_key': None}
             if mac_host is not None:
                 entry['mac_host'] = mac_host
@@ -263,6 +263,23 @@ class LauncherMacScopeTest(unittest.TestCase):
 
     def test_skill_outside_known_roots_is_refused(self):
         self.launch('main', 'mac-air', 'elsewhere')
+
+    def test_agent_missing_from_entries_is_refused_before_docker(self):
+        # From 2026.8.1 agents are keyed under agents.entries; a list or unknown id has no scope.
+        with tempfile.TemporaryDirectory(prefix='launcher-scope-') as directory:
+            home = Path(directory)
+            (home / '.openclaw').mkdir()
+            (home / '.openclaw/openclaw.json').write_text(json.dumps({'agents': {
+                'entries': {'main': {'workspace': str(home)}}, 'defaults': {}}}))
+            runtime = home / 'runtime.json'
+            runtime.write_text('{}')
+            with patch.object(launcher, 'HOME', home), \
+                 patch.dict(os.environ, {'OPENCLAW_MCP_AGENT_ID': 'other',
+                     'OPENCLAW_MCP_SESSION_KEY': 'agent:other:fixture'}, clear=True), \
+                 patch.object(launcher, 'output') as docker:
+                with self.assertRaisesRegex(SystemExit, 'Missing or invalid CLI agent scope'):
+                    launcher.main(['--mcp-config', '/tmp/openclaw-x/mcp.json'], runtime)
+            docker.assert_not_called()
 
     def test_old_manifest_fails_before_docker_creation(self):
         self.launch('other', None)
