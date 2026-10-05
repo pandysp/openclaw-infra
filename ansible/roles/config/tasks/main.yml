@@ -106,7 +106,7 @@
         # Voice transcription — Groq provider cleanup (setting is in the settings task,
         # after "openclaw config set models --json" which replaces the entire models object)
         {% if not (groq_api_key is defined and groq_api_key | length > 0) %}
-        for key in models.providers.groq tools.media.audio.enabled tools.media.audio.models; do
+        for key in models.providers.groq tools.media.audio.enabled tools.media.models; do
             check_unset "$key"
         done
         {% endif %}
@@ -236,16 +236,14 @@
             fi
         }
 
-        # Tailscale Serve
+        # Tailscale Serve (its routes end with the gateway since 2026.8.x; resetOnExit was retired)
         check_set gateway.tailscale.mode serve
-        check_set gateway.tailscale.resetOnExit true
 
         # Trusted proxies: localhost + Tailscale CGNAT range
         check_set_json gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
 
         # Control UI
         check_set gateway.controlUi.enabled true
-        check_set gateway.controlUi.allowInsecureAuth false
 
         # Auth: Tailscale identity
         check_set gateway.auth.allowTailscale true
@@ -362,7 +360,6 @@
 
         # Timezone
         check_set agents.defaults.userTimezone "{{ openclaw_timezone }}"
-        check_set agents.defaults.envelopeTimezone user
 
         # Agent timeout: max seconds per conversation turn (default 600 = 10min)
         check_set agents.defaults.timeoutSeconds "{{ openclaw_agent_timeout_seconds }}"
@@ -370,23 +367,17 @@
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
         check_set messages.queue.mode collect
 
-        # Auth cooldown: reset error count after N hours
-        # Prevents timeouts from compounding into multi-hour lockouts
-        check_set auth.cooldowns.failureWindowHours "{{ openclaw_cooldown_failure_window_hours }}"
-
         # Concurrency: allow more parallel sessions across all agents
         check_set agents.defaults.maxConcurrent "{{ openclaw_max_concurrent }}"
         check_set agents.defaults.subagents.maxConcurrent "{{ openclaw_subagents_max_concurrent }}"
 
-        # Context pruning: trim stale tool outputs after 15m, keep last 3 assistant responses
+        # Context pruning: trim stale tool outputs after 15m
         check_set agents.defaults.contextPruning.mode cache-ttl
         check_set agents.defaults.contextPruning.ttl 15m
-        check_set agents.defaults.contextPruning.keepLastAssistants "3"
 
         # Exec tool policy for OpenClaw itself
         check_set tools.exec.host "{{ openclaw_exec_host }}"
-        check_set tools.exec.security "{{ openclaw_exec_security }}"
-        check_set tools.exec.ask "{{ openclaw_exec_ask }}"
+        check_set tools.exec.mode "{{ openclaw_exec_mode }}"
 
         # Skip bootstrap: prevent gateway from re-scaffolding workspace context files
         # (SOUL.md, IDENTITY.md, etc.) with factory templates on every message/cron tick.
@@ -408,10 +399,10 @@
 
         # Image generation model (Google Gemini — provider apiKey merged into models JSON above)
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
-        check_set agents.defaults.imageGenerationModel.primary "{{ openclaw_image_generation_model }}"
-        check_set_json agents.defaults.imageGenerationModel.fallbacks '{{ openclaw_image_generation_fallbacks | to_json }}'
+        check_set agents.defaults.mediaModels.image.primary "{{ openclaw_image_generation_model }}"
+        check_set_json agents.defaults.mediaModels.image.fallbacks '{{ openclaw_image_generation_fallbacks | to_json }}'
         {% else %}
-        for key in agents.defaults.imageGenerationModel.primary agents.defaults.imageGenerationModel.fallbacks; do
+        for key in agents.defaults.mediaModels.image.primary agents.defaults.mediaModels.image.fallbacks; do
             check_unset "$key"
         done
         {% endif %}
@@ -419,14 +410,12 @@
         # Voice transcription — enable audio (provider merged into models JSON above; cleanup in secrets task)
         {% if groq_api_key is defined and groq_api_key | length > 0 %}
         check_set tools.media.audio.enabled true
-        check_set_json tools.media.audio.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}"}]'
+        check_set_json tools.media.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}","capabilities":["audio"]}]'
         {% endif %}
 
         # Telegram: suppress error reply messages (silent = user sees nothing on failure)
         check_set_json channels.telegram.silentErrorReplies '{{ openclaw_telegram_silent_error_replies | lower }}'
 
-        # Health monitor: faster detection of silent channel disconnections
-        check_set gateway.channelStaleEventThresholdMinutes "{{ openclaw_health_monitor_stale_minutes }}"
         {% if whatsapp_used %}
         {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
         check_set_json channels.whatsapp.healthMonitor.enabled 'false'
@@ -549,10 +538,11 @@
   changed_when: "'CHANGED:' in auth_profiles_result.stdout"
   notify: restart openclaw-gateway
 
-# agents.defaults.models is the authoritative model allowlist + runtime mapping
-# (agentRuntime.id=claude-cli keeps turns on the claude CLI / Max subscription).
-# Protected map path since 2026.4.22 — --replace declares our tree authoritative,
-# which also clears stale legacy entries (e.g. "claude-cli/<model>" ids).
+# agents.defaults.models holds aliases and the runtime mapping (agentRuntime.id=
+# claude-cli keeps turns on the claude CLI / Max subscription); since 2026.8.1 the
+# allowlist itself is agents.defaults.modelPolicy.allow, which we derive from the
+# same keys. Protected map path since 2026.4.22 — --replace declares our tree
+# authoritative, which also clears stale legacy entries.
 - name: Pin agent model allowlist with claude-cli runtime mapping
   ansible.builtin.shell: |
     set -euo pipefail
@@ -561,12 +551,18 @@
     CURRENT=$(openclaw config get agents.defaults.models 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT="{}"
     C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED" | jq -cS '.')
+    UPDATED=""
     if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
         openclaw config set agents.defaults.models --json "$DESIRED" --replace
-        echo "UPDATED"
-    else
-        echo "OK"
+        UPDATED="$UPDATED agents.defaults.models"
     fi
+    DESIRED_ALLOW='{{ openclaw_agent_models | list | to_json }}'
+    CURRENT_ALLOW=$(openclaw config get agents.defaults.modelPolicy.allow 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_ALLOW="[]"
+    if [ "$(echo "$CURRENT_ALLOW" | jq -cS 'sort' 2>/dev/null || echo PARSE_FAIL)" != "$(echo "$DESIRED_ALLOW" | jq -cS 'sort')" ]; then
+        openclaw config set agents.defaults.modelPolicy.allow --json "$DESIRED_ALLOW"
+        UPDATED="$UPDATED agents.defaults.modelPolicy.allow"
+    fi
+    if [ -n "$UPDATED" ]; then echo "UPDATED:$UPDATED"; else echo "OK"; fi
   args:
     executable: /bin/bash
   register: agent_models_result

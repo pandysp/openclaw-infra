@@ -45,7 +45,8 @@ def walk(key, create=False):
     return node, parts[-1]
 if args[:2] == ['config', 'get']:
     node, leaf = walk(args[2])
-    if node is None or leaf not in node: sys.exit(1)
+    if node is None or leaf not in node:
+        sys.stderr.write('Config path is valid but unset: ' + args[2] + '\\n'); sys.exit(1)
     value = node[leaf]
     print(value if isinstance(value, str) else json.dumps(value))
     sys.exit(0)

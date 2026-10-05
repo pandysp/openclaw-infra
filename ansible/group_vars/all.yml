@@ -90,7 +90,6 @@ openclaw_scheduled_automation_default: false
 # Latent cadence used only after an agent opts into scheduled automation.
 openclaw_heartbeat_interval: "30m"
 openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
-openclaw_cooldown_failure_window_hours: 1  # reset cooldown error count after 1h (default: 24)
 openclaw_elevated_default: "off"
 
 # Voice transcription (Groq Whisper)
@@ -111,8 +110,7 @@ openclaw_subagents_max_concurrent: 16
 
 # OpenClaw's own exec tool runs in the sandbox.
 openclaw_exec_host: "sandbox"
-openclaw_exec_security: "full"       # Native Claude tools use bypassPermissions; C supplies OS containment.
-openclaw_exec_ask: "off"             # Native execution is not blocked by elevated=false; see SECURITY §4.
+openclaw_exec_mode: "full"           # No approval prompts for native or OpenClaw exec; containers supply OS containment, see SECURITY §4.
 
 # Sandbox settings
 openclaw_sandbox_mode: "all"
@@ -124,9 +122,6 @@ openclaw_browser_allow_host_control: false  # Allow sandboxed agents to use brow
 
 # Telegram: silently suppress error reply messages (true = user sees nothing on failure)
 openclaw_telegram_silent_error_replies: true
-
-# Health monitor: restart channels that go silent (no events) for this many minutes
-openclaw_health_monitor_stale_minutes: 15  # Default 30; lowered for faster disconnect detection
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false

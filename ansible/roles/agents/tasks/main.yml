@@ -113,7 +113,7 @@
     export XDG_RUNTIME_DIR=/run/user/1000
     DESIRED='{{ _heartbeat_defaults | to_json }}'
     CURRENT=$(openclaw config get "agents.defaults.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-        if echo "$CURRENT" | grep -qiE '^Config path not found:'; then
+        if echo "$CURRENT" | grep -qE '^Config path is valid but unset:'; then
             CURRENT="{}"
         else
             echo "ERROR: could not read agents.defaults.heartbeat" >&2

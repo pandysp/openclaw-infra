@@ -11,7 +11,7 @@
         }
         KEY="agents.entries.{{ _heartbeat_agent.id }}.heartbeat"
         CURRENT=$(openclaw config get "$KEY" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-            if echo "$CURRENT" | grep -qiE '^Config path not found:'; then
+            if echo "$CURRENT" | grep -qE '^Config path is valid but unset:'; then
                 CURRENT="{}"
             else
                 echo "ERROR: could not read heartbeat config for {{ _heartbeat_agent.id }}" >&2
