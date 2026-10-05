@@ -28,17 +28,20 @@
       - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
 
-- name: Check if Node.js is installed
+- name: Check installed Node.js version
   ansible.builtin.command: node --version
   register: node_installed
   changed_when: false
   failed_when: false
 
-- name: Install Node.js via NodeSource
-  when: node_installed.rc != 0
+# Install, or switch the NodeSource repository when the installed major differs
+# from nodejs_major_version (OpenClaw 2026.9.3+ refuses Node 25).
+- name: Install Node.js {{ nodejs_major_version }} via NodeSource
+  when: node_installed.rc != 0 or (node_installed.stdout | regex_search('^v([0-9]+)', '\\1') | first) != (nodejs_major_version | string)
   block:
     - name: Add NodeSource GPG key and repository
       ansible.builtin.shell: |
+        set -euo pipefail
         curl -fsSL https://deb.nodesource.com/setup_{{ nodejs_major_version }}.x | bash -
       args:
         executable: /bin/bash
@@ -46,8 +49,15 @@
     - name: Install nodejs package
       ansible.builtin.apt:
         name: nodejs
-        state: present
+        state: latest
         update_cache: true
+
+- name: Verify Node.js major version
+  ansible.builtin.command: node --version
+  register: node_final
+  changed_when: false
+  failed_when: (node_final.stdout | regex_search('^v([0-9]+)', '\\1') | first) != (nodejs_major_version | string)
+  when: not ansible_check_mode
 
 - name: Configure npm global prefix for ubuntu user
   ansible.builtin.shell: |
