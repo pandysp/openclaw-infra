@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise pairing, actual gateway inference, and authenticated private MCP reads.
+# Exercise actual gateway inference and authenticated private MCP reads.
 # The workflow supplies an exact run-owned host and a private repository for read-only checks.
 set -euo pipefail
 
@@ -67,24 +67,6 @@ try {
       OPENCLAW_CONFIG_PATH: path.join(state, 'openclaw.json'), OPENCLAW_STATE_DIR: state,
     },
   }));
-
-  step = 'pairing this CLI device';
-  // On first use, devices list creates the CLI identity/request and supports a
-  // local pairing fallback. Never approve a heading or somebody else's device.
-  let devices = run(['devices', 'list', '--json']);
-  const identity = JSON.parse(fs.readFileSync(path.join(state, 'identity/device.json'), 'utf8'));
-  assert(typeof identity.deviceId === 'string' && identity.deviceId.length > 0);
-  assert(Array.isArray(devices.pending) && Array.isArray(devices.paired));
-  const pending = devices.pending.filter(device => device.deviceId === identity.deviceId);
-  assert(pending.length <= 1);
-  if (pending.length === 1) {
-    assert(typeof pending[0].requestId === 'string' && pending[0].requestId.length > 0);
-    run(['devices', 'approve', pending[0].requestId, '--json']);
-    devices = run(['devices', 'list', '--json']);
-  }
-  assert(devices.paired.some(device => device.deviceId === identity.deviceId));
-  assert(!devices.pending.some(device => device.deviceId === identity.deviceId));
-  pass('This CLI device is paired');
 
   const [owner, repoName] = repository.split('/');
   const mainRead = {tool: 'github_get_file_contents', args: {owner, repo: repoName, path: ''}, sessionKey: 'agent:main:main'};

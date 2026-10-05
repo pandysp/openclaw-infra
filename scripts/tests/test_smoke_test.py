@@ -17,8 +17,7 @@ class SmokeTests(unittest.TestCase):
             root = Path(tmp)
             (root / 'fixture-case').write_text(case)
             state = root / '.openclaw'
-            (state / 'identity').mkdir(parents=True)
-            (state / 'identity/device.json').write_text('{"deviceId":"fixture-device"}')
+            state.mkdir()
             native_args = ['-p','--tools','default' if case == 'native_tools_enabled' else '', '--strict-mcp-config']
             (state / 'openclaw.json').write_text(json.dumps({
                 'gateway': {'mode': 'remote' if case == 'remote_gateway' else 'local', 'port': 18789,
@@ -116,16 +115,8 @@ assert os.environ['OPENCLAW_STATE_DIR']==str(root/'.openclaw')
 assert 'OPENCLAW_PROFILE' not in os.environ
 (root/'cli-called').touch()
 assert 'fixture-secret' not in ' '.join(args), 'Secret reached command arguments'
-if args[:2]==['devices','list']:
- paired=(root/'approved').exists() or mode=='already_paired'
- pending=[] if paired else [{'deviceId':'fixture-device','requestId':'own-request'}]
- pending += [{'deviceId':'another-device','requestId':'other-request'}]
- if mode=='ambiguous':pending += [{'deviceId':'fixture-device','requestId':'duplicate-request'}]
- print(json.dumps({'pending':pending,'paired':[{'deviceId':'fixture-device'}] if paired else []}))
-elif args[:2]==['devices','approve']:
- assert args[2]=='own-request', 'Approved another device'
- if mode=='approval_failed':print('fixture-secret-error');raise SystemExit(1)
- (root/'approved').touch();print('{}')
+if args[:1]==['devices']:
+ raise SystemExit('A local token-authenticated CLI needs no pairing')
 elif args[:3]==['gateway','call','agent']:
  config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'Inference still has tools'
@@ -167,8 +158,8 @@ else:raise AssertionError('Unexpected command')
             self.assertEqual(running['agents']['defaults']['cliBackends'], original_config['agents']['defaults']['cliBackends'])
             return result
 
-    def test_pairing_inference_and_private_reads(self):
-        for case in ('success', 'already_paired'):
+    def test_inference_and_private_reads(self):
+        for case in ('success',):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -177,7 +168,7 @@ else:raise AssertionError('Unexpected command')
                 self.assertRegex(result.stdout, r'Inference run: [0-9a-f-]{36}')
 
     def test_failures_never_pass_or_print_secret_output(self):
-        for case in ('ambiguous', 'approval_failed', 'model_command_failed',
+        for case in ('model_command_failed',
                      'wrong_reply', 'extra_reply', 'wrong_model', 'wrong_configured_model', 'remote_gateway',
                      'no_auth', 'empty_gateway_token', 'unauthenticated_gateway_allowed',
                      'embedded_fallback', 'no_model_usage', 'invalid_usage', 'public_repo',
