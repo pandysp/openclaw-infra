@@ -59,7 +59,8 @@
         OUT=$(openclaw cron remove "$PROBE" 2>&1)
         RC=$?
         set -e
-        if [ "$RC" -eq 0 ] || printf '%s' "$OUT" | grep -qiF 'invalid cron.remove params: id not found'; then
+        # 2026.9.8 reports an unknown job as "Automation not found: <id>".
+        if [ "$RC" -eq 0 ] || printf '%s' "$OUT" | grep -qF "Automation not found: $PROBE"; then
             echo "Gateway ready; cli holds operator.admin via silent first-contact grant"
             exit 0
         fi
