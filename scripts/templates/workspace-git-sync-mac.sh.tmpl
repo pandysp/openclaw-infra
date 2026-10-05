@@ -25,19 +25,32 @@ if ! git diff --cached --quiet; then
     git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-# Reconcile with remote before pushing (local workspace takes precedence on conflict).
+# Reconcile with remote, then push (local workspace takes precedence on conflict).
 # Uses merge (not rebase) — simpler for auto-synced workspaces, avoids rebase complexity.
-git fetch origin main 2>/dev/null || true
-if git rev-parse --verify origin/main >/dev/null 2>&1; then
-    if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
-        echo "WARNING: Merge conflict for __AGENT_ID__, resolving with local-wins strategy" >&2
-        git checkout --ours .
-        git add -A
-        git commit --no-edit
+# Every Mac account syncs its own copy of the same workspace repo on the same
+# schedule, so pushes race; the loser's push is rejected. Re-fetch, merge and
+# push again after a short random pause instead of waiting for the next run.
+PUSH_ATTEMPTS=5
+for attempt in $(seq 1 "$PUSH_ATTEMPTS"); do
+    git fetch origin main 2>/dev/null || true
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+        if ! git merge -X ours origin/main --no-edit 2>/dev/null; then
+            echo "WARNING: Merge conflict for __AGENT_ID__, resolving with local-wins strategy" >&2
+            git checkout --ours .
+            git add -A
+            git commit --no-edit
+        fi
     fi
-fi
 
-# Push if we have commits ahead of remote
-if [ "$(git rev-list --count origin/main..HEAD 2>/dev/null)" -gt 0 ] 2>/dev/null; then
-    git push origin main
-fi
+    # Push if we have commits ahead of remote
+    if [ "$(git rev-list --count origin/main..HEAD 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+        if git push origin main; then break; fi
+        if [ "$attempt" -eq "$PUSH_ATTEMPTS" ]; then
+            echo "ERROR: push for __AGENT_ID__ still rejected after $PUSH_ATTEMPTS attempts" >&2
+            exit 1
+        fi
+        sleep $((RANDOM % 20 + 5))
+    else
+        break
+    fi
+done
