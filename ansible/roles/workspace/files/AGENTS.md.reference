@@ -211,7 +211,7 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
 
-You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
+Your heartbeat checklist lives in OpenClaw, not in a file (`HEARTBEAT.md` is ignored and must not be recreated). You cannot change it yourself: propose changes to your human, who updates it.
 
 ### Heartbeat vs Cron: When to Use Each
 
@@ -230,7 +230,6 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 - One-shot reminders ("remind me in 20 minutes")
 - Output should deliver directly to a channel without main session involvement
 
-**Tip:** Batch similar periodic checks into `HEARTBEAT.md` instead of creating multiple cron jobs. Use cron for precise schedules and standalone tasks.
 
 **Things to check (rotate through these, 2-4 times per day):**
 

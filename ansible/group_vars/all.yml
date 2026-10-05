@@ -55,7 +55,7 @@ nodejs_major_version: 26
 openclaw_version: "2026.9.8"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
-claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
+claude_code_version: "2.1.289"  # Opus 5.5 needs >= 2.1.280
 # Claude Code compacts claude-cli sessions when the context reaches this window
 # minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
@@ -65,6 +65,9 @@ claude_code_auto_compact_window: 305000
 # false runs turns natively (apply with --tags config). Container files stay installed when off.
 openclaw_claude_cli_enabled: false
 openclaw_claude_cli_command: /home/ubuntu/.openclaw/claude-cli-container
+# Claude flags the launcher adds to every container launch (staging: ["--tools", ""]).
+# It refuses a flag OpenClaw already passes, e.g. --strict-mcp-config since 2026.9.8.
+openclaw_claude_cli_extra_args: []
 openclaw_claude_cli_network: openclaw-claude-cli
 openclaw_claude_cli_bridge_interface: oc-claude0
 openclaw_claude_cli_ipv4_subnet: 172.30.55.0/24
@@ -90,6 +93,8 @@ openclaw_scheduled_automation_default: false
 # Latent cadence used only after an agent opts into scheduled automation.
 openclaw_heartbeat_interval: "30m"
 openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
+# Derived, not set: WhatsApp is configured (channel config, owner binding) only when an agent delivers there.
+openclaw_whatsapp_used: "{{ openclaw_agents | default([]) | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 }}"
 openclaw_elevated_default: "off"
 
 # Voice transcription (Groq Whisper)

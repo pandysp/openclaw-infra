@@ -153,6 +153,13 @@ class ReconcilePlanTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReconcileError, "non-object schedule"):
             MODULE.build_plan(self.manifest([{"id": "main"}], [job]), [malformed])
 
+    def test_jobs_without_an_agent_are_left_alone(self):
+        # OpenClaw 2026.9.8 creates "Memory Dreaming Promotion" with agentId null.
+        job = desired_job()
+        system = {"id": "job-dreaming", "name": "Memory Dreaming Promotion", "agentId": None, "enabled": True}
+        plan = MODULE.build_plan(self.manifest([{"id": "main"}], [job]), [current_job(job, enabled=False), system])
+        self.assertEqual(plan, [])
+
     def test_live_identity_and_enabled_types_are_validated(self):
         job = desired_job()
         malformed_id = current_job(job)

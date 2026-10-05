@@ -91,14 +91,14 @@ class TrialCleanupTest(unittest.TestCase):
                 for path in files:
                     path.write_text('fixture')
                 paths.extend([*files, transcript])
-                active.append(('agent:main:' + run, run, root, proof, diagnostic, run))
+                active.append(('agent:main:' + run, run, root, proof, diagnostic))
 
             def gateway(method, params, **kwargs):
                 calls.append(('session', params['key']))
                 raise RuntimeError('fixture session deletion failure')
 
             def docker(args):
-                calls.append(tuple(args[:3]))
+                calls.append(tuple(args))
                 return 'fixture-container\n' if args[:2] == ['docker', 'ps'] else ''
 
             with patch.dict(trial, {'gateway': gateway, 'command': docker}):
@@ -108,6 +108,9 @@ class TrialCleanupTest(unittest.TestCase):
             self.assertTrue(any('Unrelated config changed' in str(error) for error in caught.exception.exceptions))
             self.assertEqual(sum(call[0] == 'session' for call in calls), 2)
             self.assertEqual(sum(call[:2] == ('docker', 'rm') for call in calls), 2)
+            # Only containers labelled with this run's Claude session (its transcript name).
+            self.assertEqual([call[-1] for call in calls if call[:2] == ('docker', 'ps')],
+                             ['label=openclaw.claude-session=first', 'label=openclaw.claude-session=second'])
             self.assertFalse(any(path.exists() for path in paths))
 
     def test_unexpected_transcript_is_preserved_and_error_is_reported(self):
@@ -117,7 +120,7 @@ class TrialCleanupTest(unittest.TestCase):
             config.write_text('{}')
             transcript = root / 'unexpected.jsonl'
             transcript.write_text('not this trial')
-            active = [('agent:main:fixture', 'fixture', root, root / 'proof.txt', root / 'diagnostic.py', 'fixture')]
+            active = [('agent:main:fixture', 'fixture', root, root / 'proof.txt', root / 'diagnostic.py')]
             with patch.dict(trial, {'gateway': lambda *args, **kwargs: {}, 'command': lambda args: ''}):
                 with self.assertRaises(ExceptionGroup) as caught:
                     trial['cleanup_trial'](active, {'fixture': transcript}, config, {})
@@ -132,7 +135,7 @@ class TrialCleanupTest(unittest.TestCase):
             transcript, unrelated = root / 'trial.jsonl', root / 'other.jsonl'
             transcript.write_text('Operator C restricted runtime trial fixture')
             unrelated.write_text('unrelated session')
-            active = [('agent:main:fixture', 'fixture', root, root / 'proof.txt', root / 'diagnostic.py', 'fixture')]
+            active = [('agent:main:fixture', 'fixture', root, root / 'proof.txt', root / 'diagnostic.py')]
             with patch.dict(trial, {'gateway': lambda *args, **kwargs: {}, 'command': lambda args: ''}):
                 trial['cleanup_trial'](active, {}, config, {})
             self.assertFalse(transcript.exists())

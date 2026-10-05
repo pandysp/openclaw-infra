@@ -16,17 +16,15 @@
   when: item.deliver_to | default('') | length > 0
 
 # With explicit agent ownership (2026.8.1+), a channel account without an owner
-# binding stays blocked. The default agent owns every configured channel's
-# default account; the peer bindings above are more specific and win.
+# binding stays blocked. As doctor does on upgrade, the default agent owns the
+# Telegram and (when used) WhatsApp default accounts; Discord stays unowned.
+# The peer bindings above are more specific and win.
 - name: Give the default agent each configured channel account
   ansible.builtin.set_fact:
     _telegram_bindings: "{{ _telegram_bindings + [{'agentId': _default_agent_id, 'match': {'channel': item, 'accountId': 'default'}}] }}"
   vars:
     _default_agent_id: "{{ (openclaw_agents | selectattr('is_default', 'equalto', true) | first).id }}"
-  loop: >-
-    {{ ['telegram']
-       + (['whatsapp'] if openclaw_agents | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 else [])
-       + (['discord'] if discord_bot_token is defined and discord_bot_token | length > 0 else []) }}
+  loop: "{{ ['telegram'] + (['whatsapp'] if openclaw_whatsapp_used | bool else []) }}"
 
 - block:
     - name: Write bindings JSON to temp file

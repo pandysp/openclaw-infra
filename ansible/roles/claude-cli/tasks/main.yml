@@ -19,11 +19,6 @@
     that: openclaw_claude_cli_mac_host | length == 0 or openclaw_claude_cli_mac_user | length > 0
     fail_msg: Set openclaw_claude_cli_mac_user to the Mac account, or leave openclaw_claude_cli_mac_host empty.
 
-- name: Read the current backend using the shared configuration task
-  ansible.builtin.include_role:
-    name: config
-    tasks_from: cli-backend-state.yml
-
 - name: Ensure container CLI support directories exist
   ansible.builtin.file:
     path: "{{ item }}"
@@ -217,14 +212,14 @@
       ssh: "{{ _claude_cli_ssh }}"
       env_names: "{{ openclaw_claude_cli_skill_env }}"
       invocations: /home/ubuntu/.openclaw/claude-cli-invocations.jsonl
+      extra_args: "{{ openclaw_claude_cli_extra_args }}"
   register: claude_cli_manifest
 
-- name: Queue a gateway restart only for changed assets used by C
+- name: Queue a gateway restart for changed container CLI assets
   ansible.builtin.set_fact:
     _claude_cli_restart_requested: true
   changed_when: >-
     claude_cli_launcher.changed or claude_cli_manifest.changed
     or claude_cli_image_after.changed or claude_cli_ssh_configs.changed
     or (claude_cli_mac_pin.changed | default(false)) or (claude_cli_mac_key.changed | default(false))
-  when: claude_cli_backend_in_use.stdout == 'yes'
   notify: restart openclaw-gateway

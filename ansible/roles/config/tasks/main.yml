@@ -193,7 +193,6 @@
     - name: Configure gateway settings
       ansible.builtin.shell: |
         set -euo pipefail
-        {% set whatsapp_used = openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
         export XDG_RUNTIME_DIR=/run/user/1000
         CHANGED=""
 
@@ -292,8 +291,9 @@
 
         # Explicit allowlists must not be widened by the plugin profile extension.
         {% if openclaw_tools_allow is defined %}
+        # 2026.9.8 refuses allow next to alsoAllow, so clear alsoAllow first.
+        check_unset tools.alsoAllow
         check_set_json tools.allow '{{ openclaw_tools_allow | to_json }}'
-        check_set_json tools.alsoAllow '[]'
         {% elif openclaw_mcp_adapter is defined %}
         check_set_json tools.alsoAllow '["group:plugins"]'
         {% endif %}
@@ -306,7 +306,7 @@
         # — without it model turns fail with MissingAgentHarnessError.
         {# WhatsApp/Discord ship as external channel plugins again since 2026.5.12 #}
         {# (installed by each channel role in plugin.yml); allowlist when configured. #}
-        {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram","anthropic"] %}
+        {% set plugin_allow = ["device-pair","memory-core","talk-voice","telegram","anthropic"] %}
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("xai") %}
         {% endif %}
@@ -320,7 +320,7 @@
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
-        {% if whatsapp_used %}
+        {% if openclaw_whatsapp_used | bool %}
         {%   set _ = plugin_allow.append("whatsapp") %}
         {% endif %}
         {% if discord_bot_token is defined and discord_bot_token | length > 0 %}
@@ -366,6 +366,11 @@
 
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
         check_set messages.queue.mode collect
+
+        # 2026.9.8 schedules nightly memory dreaming and weekly skill reviews for every agent
+        # on its own. Off: unattended turns only run where an agent opts into schedules.
+        check_set_json plugins.entries.memory-core.config.dreaming.enabled 'false'
+        check_set skills.workshop.autonomous.mode off
 
         # Concurrency: allow more parallel sessions across all agents
         check_set agents.defaults.maxConcurrent "{{ openclaw_max_concurrent }}"
@@ -416,7 +421,7 @@
         # Telegram: suppress error reply messages (silent = user sees nothing on failure)
         check_set_json channels.telegram.silentErrorReplies '{{ openclaw_telegram_silent_error_replies | lower }}'
 
-        {% if whatsapp_used %}
+        {% if openclaw_whatsapp_used | bool %}
         {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
         check_set_json channels.whatsapp.healthMonitor.enabled 'false'
         {% else %}
@@ -468,14 +473,77 @@
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
 
-# The only writer of agents.defaults.cliBackends. With containers enabled, the
-# launcher replaces just the claude-cli command; everything else is as configured.
-- name: Apply the CLI backends, with containers when enabled
-  ansible.builtin.include_tasks: cli-backends.yml
-  vars:
-    _desired_cli_backends: >-
-      {{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}
-         if openclaw_claude_cli_enabled | bool else {}, recursive=true) }}
+# OpenClaw 2026.9.8 starts `claude` from the gateway's PATH (agents.defaults.cliBackends
+# is gone). With containers enabled, a gateway-only PATH entry puts a `claude` that is
+# the container launcher first; shells keep the real Claude Code for `claude auth login`.
+# The only writer of that entry. The prefix is our one fact; the rest is the unit's own PATH,
+# read from the unit file because the running service's PATH already includes this drop-in.
+- name: Give the gateway a claude that is the container launcher
+  when: openclaw_claude_cli_enabled | bool
+  block:
+    - name: Read the gateway unit's own PATH
+      ansible.builtin.slurp:
+        src: /home/ubuntu/.config/systemd/user/openclaw-gateway.service
+      register: _gateway_unit
+
+    - name: Find the gateway unit's PATH
+      ansible.builtin.set_fact:
+        _gateway_unit_path: "{{ _gateway_unit.content | b64decode | regex_search('(?m)^Environment=PATH=(\\S+)$', '\\1') }}"
+
+    - name: Require the gateway unit to set its PATH
+      ansible.builtin.assert:
+        that: _gateway_unit_path is not none
+        fail_msg: The gateway unit has no Environment=PATH line; the claude-cli PATH entry cannot be derived.
+
+    - name: Create the root-owned directory for the gateway's claude
+      become: true
+      ansible.builtin.file:
+        path: /usr/local/lib/openclaw/claude-cli-bin
+        state: directory
+        mode: "0755"
+
+    - name: Make the gateway's claude the container launcher
+      become: true
+      ansible.builtin.file:
+        path: /usr/local/lib/openclaw/claude-cli-bin/claude
+        src: "{{ openclaw_claude_cli_command }}"
+        state: link
+        force: true
+      notify: restart openclaw-gateway
+
+    - name: Put the gateway's claude first on its PATH
+      ansible.builtin.copy:
+        dest: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/claude-cli-path.conf
+        content: "[Service]\nEnvironment=PATH=/usr/local/lib/openclaw/claude-cli-bin:{{ _gateway_unit_path[0] }}\n"
+        mode: "0644"
+      register: _claude_cli_path_written
+      notify: restart openclaw-gateway
+
+- name: Remove the gateway's claude when containers are off
+  when: not openclaw_claude_cli_enabled | bool
+  block:
+    - name: Remove the gateway's claude PATH entry
+      ansible.builtin.file:
+        path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/claude-cli-path.conf
+        state: absent
+      register: _claude_cli_path_removed
+      notify: restart openclaw-gateway
+
+    - name: Remove the gateway's claude
+      become: true
+      ansible.builtin.file:
+        path: /usr/local/lib/openclaw/claude-cli-bin
+        state: absent
+      notify: restart openclaw-gateway
+
+- name: Reload systemd after the gateway PATH entry changed
+  ansible.builtin.systemd:
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  # A skipped task registers changed=false, so each branch keeps its own result.
+  when: _claude_cli_path_written.changed or _claude_cli_path_removed.changed
 
 - name: Enforce agent auth-profiles — setup token present, api-key profile absent
   ansible.builtin.shell: |

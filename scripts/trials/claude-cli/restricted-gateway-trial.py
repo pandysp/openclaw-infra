@@ -48,28 +48,27 @@ def cleanup_trial(active, native_sessions, config_path, before):
             error.add_note(description)
             errors.append(error)
 
-    for key, run, project, proof, diagnostic, session_hash in active:
+    for key, run, project, proof, diagnostic in active:
         attempt('Delete trial gateway session', gateway, 'sessions.delete', {'key': key}, timeout=20000)
-        names = attempt('Find trial containers', command,
-                        ['docker', 'ps', '-aq', '--filter', 'label=openclaw.claude-session=' + session_hash])
-        if names is not None:
-            for name in names.split():
-                attempt('Remove trial container ' + name, command, ['docker', 'rm', '-f', name])
         for path in (proof, diagnostic, diagnostic.with_suffix('.mp4'), diagnostic.with_suffix('.png')):
             attempt('Remove trial fixture ' + path.name, path.unlink, missing_ok=True)
         transcript = native_sessions.get(run)
 
-        def remove_transcripts():
-            # A failed first turn may not return its native session ID.
+        def remove_containers_and_transcripts():
+            # A failed first turn may not have reported its transcript; find it by the run marker.
             candidates = [transcript] if transcript is not None else project.glob('*.jsonl')
             for path in candidates:
                 if path.exists():
                     if f'Operator C restricted runtime trial {run}' in path.read_text():
+                        # The launcher labels containers with Claude's session ID, which names the transcript.
+                        for container in command(['docker', 'ps', '-aq', '--filter',
+                                                  'label=openclaw.claude-session=' + path.stem]).split():
+                            command(['docker', 'rm', '-f', container])
                         path.unlink()
                     elif transcript is not None:
                         raise RuntimeError('Refusing to delete an unexpected native transcript')
 
-        attempt('Remove confirmed trial transcripts', remove_transcripts)
+        attempt('Remove confirmed trial containers and transcripts', remove_containers_and_transcripts)
 
     def compare_config():
         if json.loads(config_path.read_text()) != before:
@@ -94,8 +93,12 @@ agents = options.agents or list(entries)
 if any(agent not in entries for agent in agents):
     raise SystemExit('ERROR: Unknown trial agent')
 # The trial uses the installed container backend directly; no gateway restart.
-if before['agents']['defaults'].get('cliBackends') != {'claude-cli': {'command': str(home / '.openclaw/claude-cli-container')}}:
-    raise SystemExit('ERROR: Trials need the container backend; enable containers first')
+gateway_path = next(line.split('=', 1)[1] for line in subprocess.run(
+    ['systemctl', '--user', 'show', 'openclaw-gateway', '-p', 'Environment'], capture_output=True, text=True, check=True
+).stdout.replace('Environment=', '').split() if line.startswith('PATH='))
+claude = next((Path(d) / 'claude' for d in gateway_path.split(':') if (Path(d) / 'claude').exists()), None)
+if claude is None or claude.resolve() != (home / '.openclaw/claude-cli-container').resolve():
+    raise SystemExit('ERROR: Trials need the container backend; the gateway does not start the launcher as claude')
 
 
 def gateway(method, params, timeout=200000):
@@ -119,7 +122,6 @@ try:
         project = home / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
         run = uuid.uuid4().hex
         key = f'agent:{agent}:cwrapper-' + run
-        session_hash = hashlib.sha256(key.encode()).hexdigest()[:12]
         marker = 'CWRAPPER_' + uuid.uuid4().hex[:12]
         # Workspace sync may run mid-trial; keep fixtures out of the agent's repository.
         exclude = workspace / '.git/info/exclude'
@@ -136,7 +138,7 @@ try:
                     'check_mac_absence': not mac_host, 'mac_host': mac_target}
         diagnostic.write_text(f'SETTINGS = {settings!r}\n' + (scratch / 'container-probe.py').read_text())
         diagnostic_digest = hashlib.sha256(diagnostic.read_bytes()).hexdigest()
-        active.append((key, run, project, proof, diagnostic, session_hash))
+        active.append((key, run, project, proof, diagnostic))
         qmd_tool = 'mcp__openclaw__' + ('qmd_status' if agent == 'main' else f'qmd-{agent}_status')
         # Agents with Mac access must reach it; the others' containers must hold no Mac
         # key, pin or host entry (checked by the in-turn probe).
@@ -144,8 +146,10 @@ try:
         script_command = 'python3 ' + diagnostic.name
 
         def launches():
-            return [json.loads(line) for line in proof_log.read_text().splitlines()
-                    if json.loads(line).get('session_hash') == session_hash]
+            # Only this run's launches: other turns of the same agent may run meanwhile.
+            session = native_sessions[run].stem
+            return [record for record in map(json.loads, proof_log.read_text().splitlines())
+                    if record.get('session') == session]
 
         def turn(message):
             return gateway('agent', {'agentId': agent, 'sessionKey': key, 'idempotencyKey': str(uuid.uuid4()),
@@ -164,13 +168,12 @@ try:
              'read the workspace remote, and whether it can push a throwaway branch, which it deletes right away. '
              + (f'Use Bash to run exactly {ssh} . ' if ssh else '') + f'Then use Bash to run exactly {script_command} . '
              'Do not edit any other files or contact people. Reply done after those checks.')
-        if len(launches()) != 1:
-            raise RuntimeError('Expected exactly one container launch for the first turn')
-        # From 2026.7.1 the container ends with its turn, so read the native session from its transcript.
         new = [path for path in project.glob('*.jsonl') if f'Operator C restricted runtime trial {run}' in path.read_text()]
         if len(new) != 1:
             raise RuntimeError('Expected exactly one native transcript for the first turn')
         native_sessions[run] = new[0]
+        if len(launches()) != 1:
+            raise RuntimeError('Expected exactly one container launch for the first turn')
         skills = 'openclaw-skills:' in new[0].read_text()
         media_reply = None
         if agent == 'main':
@@ -184,7 +187,11 @@ try:
                 f'Operator workflow fixture: read and follow the bundled video-frames SKILL.md. '
                 f'Use its frame.sh script to extract a PNG from {video} into {frame}. '
                 f'Read that image using native Read. Reply with only the dominant color you see.')
-        later = turn('Reply only with the marker I asked you to remember.')
+        warm = turn('Reply only with the marker I asked you to remember.')
+        warm_count = len(launches())
+        command(['docker', 'stop', '--time', '5', launches()[-1]['name']], timeout=25)
+        time.sleep(2)
+        cold = turn('Reply only with the marker I asked you to remember.')
         data = native_sessions[run].read_text()
         if f'Operator C restricted runtime trial {run}' not in data:
             raise RuntimeError('Native session transcript does not match this test')
@@ -220,10 +227,11 @@ try:
             'native_write_success': any(call.get('name') == 'Write' and call.get('input', {}).get('file_path') == str(proof) and success(call) for call in calls),
             'native_read_success': any(call.get('name') == 'Read' and call.get('input', {}).get('file_path') == str(proof) and success(call) for call in calls),
             'native_edit_success': any(call.get('name') == 'Edit' and call.get('input', {}).get('file_path') == str(proof) and success(call) for call in calls),
-            'skills_loaded': skills, 'session_continuity': marker in reply(later),
-            # From 2026.7.1 every turn relaunches; later launches must resume the native session.
-            # If a later OpenClaw reuses the live process again, this fails: add a forced cold turn then.
-            'later_turns_resume': len(starts) >= 2 and not starts[0]['resuming'] and all(start['resuming'] for start in starts[1:]),
+            'skills_loaded': skills, 'warm_session_continuity': marker in reply(warm),
+            'warm_process_reused': warm_count == 1,
+            'cold_resume_continuity': marker in reply(cold),
+            # 2026.9.8 keeps the process warm between turns; after the forced stop the new launch must resume.
+            'cold_launch_uses_resume': len(starts) == 2 and starts[-1]['resuming'],
             'diagnostic_unmodified': hashlib.sha256(diagnostic.read_bytes()).hexdigest() == diagnostic_digest,
             'diagnostic_only_read_and_run': diagnostic_untouched(calls, diagnostic, script_command),
             **{name: diagnostic_results.get(name) is True for name in PROBE_CHECKS + (

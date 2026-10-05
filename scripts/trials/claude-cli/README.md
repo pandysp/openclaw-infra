@@ -3,7 +3,7 @@
 Scoped, reversible trials against the real VPS. They are **not** deployment
 assets and **not** part of `python3 -m unittest discover -s scripts/tests`.
 Run them from a copy of this directory on the VPS (`ubuntu@openclaw-vps`),
-using `rsync -a` to preserve executable modes and keeping the layout intact: scripts locate `trial-backend.py`, `cancel-bin/`
+using `rsync -a` to preserve executable modes and keeping the layout intact: scripts locate `container-probe.py`
 and their evidence files relative to themselves.
 
 Before any trial that restarts the gateway: check running cron jobs and the
@@ -15,12 +15,8 @@ need explicit keyboard-user permission; a passing trial is not rollout approval.
 
 | Script | What it proves | Restarts gateway |
 |---|---|---|
-| `trial-backend.py apply\|restore` | Reversible `agents.defaults.cliBackends` override to `restricted-dispatcher.py`; requires the container backend and restores it | yes |
-| `restricted-dispatcher.py` | Runs every session through the installed launcher; `cwrapper-cancel-*` sessions also get `cancel-bin/` first in `PATH` | — |
-| `restricted-gateway-trial.py` | Per-agent feature suite through real gateway turns (native tools, scoped MCP, skills, Git read and push to a throwaway branch, strict Mac SSH, resumed sessions) on the installed container backend; needs containers enabled | no |
-| `container-probe.py` | Copied into each workspace by the gateway trial and run by the agent inside its own container during the turn, since from 2026.7.1 the container ends with its turn: privileges, hidden host files, Git read and throwaway push, Mac absence. Prints booleans only | — |
-| `gateway-cancellation-trial.py chat\|kill` | Foreground `chat.abort` cleanup, or explicit launcher SIGKILL via one validated pidfd; requires an actual live sleep PID; 5-minute rollback timer | yes |
-| `cancel-bin/docker` | Fault shim: an attach client that ignores quick cleanup, selected only for `cwrapper-cancel-*` | — |
+| `restricted-gateway-trial.py` | Per-agent feature suite through real gateway turns (native tools, scoped MCP, skills, Git read and push to a throwaway branch, strict Mac SSH, warm reuse and a resumed session after a forced container stop); needs the gateway's `claude` to be the launcher (containers enabled) | no |
+| `container-probe.py` | Copied into each workspace by the gateway trial and run by the agent inside its own container during the turn, so it sees exactly what the agent sees: privileges, hidden host files, Git read and throwaway push, Mac absence. Prints booleans only | — |
 | `guard-launch-race-trial.py` | Stopped guard cannot admit a late `docker create` (real Docker, real guard service) | no |
 | `guard-held-create-trial.py LAUNCHER.py` | Holds the client return after real stopped creation; teardown waits on its lease, revoked admission refuses start, fixture removed. Not late daemon-completion proof; refuses teardown with other labelled runtimes | no |
 | `docker-cancellation-trial.py [LAUNCHER.py]` | SIGTERM/SIGINT during a real container run: exit 143/130 and container removed | no |

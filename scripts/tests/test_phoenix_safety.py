@@ -461,19 +461,9 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.assertEqual(config['openclaw_model_primary'], 'anthropic/claude-sonnet-5-5')
         self.assertEqual(config['openclaw_model_fallbacks'], [])
 
-        # An override replaces OpenClaw's defaults (OpenClaw at
-        # openclaw_docs_reviewed_version,
-        # extensions/anthropic/cli-backend.ts), and its schema requires `command`.
-        # Staging must run production's exact Claude CLI invocation plus only the
-        # two lockdown flags; anything else makes Phoenix test a different runtime.
-        upstream = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
-                    '--setting-sources', 'user', '--allowedTools', 'mcp__openclaw__*',
-                    '--disallowedTools', 'ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor']
-        lockdown = ['--tools', '', '--strict-mcp-config']
-        backend = config['openclaw_cli_backends']['claude-cli']
-        self.assertEqual(backend['command'], 'claude')
-        self.assertEqual(backend['args'], upstream[:5] + lockdown + upstream[5:])
-        self.assertEqual(backend['resumeArgs'], upstream[:5] + lockdown + upstream[5:] + ['--resume', '{sessionId}'])
+        # OpenClaw's tools.allow does not restrict Claude's own tools (measured on 2026.9.8),
+        # so staging's launcher adds exactly `--tools ""` and nothing else.
+        self.assertEqual(config['openclaw_claude_cli_extra_args'], ['--tools', ''])
 
     def test_existing_stack_rejection_never_claims_ownership_or_removes_state(self):
         result = self.run_step('Initialize Pulumi staging stack', init_exit=71)

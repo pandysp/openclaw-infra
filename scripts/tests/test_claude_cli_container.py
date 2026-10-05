@@ -146,7 +146,7 @@ class MacAccessTest(unittest.TestCase):
 class LauncherMacScopeTest(unittest.TestCase):
     """Exercise main() through Docker's command boundary, not just mac_access()."""
 
-    def launch(self, agent, mac_host, skill_root=None):
+    def launch(self, agent, mac_host, skill_root=None, extra_args=(), session_args=('--session-id', 'fixture-session'), refusal=None):
         with tempfile.TemporaryDirectory(prefix='launcher-mac-') as directory:
             home = Path(directory).resolve()
             workspace = home / 'workspace'
@@ -175,12 +175,13 @@ class LauncherMacScopeTest(unittest.TestCase):
                 'network': 'fixture', 'image': 'fixture', 'env_names': [],
                 'mcp_url': 'http://172.30.0.1:8787/openclaw/mcp',
                 'mcp_target': str(state / 'target.json'), 'invocations': str(state / 'invocations.jsonl'),
+                'extra_args': list(extra_args),
             }))
             with tempfile.TemporaryDirectory(prefix='openclaw-main-test-', dir='/tmp') as artifacts:
                 mcp = Path(artifacts) / 'mcp.json'
                 mcp.write_text(json.dumps({'mcpServers': {'openclaw': {
                     'type': 'http', 'url': 'http://127.0.0.1:1234/mcp'}}}))
-                args = ['--mcp-config', str(mcp)]
+                args = ['--mcp-config', str(mcp), '--strict-mcp-config', *session_args]
                 if skill_root is not None:
                     skill = home / skill_root / 'skills/discord'
                     skill.mkdir(parents=True)
@@ -210,8 +211,7 @@ class LauncherMacScopeTest(unittest.TestCase):
 
                 with patch.object(launcher, 'HOME', home), patch.object(launcher, 'SECURE_STORAGE', auth), \
                      patch.object(launcher, 'NATIVE', native), \
-                     patch.dict(os.environ, {'OPENCLAW_MCP_AGENT_ID': agent,
-                         'OPENCLAW_MCP_SESSION_KEY': f'agent:{agent}:fixture'}, clear=True), \
+                     patch.dict(os.environ, {}, clear=True), \
                      patch.object(Path, 'cwd', return_value=workspace), \
                      patch.object(Path, 'read_text', read), patch.object(Path, 'resolve', canonical), \
                      patch.object(launcher.tempfile, 'TemporaryDirectory', side_effect=lambda **kwargs:
@@ -224,17 +224,21 @@ class LauncherMacScopeTest(unittest.TestCase):
                      patch.object(launcher, 'run_container', side_effect=lambda *args, prepare: prepare() or 0) as run:
                     if mac_host is None:
                         with self.assertRaisesRegex(KeyError, 'mac_host'):
-                            launcher.main(['--mcp-config', str(mcp)], runtime)
+                            launcher.main(args, runtime)
                         create.assert_not_called()
                         run.assert_not_called()
                         return
-                    if skill_root == 'elsewhere':
-                        with self.assertRaisesRegex(SystemExit, 'outside expected skill roots'):
+                    if refusal:
+                        with self.assertRaisesRegex(SystemExit, refusal):
                             launcher.main(args, runtime)
                         create.assert_not_called()
                         return
                     launcher.main(args, runtime)
                     command = create.call_args.args[0]
+                    self.assertEqual(command[-len(args) - len(extra_args):], [*args, *extra_args])
+                    session = session_args[1] if session_args[0] != '--no-session-persistence' else 'none'
+                    self.assertIn('openclaw.claude-session=' + session, command)
+                    self.assertIn('openclaw.claude-agent=' + agent, command)
                     bindings = [command[i + 1] for i, value in enumerate(command) if value == '--mount']
                     mac_bindings = [value for value in bindings if 'openclaw_mac_air' in value]
                     if skill_root is not None:
@@ -261,25 +265,52 @@ class LauncherMacScopeTest(unittest.TestCase):
         # From 2026.7.1, channel plugins ship skills that OpenClaw links from their installed package.
         self.launch('main', 'mac-air', '.openclaw/npm/projects/openclaw-discord-fixture/node_modules/@openclaw/discord')
 
-    def test_skill_outside_known_roots_is_refused(self):
-        self.launch('main', 'mac-air', 'elsewhere')
+    def test_extra_args_follow_openclaws_args(self):
+        # Staging turns Claude's own tools off; OpenClaw's tools.allow does not reach them.
+        self.launch('other', '', extra_args=('--tools', ''))
 
-    def test_agent_missing_from_entries_is_refused_before_docker(self):
-        # From 2026.8.1 agents are keyed under agents.entries; a list or unknown id has no scope.
+    def test_extra_flag_openclaw_already_passes_is_refused(self):
+        self.launch('other', '', extra_args=('--strict-mcp-config',), refusal='already passes a configured extra CLI flag')
+
+    def test_resumed_turn_is_labelled_with_its_session(self):
+        self.launch('other', '', session_args=('--resume', 'fixture-resumed'))
+
+    def test_btw_side_question_without_session_runs_unlabelled(self):
+        # /btw strips --session-id/--resume and adds --no-session-persistence (2026.9.8 setup-api.js).
+        self.launch('other', '', session_args=('--no-session-persistence',))
+
+    def test_bundled_extension_skill_is_mounted_read_only(self):
+        # From 2026.9.8, bundled extensions (e.g. custodian-skills) link skills from the OpenClaw package.
+        self.launch('main', 'mac-air', '.npm-global/lib/node_modules/openclaw/dist/extensions/custodian-skills')
+
+    def test_skill_outside_known_roots_is_refused(self):
+        self.launch('main', 'mac-air', 'elsewhere', refusal='outside expected skill roots')
+
+    def refused(self, entries, cwd, args, message):
         with tempfile.TemporaryDirectory(prefix='launcher-scope-') as directory:
-            home = Path(directory)
+            home = Path(directory).resolve()
             (home / '.openclaw').mkdir()
             (home / '.openclaw/openclaw.json').write_text(json.dumps({'agents': {
-                'entries': {'main': {'workspace': str(home)}}, 'defaults': {}}}))
+                'entries': {agent: {'workspace': str(home / folder)} for agent, folder in entries.items()},
+                'defaults': {}}}))
             runtime = home / 'runtime.json'
             runtime.write_text('{}')
-            with patch.object(launcher, 'HOME', home), \
-                 patch.dict(os.environ, {'OPENCLAW_MCP_AGENT_ID': 'other',
-                     'OPENCLAW_MCP_SESSION_KEY': 'agent:other:fixture'}, clear=True), \
-                 patch.object(launcher, 'output') as docker:
-                with self.assertRaisesRegex(SystemExit, 'Missing or invalid CLI agent scope'):
-                    launcher.main(['--mcp-config', '/tmp/openclaw-x/mcp.json'], runtime)
+            with patch.object(launcher, 'HOME', home), patch.dict(os.environ, {}, clear=True), \
+                 patch.object(Path, 'cwd', return_value=home / cwd), patch.object(launcher, 'output') as docker:
+                with self.assertRaisesRegex(SystemExit, message):
+                    launcher.main(args, runtime)
             docker.assert_not_called()
+
+    def test_workspace_of_no_agent_is_refused_before_docker(self):
+        # From 2026.9.8 OpenClaw names no agent; the workspace OpenClaw starts Claude in decides.
+        self.refused({'main': 'main'}, 'elsewhere', ['--session-id', 'fixture'], 'exactly one configured agent workspace')
+
+    def test_workspace_shared_by_two_agents_is_refused_before_docker(self):
+        self.refused({'main': 'shared', 'other': 'shared'}, 'shared', ['--session-id', 'fixture'],
+                     'exactly one configured agent workspace')
+
+    def test_launch_without_claude_session_is_refused_before_docker(self):
+        self.refused({'main': 'main'}, 'main', ['--mcp-config', '/tmp/openclaw-x/mcp.json'], 'names no Claude session')
 
     def test_old_manifest_fails_before_docker_creation(self):
         self.launch('other', None)

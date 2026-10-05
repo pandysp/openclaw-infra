@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Host-side launcher. Agent code runs only after the container's privilege drop."""
 import fcntl
-import hashlib
 import ipaddress
 import json
 import os
@@ -204,14 +203,22 @@ def main(args, runtime_path=RUNTIME):
         os.execv(str(NATIVE), [str(NATIVE), *args])
     runtime = json.loads(Path(runtime_path).read_text())
     config = json.loads((HOME / '.openclaw/openclaw.json').read_text())
-    agent = os.environ.get('OPENCLAW_MCP_AGENT_ID', '')
-    key = os.environ.get('OPENCLAW_MCP_SESSION_KEY', '')
-    entry = config['agents']['entries'].get(agent)
-    if entry is None or not re.fullmatch(r'[A-Za-z0-9_-]+', agent) or not key.startswith(f'agent:{agent}:'):
-        raise SystemExit('ERROR: Missing or invalid CLI agent scope; refusing native execution')
-    workspace = Path(entry.get('workspace') or config['agents']['defaults']['workspace'])
-    if Path.cwd() != workspace or workspace.resolve() != workspace:
-        raise SystemExit('ERROR: CLI workspace must be the canonical configured agent workspace')
+    # OpenClaw 2026.9.8 names no agent: it starts Claude in the agent's workspace,
+    # so the workspace must belong to exactly one configured agent.
+    workspace = Path.cwd()
+    owners = [agent_id for agent_id, entry in config['agents']['entries'].items()
+              if Path(entry.get('workspace') or config['agents']['defaults']['workspace']) == workspace]
+    if len(owners) != 1 or not re.fullmatch(r'[A-Za-z0-9_-]+', owners[0]) or workspace.resolve() != workspace:
+        raise SystemExit('ERROR: CLI must start in exactly one configured agent workspace; refusing native execution')
+    agent = owners[0]
+    # OpenClaw passes Claude's own session ID on every turn (--session-id new, --resume after);
+    # only /btw side questions run without one, and they keep no session.
+    session = next((args[index + 1] for index, arg in enumerate(args[:-1]) if arg in ('--session-id', '--resume')), '')
+    if not (re.fullmatch(r'[A-Za-z0-9-]+', session) or (not session and '--no-session-persistence' in args)):
+        raise SystemExit('ERROR: CLI launch names no Claude session; refusing native execution')
+    # Deployment-wide Claude flags; refuse a flag OpenClaw already passes rather than guess which wins.
+    if any(flag in args for flag in runtime['extra_args'] if flag.startswith('-')):
+        raise SystemExit('ERROR: OpenClaw already passes a configured extra CLI flag; refusing ambiguous execution')
     project = HOME / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
     project.mkdir(parents=True, exist_ok=True)
     if project.resolve() != project:
@@ -289,9 +296,10 @@ def main(args, runtime_path=RUNTIME):
                     target = skill.resolve(strict=True)
                     if not target.is_relative_to(workspace):
                         # Since 2026.7.1, channel plugins' skills live in their installed packages.
-                        roots = [HOME / '.openclaw/skills', HOME / '.npm-global/lib/node_modules/openclaw/skills', HOME / '.openclaw/npm/projects']
+                        # The OpenClaw package root covers its skills/ and bundled extension skills.
+                        roots = [HOME / '.openclaw/skills', HOME / '.npm-global/lib/node_modules/openclaw', HOME / '.openclaw/npm/projects']
                         if not any(target.is_relative_to(root) for root in roots):
-                            raise SystemExit('ERROR: CLI skill source is outside expected skill roots')
+                            raise SystemExit(f'ERROR: CLI skill source is outside expected skill roots: {target}')
                         mount(target)
     if not mcp_found:
         raise SystemExit('ERROR: CLI MCP configuration is missing; refusing a tool-less fallback')
@@ -328,11 +336,10 @@ def main(args, runtime_path=RUNTIME):
             rewritten_git = Path(artifacts.name) / 'git-proxy-config'
             rewritten_git.write_text(content)
             mount(rewritten_git, git_proxy)
-    session_hash = hashlib.sha256(key.encode()).hexdigest()[:12]
     name = 'openclaw-claude-' + uuid.uuid4().hex[:12]
     command = ['docker', 'create', '--rm', '-i', '--name', name, '--network', runtime['network'],
                '--label', 'openclaw.claude-owner=' + owner,
-               '--label', 'openclaw.claude-session=' + session_hash, '--label', 'openclaw.claude-agent=' + agent,
+               '--label', 'openclaw.claude-session=' + (session or 'none'), '--label', 'openclaw.claude-agent=' + agent,
                '--label', 'openclaw.claude-guard=' + runtime['guard_table'],
                '--user', '1000:1000', '--read-only', '--cap-drop', 'ALL',
                '--security-opt', 'no-new-privileges', '--stop-timeout', '10',
@@ -352,9 +359,9 @@ def main(args, runtime_path=RUNTIME):
             command += ['-e', variable]
     for binding in mounts.values():
         command += ['--mount', binding]
-    command += ['-w', str(workspace), runtime['image'], *args]
+    command += ['-w', str(workspace), runtime['image'], *args, *runtime['extra_args']]
     with Path(runtime['invocations']).open('a') as stream:
-        stream.write(json.dumps({'agent': agent, 'session_hash': session_hash, 'name': name, 'resuming': '--resume' in args}) + '\n')
+        stream.write(json.dumps({'agent': agent, 'session': session, 'name': name, 'resuming': '--resume' in args}) + '\n')
 
     try:
         return run_container(['docker', 'start', '--attach', '--interactive', name], name,
