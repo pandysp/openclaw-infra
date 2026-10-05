@@ -1,0 +1,46 @@
+---
+# Groq provider plugin (@openclaw/groq-provider), used for voice transcription.
+#
+# Since 2026.7.1 Groq ships as an external provider plugin. Doctor installs it
+# only on the upgrade path, so a fresh server would allowlist a plugin that is
+# not there. Pinned in lockstep with openclaw_version, like the channel plugins.
+
+# Version via `plugins inspect`; empty when the plugin is absent.
+- name: Read installed Groq plugin version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins inspect groq --json 2>/dev/null \
+      | jq -r '.install.resolvedVersion // .plugin.version // empty' || echo ""
+  args:
+    executable: /bin/bash
+  register: groq_plugin_installed
+  changed_when: false
+
+- name: "Install Groq provider plugin (@openclaw/groq-provider@{{ openclaw_version }})"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    openclaw plugins install --pin --force "@openclaw/groq-provider@{{ openclaw_version }}"
+  args:
+    executable: /bin/bash
+  when: groq_plugin_installed.stdout | trim != openclaw_version
+  notify: restart openclaw-gateway
+
+# plugins.allow is written above by the config script; only the entry flag is ensured here.
+- name: Ensure Groq plugin is enabled
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    ENABLED=$(openclaw plugins list --json 2>/dev/null | jq -r '.plugins[] | select(.id=="groq") | .enabled')
+    if [ "$ENABLED" != "true" ]; then
+        openclaw plugins enable groq
+        echo "ENABLED"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: groq_plugin_enable
+  changed_when: "'ENABLED' in groq_plugin_enable.stdout"
+  notify: restart openclaw-gateway

@@ -592,6 +592,10 @@
   changed_when: "'ENABLED' in anthropic_plugin_enable.stdout"
   notify: restart openclaw-gateway
 
+- name: Install the Groq provider plugin
+  ansible.builtin.include_tasks: groq-plugin.yml
+  when: groq_api_key is defined and groq_api_key | length > 0
+
 - name: Migrate session model provider to match primary model
   ansible.builtin.shell: |
     set -euo pipefail
