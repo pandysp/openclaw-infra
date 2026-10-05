@@ -38,7 +38,8 @@ class SmokeTests(unittest.TestCase):
             original_config = json.loads((state/'openclaw.json').read_text())
             # The real gateway pins the config it started with: tools.* and
             # agents.* file edits are reload class "none" and never swap the
-            # runtime snapshot (openclaw 2026.7.1, src/gateway/config-reload-plan.ts).
+            # runtime snapshot (OpenClaw at openclaw_docs_reviewed_version,
+            # src/gateway/config-reload-plan.ts).
             (root / 'gateway-snapshot.json').write_text((state/'openclaw.json').read_text())
             preload = root / 'http.mjs'
             preload.write_text('''

@@ -103,7 +103,8 @@ jobs:
           openclaw_claude_cli_enabled: true
 
           # An override replaces OpenClaw's defaults, so this is production's exact
-          # invocation (openclaw 2026.7.1, extensions/anthropic/cli-backend.ts) plus
+          # invocation (OpenClaw at openclaw_docs_reviewed_version,
+          # extensions/anthropic/cli-backend.ts) plus
           # only `--tools "" --strict-mcp-config`. Re-derive it on every version bump.
           openclaw_cli_backends:
             claude-cli:

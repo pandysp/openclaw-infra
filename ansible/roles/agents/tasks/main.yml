@@ -170,8 +170,9 @@
   notify: restart openclaw-gateway
 
 # Every agent, including main, uses an explicit list heartbeat block only when
-# scheduled automation is enabled. This follows the v2026.7.1 heartbeat
-# allowlist rule and removes the old default-agent special case.
+# scheduled automation is enabled. This follows the heartbeat allowlist rule
+# of openclaw_docs_reviewed_version and removes the old default-agent special
+# case.
 - block:
     - name: Write current agents JSON to temp file
       ansible.builtin.copy:
