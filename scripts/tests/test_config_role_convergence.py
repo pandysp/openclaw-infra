@@ -182,6 +182,31 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertNotIn('group:plugins', writes['tools.sandbox.tools.allow'])
             self.assertNotIn('tools.alsoAllow', writes)
 
+    def test_whatsapp_settings_exist_only_with_a_whatsapp_agent(self):
+        # From 2026.7.1, startup migrations after an upgrade install any configured but
+        # missing channel plugin at its newest version, which can refuse an older core.
+        whatsapp_agent = [{'id': 'main', 'is_default': True, 'deliver_channel': 'whatsapp',
+                           'deliver_to': '+15555550100', 'deliver_type': 'dm'}]
+        for agents, expected in ((None, None), (whatsapp_agent, {'healthMonitor': {'enabled': False}})):
+            with self.subTest(whatsapp=bool(agents)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / 'store.json').write_text(json.dumps({'channels': {'whatsapp': {'healthMonitor': {'enabled': False}}}}))
+                result = self.run_task([self.temp_files, self.configure], root,
+                                       {'openclaw_agents': agents} if agents else None)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                store = json.loads((root / 'store.json').read_text())
+                self.assertEqual(store.get('channels', {}).get('whatsapp'), expected)
+                self.assertEqual('whatsapp' in store['plugins']['allow'], bool(agents))
+
+    def test_groq_plugin_is_allowed_only_with_a_groq_key(self):
+        for key in ('', 'fixture-groq-key'):
+            with self.subTest(groq=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                result = self.run_task([self.temp_files, self.configure], root, {'groq_api_key': key})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('fixture-groq-key', result.stdout + result.stderr)
+                self.assertEqual('groq' in self.json_writes(root)['plugins.allow'], bool(key))
+
     def test_sessions_on_the_primary_models_runtime_are_left_alone(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
             root = Path(tmp)

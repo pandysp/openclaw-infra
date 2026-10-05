@@ -42,9 +42,10 @@ python3 restricted-gateway-trial.py --expect-mac-agent main main
 
 Repeat `--expect-mac-agent` for additional permitted agents. Omit it only when
 Mac access is disabled for everyone. An unexpected grant, or missing access
-for an expected agent, fails before any gateway turn. Denied agents are checked directly for
-key/pin content, SSH configuration and Mac host entries; empty Docker mountpoint
-files and unrelated host entries are not credentials. When no Mac hostname is
+for an expected agent, fails before any gateway turn. Denied agents are checked
+by the in-turn probe (`container-probe.py`) for key/pin content, SSH
+configuration and Mac host entries; empty Docker mountpoint files and unrelated
+host entries are not credentials. When no Mac hostname is
 known, the host-entry check is listed under `unverified_checks`, not claimed as
 passing.
 

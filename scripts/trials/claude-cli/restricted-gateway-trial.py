@@ -25,6 +25,18 @@ PROBE_CHECKS = ['container_identity', 'host_config_hidden', 'docker_socket_hidde
                 'git_transport_preserved', 'git_remote_read', 'git_push', 'git_branch_removed']
 
 
+def diagnostic_untouched(calls, diagnostic, script_command):
+    """The agent may only read the probe and run it as asked; editing and restoring it would hide a failure."""
+    touching = [call for call in calls if diagnostic.name in json.dumps(call.get('input', {}))]
+
+    def allowed(call):
+        given = call.get('input', {})
+        return ((call.get('name') == 'Read' and given.get('file_path') == str(diagnostic))
+                or (call.get('name') == 'Bash' and given.get('command', '').strip() == script_command))
+
+    return bool(touching) and all(allowed(call) for call in touching)
+
+
 def cleanup_trial(active, native_sessions, config_path, before):
     errors = []
 
@@ -213,6 +225,7 @@ try:
             # If a later OpenClaw reuses the live process again, this fails: add a forced cold turn then.
             'later_turns_resume': len(starts) >= 2 and not starts[0]['resuming'] and all(start['resuming'] for start in starts[1:]),
             'diagnostic_unmodified': hashlib.sha256(diagnostic.read_bytes()).hexdigest() == diagnostic_digest,
+            'diagnostic_only_read_and_run': diagnostic_untouched(calls, diagnostic, script_command),
             **{name: diagnostic_results.get(name) is True for name in PROBE_CHECKS + (
                 ['no_mac_key_or_pin', 'no_mac_ssh_block'] + (['no_mac_host_entry'] if mac_target else [])
                 if not mac_host else [])},

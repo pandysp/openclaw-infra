@@ -170,10 +170,47 @@ class GitProbeTest(unittest.TestCase):
         self.assertFalse(checks['git_push'])
         self.assertTrue(checks['git_branch_removed'])
 
+    def test_proxy_include_path_must_match(self):
+        for stdout, expected in (('/w/.git-proxy-config\n', True), ('/elsewhere/config\n', False)):
+            with self.subTest(stdout=stdout):
+                reads = [subprocess.CompletedProcess([], 0, stdout=stdout),
+                         subprocess.CompletedProcess([], 0, stdout='abc\tHEAD\n')]
+                with patch.object(probe.subprocess, 'run', side_effect=[*reads, subprocess.CompletedProcess([], 0),
+                                                                      subprocess.CompletedProcess([], 0)]):
+                    self.assertIs(probe.git_checks('/w/.git-proxy-config', 'fixture-branch')['git_transport_preserved'], expected)
+
+    def test_every_git_call_fits_claude_bash_timeout(self):
+        with patch.object(probe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='abc\tHEAD\n')) as run:
+            probe.git_checks('', 'fixture-branch')
+        self.assertLessEqual(sum(call.kwargs['timeout'] for call in run.call_args_list), 120)
+
     def test_successful_push_and_delete_pass(self):
         checks = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0))
         self.assertEqual(checks, {'git_transport_preserved': True, 'git_remote_read': True,
                                   'git_push': True, 'git_branch_removed': True})
+
+
+class DiagnosticUntouchedTest(unittest.TestCase):
+    PROBE = Path('/w/cwrapper-native-diagnostic-x.py')
+    RUN = 'python3 cwrapper-native-diagnostic-x.py'
+    READ = {'name': 'Read', 'input': {'file_path': str(PROBE)}}
+    EXEC = {'name': 'Bash', 'input': {'command': RUN}}
+
+    def untouched(self, *calls):
+        return trial['diagnostic_untouched'](list(calls), self.PROBE, self.RUN)
+
+    def test_read_then_run_passes(self):
+        self.assertTrue(self.untouched(self.READ, self.EXEC, {'name': 'Bash', 'input': {'command': 'ls'}}))
+
+    def test_edit_or_other_command_on_the_probe_fails(self):
+        for call in ({'name': 'Edit', 'input': {'file_path': str(self.PROBE), 'old_string': 'a', 'new_string': 'b'}},
+                     {'name': 'Write', 'input': {'file_path': str(self.PROBE), 'content': 'x'}},
+                     {'name': 'Bash', 'input': {'command': 'sed -i s/a/b/ cwrapper-native-diagnostic-x.py'}}):
+            with self.subTest(tool=call['name']):
+                self.assertFalse(self.untouched(self.READ, call, self.EXEC))
+
+    def test_never_running_the_probe_fails(self):
+        self.assertFalse(self.untouched())
 
 
 if __name__ == '__main__':

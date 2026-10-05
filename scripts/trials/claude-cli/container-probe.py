@@ -13,7 +13,9 @@ import subprocess
 HOME = Path('/home/ubuntu')
 
 
-def run(*args, timeout=60):
+# Three Git calls at 30 s each stay inside Claude Code's two-minute Bash timeout,
+# so the branch deletion in git_checks always gets its turn.
+def run(*args, timeout=30):
     return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
 
 
@@ -40,7 +42,7 @@ def isolation(home, other_workspace, other_project):
 
 def git_checks(proxy_config, branch):
     include = run('git', 'config', '--get', 'include.path')
-    remote = run('git', 'ls-remote', 'origin', 'HEAD', timeout=40)
+    remote = run('git', 'ls-remote', 'origin', 'HEAD')
     checks = {
         'git_transport_preserved': (include.returncode == 0 and include.stdout.strip() == proxy_config)
         if proxy_config else include.returncode == 1,
