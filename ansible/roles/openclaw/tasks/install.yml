@@ -1,4 +1,9 @@
 ---
+- name: Check if an OpenClaw config exists to migrate
+  ansible.builtin.stat:
+    path: /home/ubuntu/.openclaw/openclaw.json
+  register: openclaw_existing_config
+
 - name: Check if openclaw binary exists
   ansible.builtin.stat:
     path: /home/ubuntu/.npm-global/bin/openclaw
@@ -192,9 +197,11 @@
   environment:
     XDG_RUNTIME_DIR: /run/user/1000
     PATH: "/home/ubuntu/.npm-global/bin:{{ ansible_facts['env']['PATH'] }}"
+  # Without a config (state removed, binary kept) doctor would write a stub that makes
+  # onboarding skip; onboard.yml creates the config instead.
   when:
     - openclaw_needs_install | bool
-    - openclaw_binary.stat.exists
+    - openclaw_existing_config.stat.exists
     - not ansible_check_mode
 
 - name: Show doctor migration output
@@ -202,7 +209,7 @@
     msg: "{{ openclaw_doctor_fix.stdout_lines | default(['(skipped)']) }}"
   when:
     - openclaw_needs_install | bool
-    - openclaw_binary.stat.exists
+    - openclaw_existing_config.stat.exists
 
 - name: Show current version
   ansible.builtin.debug:
