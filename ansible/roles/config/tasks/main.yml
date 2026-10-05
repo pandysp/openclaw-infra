@@ -315,6 +315,10 @@
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("google") %}
         {% endif %}
+        {# Groq is an external provider plugin since 2026.7.1; voice transcription needs it loaded. #}
+        {% if groq_api_key is defined and groq_api_key | length > 0 %}
+        {%   set _ = plugin_allow.append("groq") %}
+        {% endif %}
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
