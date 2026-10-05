@@ -391,7 +391,7 @@ if [[ -z "$IAC_VERSION" ]]; then
 elif [[ -z "$VPS_VERSION" ]]; then
     check_warn "Could not query VPS openclaw version"
 elif [[ "$VPS_VERSION" != "$IAC_VERSION" ]]; then
-    check_fail "VPS on $VPS_VERSION but IaC pins $IAC_VERSION — run ./scripts/provision.sh --tags openclaw"
+    check_fail "VPS on $VPS_VERSION but IaC pins $IAC_VERSION — run ./scripts/provision.sh (a version bump needs the full run)"
 elif [[ -n "$LOCAL_VERSION" ]] && [[ "$LOCAL_VERSION" != "$IAC_VERSION" ]]; then
     check_warn "Local CLI on $LOCAL_VERSION but VPS/IaC on $IAC_VERSION — align versions intentionally before using the local CLI as contract evidence"
 else

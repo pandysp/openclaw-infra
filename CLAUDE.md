@@ -68,7 +68,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `system` | system | Update system packages |
 | `docker` | docker | Docker upgrade or group changes |
 | `ufw` | ufw | Firewall rule changes |
-| `openclaw` | openclaw | Reinstall/update OpenClaw binary |
+| `openclaw` | openclaw | Reinstall the OpenClaw binary; version bumps need a full provision ([Update OpenClaw](#update-openclaw)) |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
 | `agents` | agents | Add/remove non-default agents, update Telegram bindings |
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
@@ -183,13 +183,11 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journal
 
 **Important:** Always keep the local CLI and VPS gateway on the same version. Version mismatches cause protocol errors (e.g., `system.run.prepare` not supported). After upgrading the gateway, upgrade local too:
 
-```bash
-# 1. Update VPS gateway (via Ansible — preferred)
-./scripts/provision.sh --tags openclaw
+A version bump changes more than the binary: the channel and Groq plugins, the container launcher and the plugin allowlist move with it, so `--tags openclaw` alone can leave every agent turn failing. Run the full provisioning:
 
-# Or via SSH (manual)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
+```bash
+# 1. Bump openclaw_version (and openclaw_docs_reviewed_version after the contract review) in ansible/group_vars/all.yml
+./scripts/provision.sh
 
 # 2. Update the local CLI to match
 brew upgrade openclaw-cli
