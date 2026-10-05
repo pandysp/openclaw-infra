@@ -239,9 +239,13 @@
 
     # Installation auto-enables its entry. The global switch keeps native CLI
     # loads from registering the new adapter before preparation has completed.
+    # Through systemd: since 2026.9.8 `openclaw gateway stop` refuses the operator's
+    # service without --force.
     - name: Stop gateway for exclusive MCP maintenance
-      ansible.builtin.command:
-        argv: [openclaw, gateway, stop, --json]
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: stopped
+        scope: user
       environment:
         XDG_RUNTIME_DIR: /run/user/1000
       register: mcp_gateway_stopped
@@ -368,11 +372,12 @@
 
     - name: Restore gateway service after failed MCP maintenance
       when: mcp_gateway_stopped is defined and mcp_gateway_stopped is succeeded
-      ansible.builtin.command:
-        argv: [openclaw, gateway, start, --json]
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: started
+        scope: user
       environment:
         XDG_RUNTIME_DIR: /run/user/1000
-      no_log: true
 
     - name: Report failed MCP maintenance
       ansible.builtin.fail:

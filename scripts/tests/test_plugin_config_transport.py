@@ -131,6 +131,25 @@ changed=not (root/'prepared').exists()
 print(json.dumps({'prepared':True,'changed':changed,'servers':len(desired['servers']),'tools':2}))
 ''')
             node.chmod(0o700)
+            # The gateway is a systemd user service; Ansible's systemd module reads its state
+            # with `show` and changes it with stop/start.
+            systemctl = bin_dir / "systemctl"
+            systemctl.write_text("#!" + self.python + "\n" + '''import json,os,pathlib,sys
+root=pathlib.Path(os.environ['TEST_ROOT']);args=[a for a in sys.argv[1:] if a!='--user']
+cfg=json.loads((root/'home/.openclaw/openclaw.json').read_text())
+running=not (root/'stopped').exists() or (root/'recovered').exists()
+if args[0]=='show':
+ print('Id=openclaw-gateway.service\\nLoadState=loaded\\nActiveState='+('active' if running else 'inactive')+'\\nSubState='+('running' if running else 'dead')+'\\nUnitFileState=enabled')
+elif args==['stop','openclaw-gateway']:
+ (root/'stopped').touch()
+elif args==['start','openclaw-gateway']:
+ assert cfg['plugins']['entries']['openclaw-mcp-adapter']['enabled'] is False
+ assert 'enabled' not in cfg['plugins'], 'Recovery did not restore global loading'
+ (root/'recovered').touch()
+else:
+ raise SystemExit('unexpected systemctl call: '+json.dumps(sys.argv[1:]))
+''')
+            systemctl.chmod(0o700)
             cli = bin_dir / "openclaw"
             cli.write_text("#!" + self.python + "\n" + '''import json,os,pathlib,sys
 root=pathlib.Path(os.environ['TEST_ROOT']);args=sys.argv[1:]
@@ -143,12 +162,6 @@ if args==['plugins','list','--json']:
  print(json.dumps({'plugins':[{'id':'openclaw-mcp-adapter','version':install['version'],'rootDir':install['installPath']}]}));raise SystemExit(0)
 elif args==['plugins','inspect','openclaw-mcp-adapter','--json']:
  print(json.dumps({'install':cfg['plugins']['installs']['openclaw-mcp-adapter']}));raise SystemExit(0)
-elif args==['gateway','stop','--json']:
- (root/'stopped').touch();print('{}');raise SystemExit(0)
-elif args==['gateway','start','--json']:
- assert cfg['plugins']['entries']['openclaw-mcp-adapter']['enabled'] is False
- assert 'enabled' not in cfg['plugins'], 'Recovery did not restore global loading'
- (root/'recovered').touch();print('{}');raise SystemExit(0)
 elif args[:3]==['plugins','install','--force']:
  assert cfg['plugins']['enabled'] is False and (root/'stopped').exists()
  cfg['plugins']['entries']['openclaw-mcp-adapter']['enabled']=True
