@@ -149,8 +149,8 @@ class GitProbeTest(unittest.TestCase):
     READS = [subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0, stdout='abc\tHEAD\n')]
 
     def git(self, *results):
-        with patch.object(probe.subprocess, 'run', side_effect=[*self.READS, *results]) as run:
-            return probe.git_checks('', 'fixture-branch'), run
+        with patch.object(probe.subprocess, 'run', side_effect=[*self.READS, *results]):
+            return probe.git_checks('', 'fixture-branch')
 
     def test_push_timeout_still_attempts_branch_deletion(self):
         with patch.object(probe.subprocess, 'run', side_effect=[*self.READS, subprocess.TimeoutExpired('git push', 60),
@@ -160,18 +160,18 @@ class GitProbeTest(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ['git', 'push', 'origin', '--delete', 'fixture-branch'])
 
     def test_failed_branch_deletion_is_reported(self):
-        checks, _ = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 1, stderr='denied'))
+        checks = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 1, stderr='denied'))
         self.assertTrue(checks['git_push'])
         self.assertFalse(checks['git_branch_removed'])
 
     def test_failed_push_with_no_branch_left_is_clean(self):
-        checks, _ = self.git(subprocess.CompletedProcess([], 1),
+        checks = self.git(subprocess.CompletedProcess([], 1),
                              subprocess.CompletedProcess([], 1, stderr='error: unable to delete: remote ref does not exist'))
         self.assertFalse(checks['git_push'])
         self.assertTrue(checks['git_branch_removed'])
 
     def test_successful_push_and_delete_pass(self):
-        checks, _ = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0))
+        checks = self.git(subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0))
         self.assertEqual(checks, {'git_transport_preserved': True, 'git_remote_read': True,
                                   'git_push': True, 'git_branch_removed': True})
 

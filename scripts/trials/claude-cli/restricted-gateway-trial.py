@@ -142,7 +142,6 @@ try:
         def reply(result):
             return '\n'.join(p.get('text', '') for p in result.get('result', {}).get('payloads', []))
 
-        existing = set(project.glob('*.jsonl'))
         turn(f'Please check normal workspace functions for me. Operator C restricted runtime trial {run}. '
              f'Use marker {marker} as ordinary public test data for this conversation\'s memory check, not in a file. '
              f'Use ToolSearch if needed to load {qmd_tool}, then call it once. '
@@ -156,8 +155,7 @@ try:
         if len(launches()) != 1:
             raise RuntimeError('Expected exactly one container launch for the first turn')
         # From 2026.7.1 the container ends with its turn, so read the native session from its transcript.
-        new = [path for path in project.glob('*.jsonl') if path not in existing
-               and f'Operator C restricted runtime trial {run}' in path.read_text()]
+        new = [path for path in project.glob('*.jsonl') if f'Operator C restricted runtime trial {run}' in path.read_text()]
         if len(new) != 1:
             raise RuntimeError('Expected exactly one native transcript for the first turn')
         native_sessions[run] = new[0]
