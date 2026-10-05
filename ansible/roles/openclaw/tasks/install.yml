@@ -72,8 +72,10 @@
       failed_when: false
       when: openclaw_binary.stat.exists
 
+    # npm 11.16+ (Node 26) only warns about unapproved lifecycle scripts; npm 12 blocks
+    # OpenClaw's preinstall/postinstall without this (docs/install/index.md).
     - name: "Install openclaw@{{ openclaw_version }}"
-      ansible.builtin.command: npm install -g "openclaw@{{ openclaw_version }}"
+      ansible.builtin.command: npm install -g "openclaw@{{ openclaw_version }}" --allow-scripts=openclaw
       environment:
         OPENCLAW_NO_ONBOARD: "1"
         OPENCLAW_NO_PROMPT: "1"
