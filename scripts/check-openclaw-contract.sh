@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check that the pinned OpenClaw version matches the reviewed heartbeat and cron
-# contract and that the roles still honour it. The contract, as of v2026.6.6:
+# contract and that the roles still honour it. The contract, as of v2026.7.1:
 # - Upstream runs a 30-minute heartbeat when cadence is omitted; IaC sets the
 #   default to 0m and each agent opts in explicitly.
 # - Heartbeats live in agents.list[]; once any entry has a heartbeat block,

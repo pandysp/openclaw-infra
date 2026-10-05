@@ -103,13 +103,13 @@ jobs:
           openclaw_claude_cli_enabled: true
 
           # An override replaces OpenClaw's defaults, so this is production's exact
-          # invocation (openclaw 2026.6.6, extensions/anthropic/cli-backend.ts) plus
+          # invocation (openclaw 2026.7.1, extensions/anthropic/cli-backend.ts) plus
           # only `--tools "" --strict-mcp-config`. Re-derive it on every version bump.
           openclaw_cli_backends:
             claude-cli:
               command: "claude"
-              args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*"]
-              resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*", "--resume", "{sessionId}"]
+              args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*", "--disallowedTools", "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor"]
+              resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*", "--disallowedTools", "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor", "--resume", "{sessionId}"]
 
           openclaw_heartbeat_interval: "30m"
           openclaw_heartbeat_active_hours:

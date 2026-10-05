@@ -461,12 +461,13 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.assertEqual(config['openclaw_model_primary'], 'anthropic/claude-sonnet-5-5')
         self.assertEqual(config['openclaw_model_fallbacks'], [])
 
-        # An override replaces OpenClaw's defaults (openclaw 2026.6.6,
+        # An override replaces OpenClaw's defaults (openclaw 2026.7.1,
         # extensions/anthropic/cli-backend.ts), and its schema requires `command`.
         # Staging must run production's exact Claude CLI invocation plus only the
         # two lockdown flags; anything else makes Phoenix test a different runtime.
         upstream = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
-                    '--setting-sources', 'user', '--allowedTools', 'mcp__openclaw__*']
+                    '--setting-sources', 'user', '--allowedTools', 'mcp__openclaw__*',
+                    '--disallowedTools', 'ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor']
         lockdown = ['--tools', '', '--strict-mcp-config']
         backend = config['openclaw_cli_backends']['claude-cli']
         self.assertEqual(backend['command'], 'claude')
