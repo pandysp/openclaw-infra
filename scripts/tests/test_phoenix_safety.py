@@ -862,6 +862,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             [jobs[0], jobs[1] | {'name': ''}, jobs[2]],
             [jobs[0], jobs[1] | {'enabled': 'false'}, jobs[2]],
             [jobs[0], jobs[1]],
+            jobs + [{'agentId': 'test', 'name': 'skill-collection-review-test', 'id': 'review-id', 'enabled': True}],
         ]
         options = [{'raw_cron_output': json.dumps({'jobs': variant})} for variant in variants]
         options += [{'raw_status_output': json.dumps({'heartbeat': {'agents': [
