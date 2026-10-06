@@ -447,7 +447,7 @@
         (gateway_final_health.stdout | from_json).ok | default(false) | bool
       retries: 12
       delay: 5
-      no_log: true
+      # Not hidden: the health report carries no secrets, and a failure must show which part is unhealthy.
       when: not ansible_check_mode
       tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
 
