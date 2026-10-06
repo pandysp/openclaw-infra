@@ -145,7 +145,7 @@ elif cmd == 'tailscale':
             count_path = root / 'cron-reads'
             count = int(count_path.read_text()) + 1 if count_path.exists() else 1
             count_path.write_text(str(count))
-            default = json.dumps({'jobs': [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False}, {'agentId': 'test', 'name': 'test cron', 'id': 'test-id', 'enabled': True}]})
+            default = json.dumps({'jobs': [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False}, {'agentId': 'test', 'name': 'test: Staging Test Cron', 'id': 'test-id', 'enabled': True}, {'agentId': 'test', 'name': 'heartbeat-test', 'id': 'heartbeat-id', 'enabled': True}]})
             before = opts.get('raw_cron_output', default)
             print(opts.get('raw_cron_after_output', before) if count > 1 else before)
             sys.exit(opts.get('cron_after_exit', 0) if count > 1 else opts.get('cron_exit', 0))
@@ -849,16 +849,19 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 
     def test_idempotence_validates_cron_identity_and_policy_before_ansible(self):
         self.install_provisioner()
+        # Since 2026.9.8 the test agent's heartbeat is an enabled job next to its declared cron.
         jobs = [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False},
-                {'agentId': 'test', 'name': 'test cron', 'id': 'test-id', 'enabled': True}]
+                {'agentId': 'test', 'name': 'test: Staging Test Cron', 'id': 'test-id', 'enabled': True},
+                {'agentId': 'test', 'name': 'heartbeat-test', 'id': 'heartbeat-id', 'enabled': True}]
         clean = CLEAN_RECAP.replace('changed=18', 'changed=0').replace('=== Provisioning complete ===\n', '')
         variants = [
             [{key: value for key, value in job.items() if key != 'id'} for job in jobs],
-            [jobs[0], jobs[1] | {'id': ''}],
-            [jobs[0], jobs[1] | {'id': 123}],
-            [jobs[0], jobs[1] | {'id': 'main-id'}],
-            [jobs[0], jobs[1] | {'name': ''}],
-            [jobs[0], jobs[1] | {'enabled': 'false'}],
+            [jobs[0], jobs[1] | {'id': ''}, jobs[2]],
+            [jobs[0], jobs[1] | {'id': 123}, jobs[2]],
+            [jobs[0], jobs[1] | {'id': 'main-id'}, jobs[2]],
+            [jobs[0], jobs[1] | {'name': ''}, jobs[2]],
+            [jobs[0], jobs[1] | {'enabled': 'false'}, jobs[2]],
+            [jobs[0], jobs[1]],
         ]
         options = [{'raw_cron_output': json.dumps({'jobs': variant})} for variant in variants]
         options += [{'raw_status_output': json.dumps({'heartbeat': {'agents': [
@@ -875,12 +878,14 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 
     def test_idempotence_checks_post_run_policy_and_withholds_private_job_names(self):
         self.install_provisioner()
+        # Since 2026.9.8 the test agent's heartbeat is an enabled job next to its declared cron.
         jobs = [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False},
-                {'agentId': 'test', 'name': 'test cron', 'id': 'test-id', 'enabled': True}]
+                {'agentId': 'test', 'name': 'test: Staging Test Cron', 'id': 'test-id', 'enabled': True},
+                {'agentId': 'test', 'name': 'heartbeat-test', 'id': 'heartbeat-id', 'enabled': True}]
         clean = CLEAN_RECAP.replace('changed=18', 'changed=0').replace('=== Provisioning complete ===\n', '')
         options = [
-            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'enabled': False}]})},
-            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'id': 'new-id', 'name': 'fixture-private-title'}]})},
+            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'enabled': False}, jobs[2]]})},
+            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'id': 'new-id', 'name': 'fixture-private-title'}, jobs[2]]})},
             {'cron_after_exit': 1},
         ]
         for values in options:

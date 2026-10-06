@@ -465,7 +465,8 @@ jobs:
                             (.enabled | type == "boolean")) and
                  (map(.id) | unique | length) == length and
                  ([.[] | select(.agentId == "main" and .enabled)] | length) == 0 and
-                 ([.[] | select(.agentId == "test" and .enabled)] | length) == 1 then
+                 # Since 2026.9.8 a heartbeat is an automation job of its own.
+                 ([.[] | select(.agentId == "test" and .enabled) | .name] | sort) == ["heartbeat-test", "test: Staging Test Cron"] then
                 map({agentId,name,id,enabled}) | sort_by(.id)
               else error("Cron identity or staging scheduling policy is invalid") end'
           }
