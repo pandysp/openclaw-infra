@@ -616,7 +616,9 @@
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     DESIRED='{{ openclaw_agent_models | to_json }}'
-    CURRENT=$(openclaw config get agents.defaults.models 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT="{}"
+    # The file, not `config get`: since 2026.9.8 that returns the effective map, with every
+    # model OpenClaw adds by default, so it never equals what we write.
+    CURRENT=$(jq -c '.agents.defaults.models // {}' /home/ubuntu/.openclaw/openclaw.json)
     C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED" | jq -cS '.')
     UPDATED=""
