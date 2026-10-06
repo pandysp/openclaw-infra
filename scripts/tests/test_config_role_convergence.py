@@ -98,6 +98,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         cls.configure = find_task(tasks, CONFIGURE)
         cls.report = find_task(tasks, REPORT)
         cls.migrate = find_task(tasks, MIGRATE)
+        cls.pin_models = find_task(tasks, 'Pin agent model allowlist with claude-cli runtime mapping')
         cls.migrate_report = find_task(tasks, MIGRATE_REPORT)
         assert cls.temp_files and cls.configure and cls.report and cls.migrate and cls.migrate_report, 'Config role tasks moved'
 
@@ -166,6 +167,24 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
                 self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
                 self.assertNotIn('UPDATED:', second.stdout)
+
+    def test_model_map_is_compared_with_the_written_config(self):
+        # Since 2026.9.8 `config get agents.defaults.models` returns the effective map,
+        # with every model OpenClaw adds by default; only the file holds what we wrote.
+        pin = self.pin_models
+        assert pin, 'Config role tasks moved'
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            desired = {model: {'agentRuntime': {'id': 'claude-cli'}, **({'alias': alias} if alias else {})}
+                       for model, alias in ((m, (v or {}).get('alias')) for m, v in self.defaults['openclaw_agent_models'].items())}
+            (root / 'state').mkdir()
+            (root / 'state/openclaw.json').write_text(json.dumps({'agents': {'defaults': {'models': desired}}}))
+            effective = {**desired, 'anthropic/claude-added-by-default': {'agentRuntime': {'id': 'claude-cli'}}}
+            (root / 'store.json').write_text(json.dumps({'agents': {'defaults': {
+                'models': effective, 'modelPolicy': {'allow': list(self.defaults['openclaw_agent_models'])}}}}))
+            result = self.run_task([pin], root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
 
     def test_no_adapter_is_allowed_when_none_is_declared(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
