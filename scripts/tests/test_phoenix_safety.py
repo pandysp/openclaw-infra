@@ -321,6 +321,8 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             if name not in ('TELEGRAM_USER_ID', 'STAGING_PRIVATE_REPOSITORY', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET'):
                 self.env[name] = 'fixture-' + name.lower()
         self.env['STAGING_PRIVATE_REPOSITORY'] = 'pandysp/private-phoenix-probe'
+        # The workflow's own token (${{ github.token }}), which the hcloud step uses.
+        self.env['GH_TOKEN'] = 'fixture-github-token'
 
     def run_step(self, name, **options):
         env = self.env | {'FIXTURE_OPTIONS': json.dumps(options)}
@@ -424,6 +426,11 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         result = self.run_step('Install hcloud CLI')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / 'hcloud-installed').is_file())
+        # Anonymous API calls from shared runners hit the rate limit; the token goes over stdin.
+        metadata = [call for call in self.calls() if call['cmd'] == 'curl' and 'api.github.com' in ' '.join(call['args'])]
+        self.assertEqual(len(metadata), 1)
+        self.assertIn('@-', metadata[0]['args'])
+        self.assertEqual(metadata[0]['stdin'], 'Authorization: Bearer fixture-github-token\n')
         for options in ({'release_exit': 79}, {'release_body': '{}'},
                         {'release_body': '{"tag_name":null}'}, {'release_body': '{"tag_name":12}'},
                         {'release_body': '{"tag_name":""}'}, {'release_body': ''},

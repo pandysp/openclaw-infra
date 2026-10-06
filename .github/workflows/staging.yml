@@ -65,9 +65,13 @@ jobs:
 
       - name: Install hcloud CLI
         timeout-minutes: 3
+        # Authenticated: anonymous API calls from shared runners hit the rate limit (HTTP 403).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION=$(curl --fail --silent --show-error https://api.github.com/repos/hetznercloud/cli/releases/latest |
+          VERSION=$(printf 'Authorization: Bearer %s\n' "$GH_TOKEN" |
+            curl --fail --silent --show-error -H @- https://api.github.com/repos/hetznercloud/cli/releases/latest |
             jq -ers 'if length == 1 and (.[0].tag_name | type == "string" and length > 0)
               then .[0].tag_name else error("Invalid hcloud release metadata") end')
           curl --fail --silent --show-error --location "https://github.com/hetznercloud/cli/releases/download/${VERSION}/hcloud-linux-amd64.tar.gz" -o hcloud.tar.gz
