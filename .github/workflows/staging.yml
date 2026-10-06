@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     # Step deadlines leave teardown time before the job deadline (fixture checked).
     # Cancellation or runner loss can still interrupt cleanup; this is not a teardown guarantee.
-    timeout-minutes: 165
+    timeout-minutes: 167
 
     steps:
       # ── Setup ────────────────────────────────────────────────────
@@ -569,6 +569,18 @@ jobs:
             fi
           done
           exit "$STATUS"
+
+      # The staging host is reachable only from this runner. Show only the gateway's lifecycle
+      # lines (admission, start, reload, shutdown) before teardown; conversation records stay out.
+      - name: Show gateway log after a failure
+        timeout-minutes: 2
+        if: failure() && env.STAGING_HOST != ''
+        run: |
+          set -uo pipefail
+          tailscale ssh "ubuntu@$STAGING_HOST" 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway --no-pager -n 600' \
+            | grep -v -F '"type":' \
+            | grep -E '\[(admission|gateway|reload|shutdown)\]|state owner|offline maintenance|systemd\[' \
+            | tail -150
 
       - name: Destroy staging infrastructure
         timeout-minutes: 12
