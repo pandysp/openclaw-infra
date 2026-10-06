@@ -97,11 +97,11 @@ openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (defaul
 openclaw_whatsapp_used: "{{ openclaw_agents | default([]) | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 }}"
 openclaw_elevated_default: "off"
 
-# Voice transcription (Groq Whisper)
-# Set via: pulumi config set groqApiKey --secret
-openclaw_audio_provider: "groq"
-openclaw_audio_model: "whisper-large-v3-turbo"
-openclaw_groq_base_url: "https://api.groq.com/openai/v1"
+# Voice transcription (Microsoft MAI-Transcribe 2 via OpenRouter)
+# Set via: pulumi config set openrouterApiKey --secret
+openclaw_audio_provider: "openrouter"
+openclaw_audio_model: "microsoft/mai-transcribe-2"
+openclaw_openrouter_base_url: "https://openrouter.ai/api/v1"
 
 # Image generation (Google Gemini)
 # Set via: pulumi config set geminiApiKey --secret

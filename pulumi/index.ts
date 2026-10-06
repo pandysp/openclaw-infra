@@ -41,6 +41,7 @@ const telegramBotToken = config.getSecret("telegramBotToken");
 const discordBotToken = config.getSecret("discordBotToken");
 const xaiApiKey = config.getSecret("xaiApiKey");
 const groqApiKey = config.getSecret("groqApiKey");
+const openrouterApiKey = config.getSecret("openrouterApiKey");
 const geminiApiKey = config.getSecret("geminiApiKey");
 const obsidianAuthToken = config.getSecret("obsidianAuthToken");
 const obsidianVaultPassword = config.getSecret("obsidianVaultPassword");
@@ -163,6 +164,7 @@ const provisionEnv: Record<string, pulumi.Input<string>> = {
     PROVISION_TAILSCALE_HOSTNAME: serverName,
     PROVISION_XAI_API_KEY: xaiApiKey || "",
     PROVISION_GROQ_API_KEY: groqApiKey || "",
+    PROVISION_OPENROUTER_API_KEY: openrouterApiKey || "",
     PROVISION_GEMINI_API_KEY: geminiApiKey || "",
     PROVISION_GITHUB_TOKEN: githubToken || "",
     PROVISION_OBSIDIAN_AUTH_TOKEN: obsidianAuthToken || "",
