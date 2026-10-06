@@ -5,11 +5,14 @@
 - name: Patch heartbeat group delivery bug
   ansible.builtin.include_tasks: patch-heartbeat-group-fix.yml
 
-- name: Set up Claude CLI auth
-  ansible.builtin.include_tasks: claude-cli-auth.yml
-
 - name: Onboard OpenClaw
   ansible.builtin.include_tasks: onboard.yml
 
 - name: Install OpenClaw daemon
   ansible.builtin.include_tasks: daemon.yml
+
+# After the daemon: since 2026.9.8 a first `openclaw daemon install` fails ("Managed
+# service artifacts changed during publication") when drop-ins such as claude-auth.conf
+# already exist, which is the case on a fresh host if this runs first.
+- name: Set up Claude CLI auth
+  ansible.builtin.include_tasks: claude-cli-auth.yml
