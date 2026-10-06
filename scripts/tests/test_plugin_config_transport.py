@@ -164,6 +164,8 @@ elif args==['plugins','inspect','openclaw-mcp-adapter','--json']:
  print(json.dumps({'install':cfg['plugins']['installs']['openclaw-mcp-adapter']}));raise SystemExit(0)
 elif args[:3]==['plugins','install','--force']:
  assert cfg['plugins']['enabled'] is False and (root/'stopped').exists()
+ # 2026.9.8 refuses packages outside ClawHub review without capability consent.
+ assert '--accept-capabilities' in args, 'requires capability consent'
  cfg['plugins']['entries']['openclaw-mcp-adapter']['enabled']=True
  cfg['plugins']['installs']['openclaw-mcp-adapter']['version']='0.1.7'
  (root/'installed').touch()
