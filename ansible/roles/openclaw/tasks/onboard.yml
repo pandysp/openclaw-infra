@@ -41,18 +41,19 @@
                 echo "Note: Ignoring expected 'gateway closed' error"
             else
                 echo "ERROR: OpenClaw onboarding failed with exit code $ONBOARD_EXIT"
-                echo "$ONBOARD_OUTPUT"
+                echo "$ONBOARD_OUTPUT" | sed -E 's/sk-ant-[A-Za-z0-9_-]+/[setup token]/g'
                 exit 1
             fi
         fi
         if [ ! -f ~/.openclaw/openclaw.json ]; then
             echo "ERROR: Onboarding failed - config file not created"
-            echo "$ONBOARD_OUTPUT"
+            echo "$ONBOARD_OUTPUT" | sed -E 's/sk-ant-[A-Za-z0-9_-]+/[setup token]/g'
             exit 1
         fi
       args:
         executable: /bin/bash
-      no_log: true
+      # Logged: the token is read from the temp file, never part of the command, and is
+      # redacted from the onboarding output shown on failure.
 
   always:
     - name: Clean up setup token
