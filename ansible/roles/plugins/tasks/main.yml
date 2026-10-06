@@ -257,6 +257,8 @@
       register: mcp_loading_disabled
       no_log: true
 
+    # Our own pinned package sits outside ClawHub review; since 2026.9.8 a non-interactive
+    # install needs explicit capability consent or it is refused.
     - name: Install plugin from npm
       ansible.builtin.command:
         argv:
@@ -265,10 +267,10 @@
           - install
           - --force
           - --pin
+          - --accept-capabilities
           - '{{ openclaw_mcp_adapter.npm_package }}'
       environment:
         XDG_RUNTIME_DIR: /run/user/1000
-      no_log: true
       when: >-
         (mcp_install.stdout | from_json).version != openclaw_mcp_adapter.npm_package.split('@')[-1]
         or force_plugin_reinstall | default(false) | bool
