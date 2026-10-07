@@ -199,7 +199,8 @@ def mac_access(mac_host, mount):
 
 
 def main(args, runtime_path=RUNTIME):
-    if args in [['--version'], ['--help']]:
+    # Read-only queries without a session; OpenClaw checks the login before turns.
+    if args in [['--version'], ['--help'], ['auth', 'status', '--json']]:
         os.execv(str(NATIVE), [str(NATIVE), *args])
     runtime = json.loads(Path(runtime_path).read_text())
     config = json.loads((HOME / '.openclaw/openclaw.json').read_text())
@@ -216,9 +217,18 @@ def main(args, runtime_path=RUNTIME):
     session = next((args[index + 1] for index, arg in enumerate(args[:-1]) if arg in ('--session-id', '--resume')), '')
     if not (re.fullmatch(r'[A-Za-z0-9-]+', session) or (not session and '--no-session-persistence' in args)):
         raise SystemExit('ERROR: CLI launch names no Claude session; refusing native execution')
-    # Deployment-wide Claude flags; refuse a flag OpenClaw already passes rather than guess which wins.
-    if any(flag in args for flag in runtime['extra_args'] if flag.startswith('-')):
-        raise SystemExit('ERROR: OpenClaw already passes a configured extra CLI flag; refusing ambiguous execution')
+    # Deployment-wide Claude flags. A flag OpenClaw already passes with the same value is kept
+    # once (/btw itself passes --tools ""); a different value is refused rather than guessing which wins.
+    extra = []
+    for index, token in enumerate(runtime['extra_args']):
+        if not token.startswith('-'):
+            continue
+        following = runtime['extra_args'][index + 1:index + 2]
+        pair = [token, *(value for value in following if not value.startswith('-'))]
+        if token not in args:
+            extra += pair
+        elif args[args.index(token):args.index(token) + len(pair)] != pair:
+            raise SystemExit('ERROR: OpenClaw already passes a configured extra CLI flag with another value; refusing ambiguous execution')
     project = HOME / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
     project.mkdir(parents=True, exist_ok=True)
     if project.resolve() != project:
@@ -263,7 +273,7 @@ def main(args, runtime_path=RUNTIME):
     owner = str(os.getpid()) + ':' + started
     # Ownership exists in the name from mkdir onward, even before Docker create.
     artifacts = tempfile.TemporaryDirectory(dir='/tmp', prefix=f"openclaw-claude-cli-{runtime['guard_table']}-{os.getuid()}-{os.getpid()}-{started}-")
-    mcp_found = False
+    # Compaction and /btw carry no MCP configuration by design; when one is passed it must be OpenClaw's.
     for index, arg in enumerate(args):
         flag, separator, inline = arg.partition('=')
         if flag not in {'--mcp-config', '--append-system-prompt-file', '--plugin-dir'}:
@@ -287,7 +297,6 @@ def main(args, runtime_path=RUNTIME):
             rewritten = Path(artifacts.name) / 'mcp.json'
             atomic_json(rewritten, data)
             mount(rewritten, source)
-            mcp_found = True
         else:
             mount(source)
         if flag == '--plugin-dir':
@@ -301,8 +310,6 @@ def main(args, runtime_path=RUNTIME):
                         if not any(target.is_relative_to(root) for root in roots):
                             raise SystemExit(f'ERROR: CLI skill source is outside expected skill roots: {target}')
                         mount(target)
-    if not mcp_found:
-        raise SystemExit('ERROR: CLI MCP configuration is missing; refusing a tool-less fallback')
 
     network = json.loads(output(['docker', 'network', 'inspect', runtime['network']]))[0]
     if network['Driver'] != 'bridge' or not network['EnableIPv6']:
@@ -359,7 +366,7 @@ def main(args, runtime_path=RUNTIME):
             command += ['-e', variable]
     for binding in mounts.values():
         command += ['--mount', binding]
-    command += ['-w', str(workspace), runtime['image'], *args, *runtime['extra_args']]
+    command += ['-w', str(workspace), runtime['image'], *args, *extra]
     with Path(runtime['invocations']).open('a') as stream:
         stream.write(json.dumps({'agent': agent, 'session': session, 'name': name, 'resuming': '--resume' in args}) + '\n')
 

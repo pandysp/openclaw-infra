@@ -17,6 +17,15 @@ launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 
 
+
+BTW_ARGV = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--setting-sources', 'user',
+            '--safe-mode', '--tools', '', '--disallowedTools', 'mcp__*', '--strict-mcp-config', '--no-session-persistence',
+            '--max-turns', '1', '--permission-mode', 'default', '--model', 'claude-sonnet-5-5',
+            '--append-system-prompt-file', '{artifacts}/system-prompt.md']
+COMPACT_ARGV = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--setting-sources', 'user',
+                '--allowedTools', 'mcp__openclaw__*', '--resume', 'fixture-resumed', '--permission-mode', 'bypassPermissions',
+                '--disallowedTools', 'Task', '--exclude-dynamic-system-prompt-sections', '--model', 'claude-sonnet-5-5', '/compact']
+
 class ContainerCancellationTest(unittest.TestCase):
     def test_guard_lifetime_requires_its_exact_whole_file_posix_write_lock(self):
         metadata = SimpleNamespace(st_dev=os.makedev(0, 35), st_ino=567)
@@ -146,7 +155,8 @@ class MacAccessTest(unittest.TestCase):
 class LauncherMacScopeTest(unittest.TestCase):
     """Exercise main() through Docker's command boundary, not just mac_access()."""
 
-    def launch(self, agent, mac_host, skill_root=None, extra_args=(), session_args=('--session-id', 'fixture-session'), refusal=None):
+    def launch(self, agent, mac_host, skill_root=None, extra_args=(), session_args=('--session-id', 'fixture-session'), refusal=None,
+               openclaw_args=None, appended=None):
         with tempfile.TemporaryDirectory(prefix='launcher-mac-') as directory:
             home = Path(directory).resolve()
             workspace = home / 'workspace'
@@ -182,6 +192,9 @@ class LauncherMacScopeTest(unittest.TestCase):
                 mcp.write_text(json.dumps({'mcpServers': {'openclaw': {
                     'type': 'http', 'url': 'http://127.0.0.1:1234/mcp'}}}))
                 args = ['--mcp-config', str(mcp), '--strict-mcp-config', *session_args]
+                if openclaw_args is not None:
+                    (Path(artifacts) / 'system-prompt.md').write_text('fixture')
+                    args = [arg.replace('{artifacts}', artifacts) for arg in openclaw_args]
                 if skill_root is not None:
                     skill = home / skill_root / 'skills/discord'
                     skill.mkdir(parents=True)
@@ -235,8 +248,9 @@ class LauncherMacScopeTest(unittest.TestCase):
                         return
                     launcher.main(args, runtime)
                     command = create.call_args.args[0]
-                    self.assertEqual(command[-len(args) - len(extra_args):], [*args, *extra_args])
-                    session = session_args[1] if session_args[0] != '--no-session-persistence' else 'none'
+                    appended = list(extra_args) if appended is None else appended
+                    self.assertEqual(command[-len(args) - len(appended) - 1:], ['fixture', *args, *appended])
+                    session = next((args[i + 1] for i, arg in enumerate(args) if arg in ('--session-id', '--resume')), 'none')
                     self.assertIn('openclaw.claude-session=' + session, command)
                     self.assertIn('openclaw.claude-agent=' + agent, command)
                     bindings = [command[i + 1] for i, value in enumerate(command) if value == '--mount']
@@ -269,15 +283,28 @@ class LauncherMacScopeTest(unittest.TestCase):
         # Staging turns Claude's own tools off; OpenClaw's tools.allow does not reach them.
         self.launch('other', '', extra_args=('--tools', ''))
 
-    def test_extra_flag_openclaw_already_passes_is_refused(self):
-        self.launch('other', '', extra_args=('--strict-mcp-config',), refusal='already passes a configured extra CLI flag')
+    def test_extra_flag_openclaw_passes_with_another_value_is_refused(self):
+        self.launch('other', '', extra_args=('--max-turns', '5'), openclaw_args=BTW_ARGV, refusal='with another value')
 
     def test_resumed_turn_is_labelled_with_its_session(self):
         self.launch('other', '', session_args=('--resume', 'fixture-resumed'))
 
-    def test_btw_side_question_without_session_runs_unlabelled(self):
-        # /btw strips --session-id/--resume and adds --no-session-persistence (2026.9.8 setup-api.js).
-        self.launch('other', '', session_args=('--no-session-persistence',))
+    def test_btw_side_question_runs_unlabelled_without_mcp(self):
+        # Captured from a live /btw on 2026.9.8: no session, no MCP config, Claude's tools off.
+        self.launch('other', '', openclaw_args=BTW_ARGV)
+        with self.subTest('staging lockdown already passed by OpenClaw'):
+            self.launch('other', '', extra_args=('--tools', ''), openclaw_args=BTW_ARGV, appended=[])
+
+    def test_compaction_resumes_its_session_without_mcp(self):
+        # Captured from a live `openclaw sessions compact` on 2026.9.8.
+        self.launch('other', '', openclaw_args=COMPACT_ARGV)
+
+    def test_login_status_query_runs_the_real_claude_without_a_session(self):
+        # OpenClaw checks the login before turns, outside any workspace.
+        with patch.object(launcher.os, 'execv', side_effect=SystemExit('exec')) as execv:
+            with self.assertRaisesRegex(SystemExit, 'exec'):
+                launcher.main(['auth', 'status', '--json'], '/nonexistent/runtime.json')
+        execv.assert_called_once_with(str(launcher.NATIVE), [str(launcher.NATIVE), 'auth', 'status', '--json'])
 
     def test_bundled_extension_skill_is_mounted_read_only(self):
         # From 2026.9.8, bundled extensions (e.g. custodian-skills) link skills from the OpenClaw package.
