@@ -68,6 +68,23 @@ class MacExpectationTest(unittest.TestCase):
                                     env={**os.environ, 'HOME': home})
         self.assertIn('needs at least two configured agents', result.stderr)
 
+    def test_trial_recognises_the_gateway_claude_script(self):
+        # The gateway's claude execs the launcher; it is no longer a symlink to it.
+        script = Path(__file__).resolve().parents[1] / 'trials/claude-cli/restricted-gateway-trial.py'
+        for content, accepted in (('#!/bin/sh\nexec {launcher} "$@"\n', True),
+                                  ('#!/bin/sh\nexec /usr/bin/claude "$@"\n', False)):
+            with self.subTest(accepted=accepted), tempfile.TemporaryDirectory() as home:
+                state = Path(home, '.openclaw'); state.mkdir()
+                (state / 'openclaw.json').write_text(json.dumps({'agents': {'entries': {'main': {}, 'other': {}}, 'defaults': {}}}))
+                (state / 'claude-cli-container').write_text('launcher')
+                bin_dir = Path(home, 'bin'); bin_dir.mkdir()
+                (bin_dir / 'claude').write_text(content.format(launcher=state / 'claude-cli-container'))
+                (bin_dir / 'systemctl').write_text(f'#!/bin/sh\necho "Environment=PATH={bin_dir}:/usr/bin"\n')
+                (bin_dir / 'systemctl').chmod(0o755)
+                result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30,
+                                        env={**os.environ, 'HOME': home, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'})
+                self.assertEqual('does not start the launcher as claude' not in result.stderr, accepted, result.stderr)
+
     def test_main_only_manifest_matches_explicit_expectation(self):
         trial['validate_mac_access']({'ssh': {'main': {'mac_host': 'mac-air'}, 'other': {'mac_host': ''}}}, ['main'])
 

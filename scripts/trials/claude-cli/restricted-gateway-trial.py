@@ -100,7 +100,9 @@ gateway_path = next(line.split('=', 1)[1] for line in subprocess.run(
     ['systemctl', '--user', 'show', 'openclaw-gateway', '-p', 'Environment'], capture_output=True, text=True, check=True
 ).stdout.replace('Environment=', '').split() if line.startswith('PATH='))
 claude = next((Path(d) / 'claude' for d in gateway_path.split(':') if (Path(d) / 'claude').exists()), None)
-if claude is None or claude.resolve() != (home / '.openclaw/claude-cli-container').resolve():
+# The gateway's claude is a two-line script that execs the launcher (provisioned by openclaw/tasks/claude-cli-path.yml).
+started = re.fullmatch(r'#!/bin/sh\nexec (\S+) "\$@"\n', claude.read_text()) if claude else None
+if not started or Path(started.group(1)).resolve() != (home / '.openclaw/claude-cli-container').resolve():
     raise SystemExit('ERROR: Trials need the container backend; the gateway does not start the launcher as claude')
 
 
