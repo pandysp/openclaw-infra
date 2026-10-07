@@ -92,6 +92,9 @@ entries = before['agents']['entries']
 agents = options.agents or list(entries)
 if any(agent not in entries for agent in agents):
     raise SystemExit('ERROR: Unknown trial agent')
+# Each turn proves its agent cannot read another agent's workspace.
+if len(entries) < 2:
+    raise SystemExit('ERROR: The trial needs at least two configured agents')
 # The trial uses the installed container backend directly; no gateway restart.
 gateway_path = next(line.split('=', 1)[1] for line in subprocess.run(
     ['systemctl', '--user', 'show', 'openclaw-gateway', '-p', 'Environment'], capture_output=True, text=True, check=True

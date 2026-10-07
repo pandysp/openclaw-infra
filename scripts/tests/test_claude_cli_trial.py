@@ -3,6 +3,9 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
+import json
+import os
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -56,6 +59,15 @@ class MacAbsenceTest(unittest.TestCase):
 
 
 class MacExpectationTest(unittest.TestCase):
+    def test_single_agent_host_is_refused_with_a_reason(self):
+        with tempfile.TemporaryDirectory() as home:
+            Path(home, '.openclaw').mkdir()
+            Path(home, '.openclaw/openclaw.json').write_text(json.dumps({'agents': {'entries': {'main': {}}, 'defaults': {}}}))
+            script = Path(__file__).resolve().parents[1] / 'trials/claude-cli/restricted-gateway-trial.py'
+            result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30,
+                                    env={**os.environ, 'HOME': home})
+        self.assertIn('needs at least two configured agents', result.stderr)
+
     def test_main_only_manifest_matches_explicit_expectation(self):
         trial['validate_mac_access']({'ssh': {'main': {'mac_host': 'mac-air'}, 'other': {'mac_host': ''}}}, ['main'])
 
