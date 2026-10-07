@@ -95,6 +95,25 @@ class AnsibleFailureTests(unittest.TestCase):
                 else:
                     self.assertFalse((root / 'sets').exists())
 
+    def test_failed_onboarding_shows_no_secret(self):
+        # The output reaches the public Phoenix log; onboarding generates its own gateway token.
+        body = shell_body('ansible/roles/openclaw/tasks/onboard.yml', 'Run OpenClaw onboarding')
+        with tempfile.TemporaryDirectory(prefix='onboard-') as temporary:
+            root = Path(temporary)
+            (root / '.openclaw').mkdir()
+            (root / 'setup-token').write_text('fixture-setup-NOT-SK-SHAPED')
+            (root / 'openclaw').write_text(
+                '#!/bin/sh\nprintf \'{"gateway":{"auth":{"token":"fixture-generated-gw"}}}\' > "$HOME/.openclaw/openclaw.json"\n'
+                'echo "auth with fixture-setup-NOT-SK-SHAPED, gateway token fixture-generated-gw"\nexit 2\n')
+            (root / 'openclaw').chmod(0o700)
+            result = subprocess.run(['bash', '-c', body.replace('/tmp/ansible-setup-token', str(root / 'setup-token'))],
+                                    capture_output=True, text=True, timeout=15,
+                                    env={'HOME': str(root), 'PATH': str(root) + ':' + os.environ['PATH']})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('[setup token]', result.stdout)
+        self.assertIn('[gateway token]', result.stdout)
+        self.assertNotIn('fixture-', result.stdout + result.stderr)
+
     def test_agent_query_errors_withhold_raw_credentials(self):
         for task in ['Get existing agents', 'Refresh agent list for config targeting']:
             with self.subTest(task=task):
