@@ -55,7 +55,7 @@ nodejs_major_version: 26
 openclaw_version: "2026.9.8"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
-claude_code_version: "2.1.289"  # Opus 5.5 needs >= 2.1.280
+claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
 # Claude Code compacts claude-cli sessions when the context reaches this window
 # minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
