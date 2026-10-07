@@ -76,6 +76,7 @@
     # OpenClaw's preinstall/postinstall without this (docs/install/index.md).
     - name: "Install openclaw@{{ openclaw_version }}"
       ansible.builtin.command: npm install -g "openclaw@{{ openclaw_version }}" --allow-scripts=openclaw
+      register: openclaw_package_install
       environment:
         OPENCLAW_NO_ONBOARD: "1"
         OPENCLAW_NO_PROMPT: "1"

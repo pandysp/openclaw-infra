@@ -24,6 +24,9 @@
     label: "{{ item.0.agent_id }}.{{ item.1 }}"
   register: workspace_existing_units
 
+# Every run stops the timers, synchronizes each workspace once and starts them again.
+# Intended: provisioning proves the deploy keys and repository access still work, so
+# these tasks report changed on every run and stay outside Phoenix's idempotence scope.
 - name: Stop existing workspace units during installation
   ansible.builtin.systemd:
     name: "{{ item.stat.path | basename }}"

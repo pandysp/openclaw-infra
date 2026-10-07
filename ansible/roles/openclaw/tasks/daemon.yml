@@ -12,31 +12,26 @@
     executable: /bin/bash
   when: not daemon_service.stat.exists
 
-- name: Check daemon service file version matches target version
-  when: daemon_service.stat.exists
-  block:
-    - name: Extract version from daemon service file
-      ansible.builtin.shell: |
-        grep -oP 'OPENCLAW_SERVICE_VERSION=\K[^\s"]+' /home/ubuntu/.config/systemd/user/openclaw-gateway.service 2>/dev/null || echo ""
-      args:
-        executable: /bin/bash
-      register: daemon_service_version
-      changed_when: false
-
-    - name: Regenerate daemon service file if version drifted
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
+# Regenerate the service file when this run installed OpenClaw, or when the file
+# still comes from a pre-2026.9 installer (only those wrote OPENCLAW_SERVICE_VERSION):
+# that catches a run that failed between the install and here. 2026.9 files carry no
+# version, and an old file stops the gateway after 30 s instead of its 315 s drain.
+- name: Regenerate daemon service file after an OpenClaw install
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    SERVICE_FILE=/home/ubuntu/.config/systemd/user/openclaw-gateway.service
+    if {{ (openclaw_package_install is changed) | ternary('true', 'false') }} || grep -q 'OPENCLAW_SERVICE_VERSION=' "$SERVICE_FILE"; then
         openclaw daemon install --force
         systemctl --user daemon-reload
-        echo "REGENERATED: service={{ daemon_service_version.stdout | trim }} target={{ openclaw_version }}"
-      args:
-        executable: /bin/bash
-      register: daemon_version_regen
-      changed_when: true
-      notify: restart openclaw-gateway
-      when: >-
-        daemon_service_version.stdout | trim != openclaw_version
+        echo REGENERATED
+    fi
+  args:
+    executable: /bin/bash
+  register: daemon_regenerated
+  changed_when: "'REGENERATED' in daemon_regenerated.stdout"
+  notify: restart openclaw-gateway
+  when: daemon_service.stat.exists
 
 # The WS handshake timeout drop-in is no longer needed — 10s is the upstream
 # default since 2026.3.22 (PR #49262). Clean up the orphan file.

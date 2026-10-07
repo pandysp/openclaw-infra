@@ -16,6 +16,11 @@ def shell_body(file, task):
     return textwrap.dedent(re.search(r'ansible\.builtin\.shell: \|\n(.*?)\n\s+args:', source, re.S).group(1))
 
 
+def load_install():
+    from test_playbook_order import load_yaml
+    return load_yaml(ROOT / 'ansible/roles/openclaw/tasks/install.yml')
+
+
 class AnsibleFailureTests(unittest.TestCase):
     def run_shell(self, file, task):
         with tempfile.TemporaryDirectory(prefix='role-failure-') as temporary:
@@ -34,10 +39,36 @@ class AnsibleFailureTests(unittest.TestCase):
 
     def test_failed_daemon_install_never_claims_regeneration(self):
         result = self.run_shell('ansible/roles/openclaw/tasks/daemon.yml',
-                                'Regenerate daemon service file if version drifted')
+                                'Regenerate daemon service file after an OpenClaw install')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(result.reloaded)
         self.assertNotIn('REGENERATED', result.stdout)
+
+    def test_daemon_is_regenerated_only_after_an_install_or_from_an_old_file(self):
+        # 2026.9 service files carry no version: comparing one regenerated the service
+        # and restarted the gateway on every provisioning run.
+        body = shell_body('ansible/roles/openclaw/tasks/daemon.yml', 'Regenerate daemon service file after an OpenClaw install')
+        cases = {('false', 'Description=OpenClaw Gateway\n'): False,
+                 ('true', 'Description=OpenClaw Gateway\n'): True,
+                 ('false', 'Environment=OPENCLAW_SERVICE_VERSION=2026.6.6\n'): True}
+        for (installed, unit), regenerates in cases.items():
+            with self.subTest(installed=installed, unit=unit), tempfile.TemporaryDirectory(prefix='daemon-') as temporary:
+                root = Path(temporary)
+                for tool in ('openclaw', 'systemctl'):
+                    (root / tool).write_text('#!/bin/sh\necho "$0 $*" >> "$HOME/calls"\n')
+                    (root / tool).chmod(0o700)
+                rendered = (re.sub(r"\{\{.*?\}\}", installed, body)
+                            .replace('/home/ubuntu/.config/systemd/user/openclaw-gateway.service', str(root / 'unit')))
+                (root / 'unit').write_text(unit)
+                result = subprocess.run(['bash', '-c', rendered], capture_output=True, text=True, timeout=15,
+                                        env={'HOME': str(root), 'PATH': str(root) + ':' + os.environ['PATH']})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual('REGENERATED' in result.stdout, regenerates)
+                self.assertEqual((root / 'calls').exists(), regenerates)
+        install, = load_install()
+        npm = [t for block in install for t in block.get('block', [block])
+               if 'npm install -g "openclaw@' in str(t.get('ansible.builtin.command', ''))]
+        self.assertEqual([t.get('register') for t in npm], ['openclaw_package_install'])
 
     def test_agent_query_errors_withhold_raw_credentials(self):
         for task in ['Get existing agents', 'Refresh agent list for config targeting']:
