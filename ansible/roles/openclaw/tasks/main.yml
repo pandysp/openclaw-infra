@@ -16,3 +16,11 @@
 # already exist, which is the case on a fresh host if this runs first.
 - name: Set up Claude CLI auth
   ansible.builtin.include_tasks: claude-cli-auth.yml
+
+# Derived from the unit as it now exists (first install or regenerated), then applied
+# at once, so the gateway runs the launcher before any channel is configured.
+- name: Give the gateway its container launcher
+  ansible.builtin.include_tasks: claude-cli-path.yml
+
+- name: Restart the gateway with its container launcher
+  ansible.builtin.meta: flush_handlers

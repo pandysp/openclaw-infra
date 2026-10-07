@@ -4,6 +4,11 @@
     path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service
   register: daemon_service
 
+# Before any regeneration below starts the gateway on a new OpenClaw.
+- name: Give the existing gateway unit its container launcher
+  ansible.builtin.include_tasks: claude-cli-path.yml
+  when: daemon_service.stat.exists
+
 - name: Install OpenClaw daemon
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
