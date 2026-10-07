@@ -41,16 +41,23 @@
 - name: Install OpenClaw daemon
   ansible.builtin.include_tasks: daemon.yml
 
+# Derived from the unit as it now exists (first install or regenerated), then applied at
+# once: before Claude Code is installed below, so a gateway started without the launcher on
+# a fresh host never finds the real Claude Code. Tagged so that switching containers on or
+# off with `--tags config,claude-cli` reaches it.
+- name: Give the gateway its container launcher
+  ansible.builtin.include_tasks:
+    file: claude-cli-path.yml
+    apply:
+      tags: [openclaw, config, claude-cli]
+  tags: [openclaw, config, claude-cli]
+
+- name: Restart the gateway with its container launcher
+  ansible.builtin.meta: flush_handlers
+  tags: [openclaw, config, claude-cli]
+
 # After the daemon: since 2026.9.8 a first `openclaw daemon install` fails ("Managed
 # service artifacts changed during publication") when drop-ins such as claude-auth.conf
 # already exist, which is the case on a fresh host if this runs first.
 - name: Set up Claude CLI auth
   ansible.builtin.include_tasks: claude-cli-auth.yml
-
-# Derived from the unit as it now exists (first install or regenerated), then applied
-# at once, so the gateway runs the launcher before any channel is configured.
-- name: Give the gateway its container launcher
-  ansible.builtin.include_tasks: claude-cli-path.yml
-
-- name: Restart the gateway with its container launcher
-  ansible.builtin.meta: flush_handlers

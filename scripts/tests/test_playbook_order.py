@@ -49,14 +49,21 @@ class PlaybookOrderTest(unittest.TestCase):
         # without the PATH drop-in it runs the real Claude Code on the host (both seen on the test server).
         roles = ROOT / 'ansible/roles'
         main, config = load_yaml(roles / 'openclaw/tasks/main.yml', roles / 'config/tasks/main.yml')
-        position = lambda name: [i for i, t in enumerate(main) if t.get('ansible.builtin.include_tasks') == name]
+        included = lambda t: (lambda v: v.get('file') if isinstance(v, dict) else v)(t.get('ansible.builtin.include_tasks'))
+        position = lambda name: [i for i, t in enumerate(main) if included(t) == name]
         launcher = position('claude-cli-path.yml')
         self.assertEqual(len(launcher), 2, 'the launcher must be applied before the install and after the unit exists')
         first, second = launcher
         self.assertEqual(main[first]['when'], 'daemon_service.stat.exists')
         self.assertLess(first, position('install.yml')[0], 'doctor can start the gateway before the launcher is on its PATH')
-        self.assertGreater(second, position('claude-cli-auth.yml')[0])
+        # After the unit exists, before claude-cli-auth installs the real Claude Code.
+        self.assertGreater(second, position('daemon.yml')[0])
+        self.assertLess(second, position('claude-cli-auth.yml')[0], 'real Claude Code installed while the gateway lacks the launcher')
         self.assertEqual(main[second + 1].get('ansible.builtin.meta'), 'flush_handlers')
+        # Switching containers on or off with `--tags config,claude-cli` must reach it.
+        for task in (main[second], main[second + 1]):
+            self.assertTrue({'config', 'claude-cli'} <= set(task['tags']))
+        self.assertTrue({'config', 'claude-cli'} <= set(main[second]['ansible.builtin.include_tasks']['apply']['tags']))
         self.assertNotIn('claude-cli-path', json.dumps(config), 'a second writer of the PATH drop-in')
 
     def test_the_gateway_claude_fails_closed_while_the_launcher_is_missing(self):

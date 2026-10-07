@@ -285,6 +285,12 @@ class LauncherMacScopeTest(unittest.TestCase):
 
     def test_extra_flag_openclaw_passes_with_another_value_is_refused(self):
         self.launch('other', '', extra_args=('--max-turns', '5'), openclaw_args=BTW_ARGV, refusal='with another value')
+        with self.subTest('only part of the list is already passed'):
+            self.launch('other', '', extra_args=('--tools', '', '--max-turns', '5'), openclaw_args=BTW_ARGV,
+                        refusal='with another value')
+
+    def test_extra_flag_with_several_values_keeps_them_all(self):
+        self.launch('other', '', extra_args=('--disallowedTools', 'Bash', 'Write'))
 
     def test_resumed_turn_is_labelled_with_its_session(self):
         self.launch('other', '', session_args=('--resume', 'fixture-resumed'))

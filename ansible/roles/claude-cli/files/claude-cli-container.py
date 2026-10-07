@@ -217,18 +217,14 @@ def main(args, runtime_path=RUNTIME):
     session = next((args[index + 1] for index, arg in enumerate(args[:-1]) if arg in ('--session-id', '--resume')), '')
     if not (re.fullmatch(r'[A-Za-z0-9-]+', session) or (not session and '--no-session-persistence' in args)):
         raise SystemExit('ERROR: CLI launch names no Claude session; refusing native execution')
-    # Deployment-wide Claude flags. A flag OpenClaw already passes with the same value is kept
-    # once (/btw itself passes --tools ""); a different value is refused rather than guessing which wins.
-    extra = []
-    for index, token in enumerate(runtime['extra_args']):
-        if not token.startswith('-'):
-            continue
-        following = runtime['extra_args'][index + 1:index + 2]
-        pair = [token, *(value for value in following if not value.startswith('-'))]
-        if token not in args:
-            extra += pair
-        elif args[args.index(token):args.index(token) + len(pair)] != pair:
-            raise SystemExit('ERROR: OpenClaw already passes a configured extra CLI flag with another value; refusing ambiguous execution')
+    # Deployment-wide Claude flags. When OpenClaw already passes the whole list (/btw passes
+    # --tools ""), it is not repeated; when it passes only one of its flags, refuse rather
+    # than guess which wins.
+    extra = list(runtime['extra_args'])
+    if extra and any(args[i:i + len(extra)] == extra for i in range(len(args))):
+        extra = []
+    elif any(flag in args for flag in extra if flag.startswith('-')):
+        raise SystemExit('ERROR: OpenClaw already passes a configured extra CLI flag with another value; refusing ambiguous execution')
     project = HOME / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
     project.mkdir(parents=True, exist_ok=True)
     if project.resolve() != project:

@@ -31,7 +31,8 @@ class AnsibleFailureTests(unittest.TestCase):
             systemctl = root / 'systemctl'
             systemctl.write_text('#!/bin/sh\ntouch "$HOME/reloaded"\n')
             systemctl.chmod(0o700)
-            result = subprocess.run(['bash', '-c', shell_body(file, task)],
+            # Rendered as Ansible would, with every condition true, so failures come from the CLI.
+            result = subprocess.run(['bash', '-c', re.sub(r'\{\{.*?\}\}', 'true', shell_body(file, task))],
                 env={'HOME': str(root), 'PATH': str(root) + ':' + os.environ['PATH']},
                 capture_output=True, text=True, timeout=15)
             result.reloaded = (root / 'reloaded').exists()
