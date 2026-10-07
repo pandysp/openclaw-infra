@@ -108,6 +108,8 @@ if os.environ['TEST_CASE']=='partial_read_failure':
  print(json.dumps({'servers': [{'env': {'GITHUB_PERSONAL_ACCESS_TOKEN': 'fixture-partial-pat'}}]}));raise SystemExit(92)
 if os.environ['TEST_CASE']=='build_failure':
  print('fixture-parser-diagnostic',file=sys.stderr);raise SystemExit(92)
+if os.environ['TEST_CASE']=='verify_failure' and any('.enabled // false' in arg for arg in sys.argv):
+ raise SystemExit(93)
 if 'toolPrefix:' in sys.argv[-1] and 'servers: .' in sys.argv[-1]:
  s=os.fstat(1)
  assert stat.S_ISREG(s.st_mode) and stat.S_IMODE(s.st_mode)==0o600 and s.st_uid==os.getuid(), 'Output not private before population'
@@ -138,6 +140,8 @@ print(json.dumps({'prepared':True,'changed':changed,'servers':len(desired['serve
 root=pathlib.Path(os.environ['TEST_ROOT']);args=[a for a in sys.argv[1:] if a!='--user']
 cfg=json.loads((root/'home/.openclaw/openclaw.json').read_text())
 running=not (root/'stopped').exists() or (root/'recovered').exists()
+if args[0]!='show':
+ with (root/'systemctl-calls').open('a') as f:f.write(json.dumps(args)+'\\n')
 if args[0]=='show':
  print('Id=openclaw-gateway.service\\nLoadState=loaded\\nActiveState='+('active' if running else 'inactive')+'\\nSubState='+('running' if running else 'dead')+'\\nUnitFileState=enabled')
 elif args==['stop','openclaw-gateway']:
@@ -250,12 +254,32 @@ p.write_text(json.dumps(cfg))
                 calls = [json.loads(line) for line in (root / "cli-calls").read_text().splitlines()]
                 config_writes = [call for call in calls if call[-1] == "plugins.entries.openclaw-mcp-adapter.config"]
                 self.assertEqual(len(config_writes), 1, "Config and enabled state should use one patch")
+                # The gateway was restarted after the first run; an unchanged rerun must not stop it.
+                (root / "stopped").unlink()
+                (root / "systemctl-calls").unlink()
+                (root / "cli-calls").unlink()
                 rerun = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=60, umask=0o022)
                 self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
                 self.assertNotIn("fixture-", rerun.stdout + rerun.stderr)
                 repeated = [json.loads(line) for line in (root / "cli-calls").read_text().splitlines()]
-                self.assertEqual([call for call in repeated if call[-1] == "plugins.entries.openclaw-mcp-adapter.config"],
-                                 config_writes, "Unchanged plugin config invoked writer again")
+                self.assertFalse([call for call in repeated if call[-1] == "plugins.entries.openclaw-mcp-adapter.config"],
+                                 "Unchanged plugin config invoked writer again")
+                if case != "force_reinstall":  # forcing reinstalls on every run, by design
+                    self.assertNotIn(["config", "set", "plugins.enabled", "false"], repeated, "Unchanged rerun disabled plugin loading")
+                    self.assertFalse((root / "systemctl-calls").exists(), "Unchanged rerun stopped the gateway")
+                # A rebuilt qmd reports its tools from a new binary, so the cache is prepared again.
+                rebuilt = subprocess.run([*command, "-e", json.dumps({"qmd_install": {"changed": True}})], cwd=root, env=env,
+                                         capture_output=True, text=True, timeout=60, umask=0o022)
+                self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
+                self.assertIn(["stop", "openclaw-gateway"],
+                              [json.loads(line) for line in (root / "systemctl-calls").read_text().splitlines()])
+                if case != "force_reinstall":
+                    # A failure after skipped maintenance must not switch the working adapter off.
+                    failed = subprocess.run(command, cwd=root, env={**env, "TEST_CASE": "verify_failure"},
+                                            capture_output=True, text=True, timeout=60, umask=0o022)
+                    self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+                    self.assertTrue(json.loads(cfg.read_text())["plugins"]["entries"]["openclaw-mcp-adapter"]["enabled"],
+                                    "Rescue disabled an adapter that maintenance never touched")
             elif case == "prepare_failure":
                 self.assertNotEqual(result.returncode, 0)
                 actual = json.loads(cfg.read_text())

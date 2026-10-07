@@ -44,6 +44,7 @@
     bun install -g --force "@tobilu/qmd@{{ qmd_version }}"
   args:
     executable: /bin/bash
+  register: qmd_install
   when: >-
     qmd_installed_version.stdout != qmd_version
     or not qmd_built_abi_file.stat.exists
