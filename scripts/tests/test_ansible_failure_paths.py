@@ -70,6 +70,31 @@ class AnsibleFailureTests(unittest.TestCase):
                if 'npm install -g "openclaw@' in str(t.get('ansible.builtin.command', ''))]
         self.assertEqual([t.get('register') for t in npm], ['openclaw_package_install'])
 
+    def test_ubuntu_becomes_tailscale_operator_once(self):
+        # Without operator rights the gateway's `tailscale serve` runs as root via sudo and
+        # can outlive a stop; the next start then exits 78 for good.
+        daemon = (ROOT / 'ansible/roles/openclaw/tasks/daemon.yml').read_text()
+        self.assertIn('- name: Let the gateway run Tailscale Serve without sudo', daemon)
+        # Before the first task that can start the gateway.
+        self.assertLess(daemon.index('Let the gateway run Tailscale Serve'), daemon.index('daemon install'))
+        body = shell_body('ansible/roles/openclaw/tasks/daemon.yml', 'Let the gateway run Tailscale Serve without sudo')
+        for current, sets in (('', True), ('root', True), ('ubuntu', False)):
+            with self.subTest(operator=current), tempfile.TemporaryDirectory(prefix='operator-') as temporary:
+                root = Path(temporary)
+                (root / 'tailscale').write_text(
+                    '#!/bin/sh\nif [ "$1" = debug ]; then printf \'{"OperatorUser":"%s"}\\n\' "$OPERATOR"; '
+                    'else echo "$*" >> "$HOME/sets"; fi\n')
+                (root / 'tailscale').chmod(0o700)
+                result = subprocess.run(['bash', '-c', body], capture_output=True, text=True, timeout=15,
+                                        env={'HOME': str(root), 'OPERATOR': current,
+                                             'PATH': str(root) + ':' + os.environ['PATH']})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual('CHANGED' in result.stdout, sets)
+                if sets:
+                    self.assertEqual((root / 'sets').read_text(), 'set --operator=ubuntu\n')
+                else:
+                    self.assertFalse((root / 'sets').exists())
+
     def test_agent_query_errors_withhold_raw_credentials(self):
         for task in ['Get existing agents', 'Refresh agent list for config targeting']:
             with self.subTest(task=task):
