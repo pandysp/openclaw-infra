@@ -54,5 +54,5 @@ does not exist on the Mac. If authentication fails, check the dedicated public
 key's authorization. If host-key verification fails, verify the new public key
 through the trusted controller route before updating the pin.
 
-Keep the agreed `tools.exec.security: full` and `tools.exec.ask: off`; they
-control Claude's permission mode, not SSH isolation.
+Keep the agreed `tools.exec.mode: full` (since 2026.8 it replaces `tools.exec.security`
+and `tools.exec.ask`); it controls Claude's permission mode, not SSH isolation.
