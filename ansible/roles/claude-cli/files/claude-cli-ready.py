@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse to start an agent without its authenticated OpenClaw tool connection."""
+"""Refuse to start an agent turn whose OpenClaw tool connection does not answer."""
 import json
 import os
 from pathlib import Path
@@ -15,6 +15,9 @@ for index, arg in enumerate(args):
         paths.append(args[index + 1])
     elif arg.startswith('--mcp-config='):
         paths.append(arg.partition('=')[2])
+# Compaction and /btw carry no MCP configuration by design (see the launcher).
+if not paths:
+    os.execv('/usr/local/bin/claude', ['/usr/local/bin/claude', *args])
 if len(paths) != 1:
     raise SystemExit('ERROR: Expected one generated OpenClaw MCP configuration')
 server = json.loads(Path(paths[0]).read_text())['mcpServers']['openclaw']
