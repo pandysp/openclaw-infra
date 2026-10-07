@@ -83,5 +83,14 @@ class PlaybookOrderTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stderr)
             self.assertFalse(Path(tmp, 'real-claude-ran').exists(), 'fell through to the real Claude Code')
 
+    def test_state_directory_is_private_before_doctor(self):
+        # Doctor skips its service policy refresh while ~/.openclaw is group-writable.
+        main, = load_yaml(ROOT / 'ansible/roles/openclaw/tasks/main.yml')
+        names = [t.get('name') for t in main]
+        self.assertIn('Restrict .openclaw directory permissions', names, 'the openclaw role must restrict ~/.openclaw before installing')
+        restrict = names.index('Restrict .openclaw directory permissions')
+        self.assertEqual(main[restrict]['ansible.builtin.file']['mode'], '0700')
+        self.assertLess(restrict, names.index('Install OpenClaw'))
+
 if __name__ == '__main__':
     unittest.main()

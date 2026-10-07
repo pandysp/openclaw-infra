@@ -29,6 +29,14 @@
   ansible.builtin.include_tasks: claude-cli-path.yml
   when: daemon_service.stat.exists
 
+# Before doctor: it skips its service policy refresh while the state directory is
+# group-writable (production's ~/.openclaw was 775 between runs).
+- name: Restrict .openclaw directory permissions
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw
+    state: directory
+    mode: "0700"
+
 - name: Install OpenClaw
   ansible.builtin.include_tasks: install.yml
 

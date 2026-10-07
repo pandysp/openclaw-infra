@@ -68,8 +68,3 @@
       ansible.builtin.file:
         path: /tmp/ansible-setup-token
         state: absent
-
-- name: Restrict .openclaw directory permissions
-  ansible.builtin.file:
-    path: /home/ubuntu/.openclaw
-    mode: "0700"
