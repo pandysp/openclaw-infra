@@ -108,7 +108,7 @@ if os.environ['TEST_CASE']=='partial_read_failure':
  print(json.dumps({'servers': [{'env': {'GITHUB_PERSONAL_ACCESS_TOKEN': 'fixture-partial-pat'}}]}));raise SystemExit(92)
 if os.environ['TEST_CASE']=='build_failure':
  print('fixture-parser-diagnostic',file=sys.stderr);raise SystemExit(92)
-if os.environ['TEST_CASE']=='verify_failure' and any('.enabled // false' in arg for arg in sys.argv):
+if os.environ['TEST_CASE']=='verify_failure' and any('config.servers | length' in arg for arg in sys.argv):
  raise SystemExit(93)
 if 'toolPrefix:' in sys.argv[-1] and 'servers: .' in sys.argv[-1]:
  s=os.fstat(1)

@@ -356,19 +356,6 @@
     # tools.sandbox.tools.allow has one writer, the config role, which lists the
     # adapter whenever it is declared. A second writer here re-sorted it every run.
 
-    - name: Verify plugin config was applied
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        ENABLED=$(jq -r '.plugins.entries["openclaw-mcp-adapter"].enabled // false' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null)
-        if [ "$ENABLED" != "true" ]; then
-            echo "ERROR: Plugin enabled state is '$ENABLED', expected 'true'"
-            exit 1
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-
     - name: Verify MCP adapter has servers configured
       ansible.builtin.shell: |
         set -euo pipefail
@@ -436,10 +423,6 @@
 - name: Flush handlers to restart gateway before verification
   ansible.builtin.meta: flush_handlers
 
-- name: Wait for gateway to stabilize after plugin config
-  ansible.builtin.pause:
-    seconds: 5
-
 - name: Verify gateway is active after plugin config
   ansible.builtin.command: systemctl --user is-active openclaw-gateway
   environment:
@@ -450,29 +433,20 @@
   until: gateway_active_check.rc == 0
   changed_when: false
 
-- name: Check gateway logs for mcp-adapter errors
+# The gateway's journal is no signal: a healthy long-running gateway logs
+# "[mcp-adapter] qmd transport error" when an idle session closes, and qmd tools keep working.
+# This reads OpenClaw's plugin registry; the final health check covers the running gateway.
+- name: Verify the MCP adapter is enabled and loaded
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    # Only the lines of the running gateway: since 2026.9.8 a clean shutdown of the previous
-    # process logs "[mcp-adapter] qmd transport error" while it closes its connections.
-    PID=$(systemctl --user show -p MainPID --value openclaw-gateway)
-    [ "$PID" -gt 0 ] || { echo "ERROR: gateway has no running process" >&2; exit 1; }
-    LOGS=$(journalctl --user -u openclaw-gateway _PID="$PID" --no-pager)
-    if echo "$LOGS" | grep -qi "mcp.*error\|error.*mcp\|failed.*mcp-adapter\|docker.*error\|container.*failed\|image.*not found"; then
-        echo "ERROR: Gateway logs contain MCP adapter errors:"
-        echo "$LOGS" | grep -i "mcp"
-        exit 1
-    fi
-    echo "$LOGS" | grep -i "mcp" || echo "No mcp-adapter log entries yet (normal for lazy-loaded plugins)"
+    openclaw plugins list --json | jq -ce '
+      [.plugins[] | select(.id == "openclaw-mcp-adapter")] as $found
+      | if ($found | length) == 1 and $found[0].enabled == true and $found[0].status == "loaded"
+        then {status: $found[0].status} else error("MCP adapter is not enabled and loaded: \($found)") end'
   args:
     executable: /bin/bash
-  register: mcp_logs
   changed_when: false
-
-- name: Show mcp-adapter log status
-  ansible.builtin.debug:
-    var: mcp_logs.stdout_lines
 
 # --- Per-agent MCP tool scoping ---
 # Each agent denies all MCP server tool prefixes except its own.

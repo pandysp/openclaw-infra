@@ -114,6 +114,25 @@ class AnsibleFailureTests(unittest.TestCase):
         self.assertIn('[gateway token]', result.stdout)
         self.assertNotIn('fixture-', result.stdout + result.stderr)
 
+    def test_mcp_adapter_check_reads_its_state_not_the_journal(self):
+        # A healthy long-running gateway logs "qmd transport error"; a journal grep failed reruns.
+        tasks = (ROOT / 'ansible/roles/plugins/tasks/main.yml').read_text()
+        self.assertIn('- name: Verify the MCP adapter is enabled and loaded', tasks)
+        body = shell_body('ansible/roles/plugins/tasks/main.yml', 'Verify the MCP adapter is enabled and loaded')
+        self.assertNotIn('journalctl', body)
+        cases = {'{"id":"openclaw-mcp-adapter","enabled":true,"status":"loaded"}': 0,
+                 '{"id":"openclaw-mcp-adapter","enabled":true,"status":"error"}': 1,
+                 '{"id":"openclaw-mcp-adapter","enabled":false,"status":"loaded"}': 1,
+                 '{"id":"telegram","enabled":true,"status":"loaded"}': 1}
+        for plugin, expected in cases.items():
+            with self.subTest(plugin=plugin), tempfile.TemporaryDirectory(prefix='adapter-') as temporary:
+                root = Path(temporary)
+                (root / 'openclaw').write_text(f"#!/bin/sh\necho '{{\"plugins\":[{plugin}]}}'\n")
+                (root / 'openclaw').chmod(0o700)
+                result = subprocess.run(['bash', '-c', body], capture_output=True, text=True, timeout=15,
+                                        env={'HOME': str(root), 'PATH': str(root) + ':' + os.environ['PATH']})
+                self.assertEqual(result.returncode != 0, bool(expected), result.stdout + result.stderr)
+
     def test_agent_query_errors_withhold_raw_credentials(self):
         for task in ['Get existing agents', 'Refresh agent list for config targeting']:
             with self.subTest(task=task):
