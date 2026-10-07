@@ -451,5 +451,23 @@
       when: not ansible_check_mode
       tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
 
+    # Since 2026.9.8 a job's delivery channel must already be loaded, so declared jobs are
+    # reconciled only after every channel role, the sensitive-key injection (Discord token)
+    # and the restarts. Tagged telegram so `--tags telegram` keeps updating schedules.
+    - name: Reconcile declared cron jobs
+      ansible.builtin.include_role:
+        name: telegram
+        tasks_from: cron.yml
+        apply:
+          tags: [telegram]
+      when: >-
+        telegram_bot_token is defined and telegram_bot_token | length > 0 and (
+        (telegram_user_id is defined and telegram_user_id | length > 0) or
+        (telegram_group_id is defined and telegram_group_id | length > 0) or
+        openclaw_whatsapp_used | bool or
+        (openclaw_agents | selectattr('deliver_channel', 'defined')
+          | selectattr('deliver_channel', 'equalto', 'discord') | list | length > 0))
+      tags: [telegram]
+
     # Device approvals require an operator to verify the matching request.
     # Provisioning authority does not authorize arbitrary pending clients.
