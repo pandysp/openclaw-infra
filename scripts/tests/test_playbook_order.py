@@ -45,21 +45,17 @@ class PlaybookOrderTest(unittest.TestCase):
 
 
     def test_a_new_openclaw_never_starts_without_the_container_launcher(self):
-        # `openclaw daemon install` starts the gateway; without the PATH drop-in it runs the
-        # real Claude Code on the host (reproduced on the test server).
+        # `openclaw doctor --fix` (install.yml) and `openclaw daemon install` start the gateway;
+        # without the PATH drop-in it runs the real Claude Code on the host (both seen on the test server).
         roles = ROOT / 'ansible/roles'
-        daemon, main, config = load_yaml(roles / 'openclaw/tasks/daemon.yml', roles / 'openclaw/tasks/main.yml',
-                                         roles / 'config/tasks/main.yml')
-        includes = lambda tasks: [i for i, t in enumerate(tasks) if t.get('ansible.builtin.include_tasks') == 'claude-cli-path.yml']
-        installs = [i for i, t in enumerate(daemon) if 'daemon install' in json.dumps(t)]
-        self.assertEqual(len(includes(daemon)), 1, 'daemon.yml must give the existing unit its launcher first')
-        first, = includes(daemon)
-        self.assertEqual(daemon[first]['when'], 'daemon_service.stat.exists')
-        self.assertLess(first, min(installs), 'the service is (re)installed before the launcher is on its PATH')
-        auth = next(i for i, t in enumerate(main) if t.get('ansible.builtin.include_tasks') == 'claude-cli-auth.yml')
-        self.assertEqual(len(includes(main)), 1, 'the openclaw role must apply the launcher after the unit exists')
-        second, = includes(main)
-        self.assertGreater(second, auth)
+        main, config = load_yaml(roles / 'openclaw/tasks/main.yml', roles / 'config/tasks/main.yml')
+        position = lambda name: [i for i, t in enumerate(main) if t.get('ansible.builtin.include_tasks') == name]
+        launcher = position('claude-cli-path.yml')
+        self.assertEqual(len(launcher), 2, 'the launcher must be applied before the install and after the unit exists')
+        first, second = launcher
+        self.assertEqual(main[first]['when'], 'daemon_service.stat.exists')
+        self.assertLess(first, position('install.yml')[0], 'doctor can start the gateway before the launcher is on its PATH')
+        self.assertGreater(second, position('claude-cli-auth.yml')[0])
         self.assertEqual(main[second + 1].get('ansible.builtin.meta'), 'flush_handlers')
         self.assertNotIn('claude-cli-path', json.dumps(config), 'a second writer of the PATH drop-in')
 

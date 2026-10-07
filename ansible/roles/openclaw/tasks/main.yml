@@ -1,4 +1,34 @@
 ---
+# The gateway can start on a new OpenClaw before daemon.yml: `openclaw doctor --fix` in
+# install.yml starts the existing service (seen on the test server). Everything that start
+# must already have comes first.
+# gateway.tailscale.mode serve: since 2026.8 the gateway runs `tailscale serve --bg=false`
+# for as long as it lives, falling back to `sudo -n` without operator rights. A root child
+# outlives a stop that systemd's user manager cannot kill, keeps port 443, and the next start
+# exits 78 for good (reproduced on the test server). As operator, ubuntu runs it inside the
+# service, as OpenClaw's own error message recommends. Set before anything below can start it.
+- name: Let the gateway run Tailscale Serve without sudo
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if [ "$(tailscale debug prefs | jq -r '.OperatorUser // ""')" != ubuntu ]; then
+        tailscale set --operator=ubuntu
+        echo CHANGED
+    fi
+  args:
+    executable: /bin/bash
+  register: tailscale_operator
+  changed_when: "'CHANGED' in tailscale_operator.stdout"
+
+- name: Check if openclaw-gateway service file exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service
+  register: daemon_service
+
+- name: Give the existing gateway unit its container launcher
+  ansible.builtin.include_tasks: claude-cli-path.yml
+  when: daemon_service.stat.exists
+
 - name: Install OpenClaw
   ansible.builtin.include_tasks: install.yml
 

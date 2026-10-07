@@ -73,11 +73,11 @@ class AnsibleFailureTests(unittest.TestCase):
     def test_ubuntu_becomes_tailscale_operator_once(self):
         # Without operator rights the gateway's `tailscale serve` runs as root via sudo and
         # can outlive a stop; the next start then exits 78 for good.
-        daemon = (ROOT / 'ansible/roles/openclaw/tasks/daemon.yml').read_text()
-        self.assertIn('- name: Let the gateway run Tailscale Serve without sudo', daemon)
-        # Before the first task that can start the gateway.
-        self.assertLess(daemon.index('Let the gateway run Tailscale Serve'), daemon.index('daemon install'))
-        body = shell_body('ansible/roles/openclaw/tasks/daemon.yml', 'Let the gateway run Tailscale Serve without sudo')
+        main = (ROOT / 'ansible/roles/openclaw/tasks/main.yml').read_text()
+        self.assertIn('- name: Let the gateway run Tailscale Serve without sudo', main)
+        # Before install.yml, whose doctor can already start the gateway.
+        self.assertLess(main.index('Let the gateway run Tailscale Serve'), main.index('include_tasks: install.yml'))
+        body = shell_body('ansible/roles/openclaw/tasks/main.yml', 'Let the gateway run Tailscale Serve without sudo')
         for current, sets in (('', True), ('root', True), ('ubuntu', False)):
             with self.subTest(operator=current), tempfile.TemporaryDirectory(prefix='operator-') as temporary:
                 root = Path(temporary)
