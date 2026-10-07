@@ -5,6 +5,7 @@ The ownership conditions are checked as YAML, not emulated as a GitHub runner.
 No test contacts GitHub, Tailscale, Hetzner or a Pulumi backend.
 """
 import json
+import re
 import os
 from pathlib import Path
 import signal
@@ -1082,6 +1083,22 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             self.assertNotIn('accept-new', code)
         self.assertIn('PHOENIX_RESOURCE_NAME', self.steps['Run deployment verification']['run'])
 
+
+class FailureLogFilterTest(unittest.TestCase):
+    def test_only_gateway_lifecycle_lines_reach_the_public_log(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/staging.yml').read_text()
+        step = workflow.split('- name: Show gateway log after a failure', 1)[1].split('\n      - name:', 1)[0]
+        pattern = re.search(r"grep -E '([^']+)'", step).group(1)
+        kept = ['Oct 07 19:14:36 openclaw-spike node[2739436]: 2026-10-07T19:14:36.629+00:00 [gateway] loading configuration',
+                'Oct 07 20:35:21 openclaw-spike node[2922054]: 2026-10-07T20:35:21.491+00:00 [shutdown] completed cleanly in 82ms',
+                'Oct  7 09:03:17 openclaw-spike node[1250815]: 2026-10-07T09:03:17.235+00:00 [admission] closed: restart',
+                'Oct 07 20:35:21 openclaw-spike systemd[18674]: openclaw-gateway.service: Main process exited, code=exited, status=78/CONFIG']
+        dropped = ['Oct 07 19:14:40 openclaw-spike node[2739436]: {"type":"assistant","text":"[gateway] my diary"}',
+                   'Oct 07 19:14:40 openclaw-spike node[2739436]: my reply mentions [gateway] restart plans',
+                   'Oct 07 19:14:40 openclaw-spike node[2739436]: state owner offline maintenance of my notes']
+        result = subprocess.run(['grep', '-E', pattern], input='\n'.join(kept + dropped) + '\n',
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.stdout.splitlines(), kept, result.stderr)
 
 if __name__ == '__main__':
     unittest.main()

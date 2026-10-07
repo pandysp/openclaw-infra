@@ -577,9 +577,9 @@ jobs:
         if: failure() && env.STAGING_HOST != ''
         run: |
           set -uo pipefail
+          # Anchored to the journal prefix, so text inside a conversation line cannot match.
           tailscale ssh "ubuntu@$STAGING_HOST" 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway --no-pager -n 600' \
-            | grep -v -F '"type":' \
-            | grep -E '\[(admission|gateway|reload|shutdown)\]|state owner|offline maintenance|systemd\[' \
+            | grep -E '^[A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} [^ ]+ (node\[[0-9]+\]: [0-9T:.+-]+ \[(admission|gateway|reload|shutdown)\] |systemd\[[0-9]+\]: )' \
             | tail -150
 
       - name: Destroy staging infrastructure
