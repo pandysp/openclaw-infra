@@ -1,0 +1,6 @@
+[Unit]
+Description=Tell the owner that the workspace sync for %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/.npm-global/bin/openclaw message send --channel {{ _owner.deliver_channel }} --target {{ _owner.deliver_to }} --message "Workspace backup for agent %i failed. Details: journalctl --user -u workspace-git-sync-%i"
