@@ -2,8 +2,14 @@
 - name: Configure Telegram channel
   ansible.builtin.include_tasks: channel.yml
 
+# The bindings also give WhatsApp and Discord their owner, so adding either channel with
+# its own tag (`--tags discord`) must reach them. A host without Telegram has no bindings.
 - name: Configure Telegram bindings
-  ansible.builtin.include_tasks: bindings.yml
+  ansible.builtin.include_tasks:
+    file: bindings.yml
+    apply:
+      tags: [telegram, whatsapp, discord]
+  tags: [telegram, whatsapp, discord]
 
 - name: Fix stale heartbeat session delivery targets
   ansible.builtin.include_tasks: session-cleanup.yml

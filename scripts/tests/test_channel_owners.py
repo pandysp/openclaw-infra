@@ -45,5 +45,12 @@ class ChannelOwnerTest(unittest.TestCase):
         self.assertEqual(self.owned(openclaw_whatsapp_used=True, discord_bot_token=''), ['telegram', 'whatsapp'])
 
 
+    def test_adding_a_channel_with_its_own_tag_reaches_the_owners(self):
+        main, = load_yaml(ROOT / 'ansible/roles/telegram/tasks/main.yml')
+        include = next(t for t in main if 'bindings.yml' in json.dumps(t))
+        for tag in ('whatsapp', 'discord'):
+            self.assertIn(tag, include.get('tags', []))
+            self.assertIn(tag, include['ansible.builtin.include_tasks']['apply']['tags'])
+
 if __name__ == '__main__':
     unittest.main()
