@@ -171,9 +171,10 @@ class PlaybookOrderTest(unittest.TestCase):
         self.assertEqual(install['ansible.builtin.template']['dest'],
                          '/home/ubuntu/.config/systemd/user/workspace-sync-failed@.service')
         self.assertIn("selectattr('is_default', 'equalto', true)", install['vars']['_owner'])
-        # Installed before the first sync can run (and fail).
-        self.assertLess(names.index('Install the owner alert for failed workspace syncs'),
-                        names.index('Find existing workspace units'))
+        # Installed into the user unit directory once it exists, and before the first sync can fail.
+        alert_index = names.index('Install the owner alert for failed workspace syncs')
+        self.assertGreater(alert_index, names.index('Ensure workspace support directories exist'))
+        self.assertLess(alert_index, names.index('Synchronize workspaces and restore their timers'))
 
 if __name__ == '__main__':
     unittest.main()

@@ -16,15 +16,6 @@
   loop_control:
     label: "{{ item.agent_id }}"
 
-# A failed sync otherwise goes unnoticed (main's sync failed hourly for 39 hours).
-- name: Install the owner alert for failed workspace syncs
-  ansible.builtin.template:
-    src: workspace-sync-failed@.service.j2
-    dest: /home/ubuntu/.config/systemd/user/workspace-sync-failed@.service
-    mode: "0644"
-  vars:
-    _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
-
 - name: Find existing workspace units
   ansible.builtin.stat:
     path: "/home/ubuntu/.config/systemd/user/workspace-git-sync-{{ item.0.agent_id }}.{{ item.1 }}"
@@ -86,6 +77,15 @@
     - { path: /home/ubuntu/.openclaw, mode: "0700" }
     - { path: /home/ubuntu/.config/systemd/user, mode: "0755" }
     - { path: /home/ubuntu/.local/share/workspace-sync-build, mode: "0755" }
+
+# A failed sync otherwise goes unnoticed (main's sync failed hourly for 39 hours).
+- name: Install the owner alert for failed workspace syncs
+  ansible.builtin.template:
+    src: workspace-sync-failed@.service.j2
+    dest: /home/ubuntu/.config/systemd/user/workspace-sync-failed@.service
+    mode: "0644"
+  vars:
+    _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
 
 - name: Install deploy keys
   ansible.builtin.copy:
