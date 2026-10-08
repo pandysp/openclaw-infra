@@ -6,13 +6,27 @@
   ansible.builtin.set_fact:
     _telegram_bindings: []
 
+# OpenClaw 2026.8.1+ calls a direct chat "direct"; deliver_type keeps "dm".
 - name: Build binding entries
   ansible.builtin.set_fact:
-    _telegram_bindings: "{{ _telegram_bindings + [{'agentId': item.id, 'match': {'channel': item.deliver_channel | default('telegram'), 'peer': {'kind': item.deliver_type, 'id': item.deliver_to | string}}}] }}"
+    _telegram_bindings: "{{ _telegram_bindings + [{'agentId': item.id, 'match': {'channel': item.deliver_channel | default('telegram'), 'peer': {'kind': {'dm': 'direct'}.get(item.deliver_type, item.deliver_type), 'id': item.deliver_to | string}}}] }}"
   loop: "{{ openclaw_agents | selectattr('is_default', 'equalto', false) | list }}"
   loop_control:
     label: "{{ item.id }}"
   when: item.deliver_to | default('') | length > 0
+
+# With explicit agent ownership (2026.8.1+), a channel account without an owner
+# binding stays blocked. The default agent owns every configured channel's default
+# account (doctor only binds channels that already had sessions, so it leaves an unused
+# Discord blocked). The peer bindings above are more specific and win.
+- name: Give the default agent each configured channel account
+  ansible.builtin.set_fact:
+    _telegram_bindings: "{{ _telegram_bindings + [{'agentId': _default_agent_id, 'match': {'channel': item, 'accountId': 'default'}}] }}"
+  vars:
+    _default_agent_id: "{{ (openclaw_agents | selectattr('is_default', 'equalto', true) | first).id }}"
+  loop: >-
+    {{ ['telegram'] + (['whatsapp'] if openclaw_whatsapp_used | bool else [])
+       + (['discord'] if discord_bot_token is defined and discord_bot_token | length > 0 else []) }}
 
 - block:
     - name: Write bindings JSON to temp file
@@ -28,7 +42,7 @@
         export XDG_RUNTIME_DIR=/run/user/1000
         DESIRED=$(cat /tmp/ansible_bindings.json)
         CURRENT=$(openclaw config get bindings 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-            if echo "$CURRENT" | grep -qi "not set\|not found\|does not exist\|undefined"; then
+            if echo "$CURRENT" | grep -qE '^Config path is valid but unset:'; then
                 CURRENT="[]"
             else
                 echo "ERROR reading bindings: $CURRENT" >&2

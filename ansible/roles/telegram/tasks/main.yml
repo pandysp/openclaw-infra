@@ -2,18 +2,16 @@
 - name: Configure Telegram channel
   ansible.builtin.include_tasks: channel.yml
 
+# The bindings also give WhatsApp and Discord their owner, so adding either channel with
+# its own tag (`--tags discord`) must reach them. A host without Telegram has no bindings.
 - name: Configure Telegram bindings
-  ansible.builtin.include_tasks: bindings.yml
+  ansible.builtin.include_tasks:
+    file: bindings.yml
+    apply:
+      tags: [telegram, whatsapp, discord]
+  tags: [telegram, whatsapp, discord]
 
 - name: Fix stale heartbeat session delivery targets
   ansible.builtin.include_tasks: session-cleanup.yml
 
-- name: Configure cron jobs
-  ansible.builtin.include_tasks: cron.yml
-  when: >-
-    (telegram_user_id is defined and telegram_user_id | length > 0) or
-    (telegram_group_id is defined and telegram_group_id | length > 0) or
-    (openclaw_agents | selectattr('deliver_channel', 'defined')
-      | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0) or
-    (openclaw_agents | selectattr('deliver_channel', 'defined')
-      | selectattr('deliver_channel', 'equalto', 'discord') | list | length > 0)
+# Cron jobs are reconciled in playbook.yml post_tasks, once every channel exists.

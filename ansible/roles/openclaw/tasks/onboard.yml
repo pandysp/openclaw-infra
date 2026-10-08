@@ -36,31 +36,35 @@
             --skip-daemon \
             --skip-skills \
             --skip-health 2>&1) || ONBOARD_EXIT=$?
+        # Shown on failure in the public Phoenix log: replace the secrets by value.
+        show_output() {
+            local shown=${ONBOARD_OUTPUT//"$CLAUDE_SETUP_TOKEN"/[setup token]}
+            local gateway_token
+            gateway_token=$(jq -r '.gateway.auth.token // empty' ~/.openclaw/openclaw.json 2>/dev/null || true)
+            [ -z "$gateway_token" ] || shown=${shown//"$gateway_token"/[gateway token]}
+            echo "$shown" | sed -E 's/sk-ant-[A-Za-z0-9_-]+/[setup token]/g'
+        }
         if [ -n "${ONBOARD_EXIT:-}" ] && [ "$ONBOARD_EXIT" -ne 0 ]; then
             if echo "$ONBOARD_OUTPUT" | grep -q "gateway closed"; then
                 echo "Note: Ignoring expected 'gateway closed' error"
             else
                 echo "ERROR: OpenClaw onboarding failed with exit code $ONBOARD_EXIT"
-                echo "$ONBOARD_OUTPUT"
+                show_output
                 exit 1
             fi
         fi
         if [ ! -f ~/.openclaw/openclaw.json ]; then
             echo "ERROR: Onboarding failed - config file not created"
-            echo "$ONBOARD_OUTPUT"
+            show_output
             exit 1
         fi
       args:
         executable: /bin/bash
-      no_log: true
+      # Logged: the token is read from the temp file, never part of the command, and the
+      # setup and generated gateway tokens are replaced by value in output shown on failure.
 
   always:
     - name: Clean up setup token
       ansible.builtin.file:
         path: /tmp/ansible-setup-token
         state: absent
-
-- name: Restrict .openclaw directory permissions
-  ansible.builtin.file:
-    path: /home/ubuntu/.openclaw
-    mode: "0700"

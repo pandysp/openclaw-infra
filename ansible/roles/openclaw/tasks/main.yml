@@ -1,15 +1,80 @@
 ---
+# The gateway can start on a new OpenClaw before daemon.yml: `openclaw doctor --fix` in
+# install.yml starts the existing service (seen on the test server). Everything that start
+# must already have comes first.
+# gateway.tailscale.mode serve: since 2026.8 the gateway runs `tailscale serve --bg=false`
+# for as long as it lives, falling back to `sudo -n` without operator rights. A root child
+# outlives a stop that systemd's user manager cannot kill, keeps port 443, and the next start
+# exits 78 for good (reproduced on the test server). As operator, ubuntu runs it inside the
+# service, as OpenClaw's own error message recommends. Set before anything below can start it.
+- name: Let the gateway run Tailscale Serve without sudo
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if [ "$(tailscale debug prefs | jq -r '.OperatorUser // ""')" != ubuntu ]; then
+        tailscale set --operator=ubuntu
+        echo CHANGED
+    fi
+  args:
+    executable: /bin/bash
+  register: tailscale_operator
+  changed_when: "'CHANGED' in tailscale_operator.stdout"
+
+- name: Check if openclaw-gateway service file exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service
+  register: daemon_service
+
+- name: Give the existing gateway unit its container launcher
+  ansible.builtin.include_tasks: claude-cli-path.yml
+  when: daemon_service.stat.exists
+
+# Before doctor: it skips its service policy refresh while the state directory is
+# group-writable (production's ~/.openclaw was 775 between runs).
+- name: Restrict .openclaw directory permissions
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw
+    state: directory
+    mode: "0700"
+
 - name: Install OpenClaw
   ansible.builtin.include_tasks: install.yml
 
 - name: Patch heartbeat group delivery bug
   ansible.builtin.include_tasks: patch-heartbeat-group-fix.yml
 
-- name: Set up Claude CLI auth
-  ansible.builtin.include_tasks: claude-cli-auth.yml
-
 - name: Onboard OpenClaw
   ansible.builtin.include_tasks: onboard.yml
 
 - name: Install OpenClaw daemon
   ansible.builtin.include_tasks: daemon.yml
+
+# Derived from the unit as it now exists (first install or regenerated), then applied at
+# once: before Claude Code is installed below, so a gateway started without the launcher on
+# a fresh host never finds the real Claude Code. Tagged so that switching containers on or
+# off with `--tags config,claude-cli` reaches it.
+- name: Give the gateway its container launcher
+  ansible.builtin.include_tasks:
+    file: claude-cli-path.yml
+    apply:
+      tags: [openclaw, config, claude-cli]
+  tags: [openclaw, config, claude-cli]
+
+- name: Restart the gateway with its container launcher
+  ansible.builtin.meta: flush_handlers
+  tags: [openclaw, config, claude-cli]
+
+# After the daemon: since 2026.9.8 a first `openclaw daemon install` fails ("Managed
+# service artifacts changed during publication") when drop-ins such as claude-auth.conf
+# already exist, which is the case on a fresh host if this runs first.
+- name: Set up Claude CLI auth
+  ansible.builtin.include_tasks: claude-cli-auth.yml
+
+# 2026.9 no longer bundles video-frames; it moved to ClawHub unchanged (frame.sh identical,
+# SKILL.md differs only in its metadata header). main's video workflow uses it.
+- name: Install the video-frames skill from ClawHub
+  ansible.builtin.command:
+    argv: [openclaw, skills, install, "@steipete/video-frames", --version, "1.0.0", --global]
+    creates: /home/ubuntu/.openclaw/skills/video-frames/SKILL.md
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000

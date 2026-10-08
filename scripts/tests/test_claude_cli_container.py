@@ -17,6 +17,15 @@ launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 
 
+
+BTW_ARGV = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--setting-sources', 'user',
+            '--safe-mode', '--tools', '', '--disallowedTools', 'mcp__*', '--strict-mcp-config', '--no-session-persistence',
+            '--max-turns', '1', '--permission-mode', 'default', '--model', 'claude-sonnet-5-5',
+            '--append-system-prompt-file', '{artifacts}/system-prompt.md']
+COMPACT_ARGV = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--setting-sources', 'user',
+                '--allowedTools', 'mcp__openclaw__*', '--resume', 'fixture-resumed', '--permission-mode', 'bypassPermissions',
+                '--disallowedTools', 'Task', '--exclude-dynamic-system-prompt-sections', '--model', 'claude-sonnet-5-5', '/compact']
+
 class ContainerCancellationTest(unittest.TestCase):
     def test_guard_lifetime_requires_its_exact_whole_file_posix_write_lock(self):
         metadata = SimpleNamespace(st_dev=os.makedev(0, 35), st_ino=567)
@@ -146,7 +155,8 @@ class MacAccessTest(unittest.TestCase):
 class LauncherMacScopeTest(unittest.TestCase):
     """Exercise main() through Docker's command boundary, not just mac_access()."""
 
-    def launch(self, agent, mac_host):
+    def launch(self, agent, mac_host, skill_root=None, extra_args=(), session_args=('--session-id', 'fixture-session'), refusal=None,
+               openclaw_args=None, appended=None):
         with tempfile.TemporaryDirectory(prefix='launcher-mac-') as directory:
             home = Path(directory).resolve()
             workspace = home / 'workspace'
@@ -164,7 +174,7 @@ class LauncherMacScopeTest(unittest.TestCase):
             state = home / '.openclaw'
             state.mkdir()
             (state / 'openclaw.json').write_text(json.dumps({'agents': {
-                'list': [{'id': agent, 'workspace': str(workspace)}], 'defaults': {}}}))
+                'entries': {agent: {'workspace': str(workspace)}}, 'defaults': {}}}))
             entry = {'config': str(ssh / 'config'), 'workspace_key': None}
             if mac_host is not None:
                 entry['mac_host'] = mac_host
@@ -175,11 +185,23 @@ class LauncherMacScopeTest(unittest.TestCase):
                 'network': 'fixture', 'image': 'fixture', 'env_names': [],
                 'mcp_url': 'http://172.30.0.1:8787/openclaw/mcp',
                 'mcp_target': str(state / 'target.json'), 'invocations': str(state / 'invocations.jsonl'),
+                'extra_args': list(extra_args),
             }))
             with tempfile.TemporaryDirectory(prefix='openclaw-main-test-', dir='/tmp') as artifacts:
                 mcp = Path(artifacts) / 'mcp.json'
                 mcp.write_text(json.dumps({'mcpServers': {'openclaw': {
                     'type': 'http', 'url': 'http://127.0.0.1:1234/mcp'}}}))
+                args = ['--mcp-config', str(mcp), '--strict-mcp-config', *session_args]
+                if openclaw_args is not None:
+                    (Path(artifacts) / 'system-prompt.md').write_text('fixture')
+                    args = [arg.replace('{artifacts}', artifacts) for arg in openclaw_args]
+                if skill_root is not None:
+                    skill = home / skill_root / 'skills/discord'
+                    skill.mkdir(parents=True)
+                    plugin = Path(artifacts) / 'plugin'
+                    (plugin / 'skills').mkdir(parents=True)
+                    (plugin / 'skills/discord').symlink_to(skill)
+                    args += ['--plugin-dir', str(plugin)]
                 read_text, resolve = Path.read_text, Path.resolve
                 temporary_directory = tempfile.TemporaryDirectory
 
@@ -190,7 +212,7 @@ class LauncherMacScopeTest(unittest.TestCase):
 
                 def canonical(path, *args, **kwargs):
                     # Linux /tmp is canonical; macOS /tmp is a symlink.
-                    if str(path).startswith('/tmp/openclaw-main-test-'):
+                    if str(path).startswith('/tmp/openclaw-main-test-') and not path.is_symlink():
                         return path
                     return resolve(path, *args, **kwargs)
 
@@ -202,8 +224,7 @@ class LauncherMacScopeTest(unittest.TestCase):
 
                 with patch.object(launcher, 'HOME', home), patch.object(launcher, 'SECURE_STORAGE', auth), \
                      patch.object(launcher, 'NATIVE', native), \
-                     patch.dict(os.environ, {'OPENCLAW_MCP_AGENT_ID': agent,
-                         'OPENCLAW_MCP_SESSION_KEY': f'agent:{agent}:fixture'}, clear=True), \
+                     patch.dict(os.environ, {}, clear=True), \
                      patch.object(Path, 'cwd', return_value=workspace), \
                      patch.object(Path, 'read_text', read), patch.object(Path, 'resolve', canonical), \
                      patch.object(launcher.tempfile, 'TemporaryDirectory', side_effect=lambda **kwargs:
@@ -216,14 +237,27 @@ class LauncherMacScopeTest(unittest.TestCase):
                      patch.object(launcher, 'run_container', side_effect=lambda *args, prepare: prepare() or 0) as run:
                     if mac_host is None:
                         with self.assertRaisesRegex(KeyError, 'mac_host'):
-                            launcher.main(['--mcp-config', str(mcp)], runtime)
+                            launcher.main(args, runtime)
                         create.assert_not_called()
                         run.assert_not_called()
                         return
-                    launcher.main(['--mcp-config', str(mcp)], runtime)
+                    if refusal:
+                        with self.assertRaisesRegex(SystemExit, refusal):
+                            launcher.main(args, runtime)
+                        create.assert_not_called()
+                        return
+                    launcher.main(args, runtime)
                     command = create.call_args.args[0]
+                    appended = list(extra_args) if appended is None else appended
+                    self.assertEqual(command[-len(args) - len(appended) - 1:], ['fixture', *args, *appended])
+                    session = next((args[i + 1] for i, arg in enumerate(args) if arg in ('--session-id', '--resume')), 'none')
+                    self.assertIn('openclaw.claude-session=' + session, command)
+                    self.assertIn('openclaw.claude-agent=' + agent, command)
                     bindings = [command[i + 1] for i, value in enumerate(command) if value == '--mount']
                     mac_bindings = [value for value in bindings if 'openclaw_mac_air' in value]
+                    if skill_root is not None:
+                        skill = home / skill_root / 'skills/discord'
+                        self.assertIn(f'type=bind,source={skill},target={skill},readonly', bindings)
                     if mac_host:
                         self.assertEqual(mac_bindings, [
                             f'type=bind,source={ssh / name},target={ssh / name},readonly'
@@ -240,6 +274,76 @@ class LauncherMacScopeTest(unittest.TestCase):
 
     def test_other_agent_gets_no_mac_mounts_lookup_or_host_entry(self):
         self.launch('other', '')
+
+    def test_plugin_package_skill_is_mounted_read_only(self):
+        # From 2026.7.1, channel plugins ship skills that OpenClaw links from their installed package.
+        self.launch('main', 'mac-air', '.openclaw/npm/projects/openclaw-discord-fixture/node_modules/@openclaw/discord')
+
+    def test_extra_args_follow_openclaws_args(self):
+        # Staging turns Claude's own tools off; OpenClaw's tools.allow does not reach them.
+        self.launch('other', '', extra_args=('--tools', ''))
+
+    def test_extra_flag_openclaw_passes_with_another_value_is_refused(self):
+        self.launch('other', '', extra_args=('--max-turns', '5'), openclaw_args=BTW_ARGV, refusal='with another value')
+        with self.subTest('only part of the list is already passed'):
+            self.launch('other', '', extra_args=('--tools', '', '--max-turns', '5'), openclaw_args=BTW_ARGV,
+                        refusal='with another value')
+
+    def test_extra_flag_with_several_values_keeps_them_all(self):
+        self.launch('other', '', extra_args=('--disallowedTools', 'Bash', 'Write'))
+
+    def test_resumed_turn_is_labelled_with_its_session(self):
+        self.launch('other', '', session_args=('--resume', 'fixture-resumed'))
+
+    def test_btw_side_question_runs_unlabelled_without_mcp(self):
+        # Captured from a live /btw on 2026.9.8: no session, no MCP config, Claude's tools off.
+        self.launch('other', '', openclaw_args=BTW_ARGV)
+        with self.subTest('staging lockdown already passed by OpenClaw'):
+            self.launch('other', '', extra_args=('--tools', ''), openclaw_args=BTW_ARGV, appended=[])
+
+    def test_compaction_resumes_its_session_without_mcp(self):
+        # Captured from a live `openclaw sessions compact` on 2026.9.8.
+        self.launch('other', '', openclaw_args=COMPACT_ARGV)
+
+    def test_login_status_query_runs_the_real_claude_without_a_session(self):
+        # OpenClaw checks the login before turns, outside any workspace.
+        with patch.object(launcher.os, 'execv', side_effect=SystemExit('exec')) as execv:
+            with self.assertRaisesRegex(SystemExit, 'exec'):
+                launcher.main(['auth', 'status', '--json'], '/nonexistent/runtime.json')
+        execv.assert_called_once_with(str(launcher.NATIVE), [str(launcher.NATIVE), 'auth', 'status', '--json'])
+
+    def test_bundled_extension_skill_is_mounted_read_only(self):
+        # From 2026.9.8, bundled extensions (e.g. custodian-skills) link skills from the OpenClaw package.
+        self.launch('main', 'mac-air', '.npm-global/lib/node_modules/openclaw/dist/extensions/custodian-skills')
+
+    def test_skill_outside_known_roots_is_refused(self):
+        self.launch('main', 'mac-air', 'elsewhere', refusal='outside expected skill roots')
+
+    def refused(self, entries, cwd, args, message):
+        with tempfile.TemporaryDirectory(prefix='launcher-scope-') as directory:
+            home = Path(directory).resolve()
+            (home / '.openclaw').mkdir()
+            (home / '.openclaw/openclaw.json').write_text(json.dumps({'agents': {
+                'entries': {agent: {'workspace': str(home / folder)} for agent, folder in entries.items()},
+                'defaults': {}}}))
+            runtime = home / 'runtime.json'
+            runtime.write_text('{}')
+            with patch.object(launcher, 'HOME', home), patch.dict(os.environ, {}, clear=True), \
+                 patch.object(Path, 'cwd', return_value=home / cwd), patch.object(launcher, 'output') as docker:
+                with self.assertRaisesRegex(SystemExit, message):
+                    launcher.main(args, runtime)
+            docker.assert_not_called()
+
+    def test_workspace_of_no_agent_is_refused_before_docker(self):
+        # From 2026.9.8 OpenClaw names no agent; the workspace OpenClaw starts Claude in decides.
+        self.refused({'main': 'main'}, 'elsewhere', ['--session-id', 'fixture'], 'exactly one configured agent workspace')
+
+    def test_workspace_shared_by_two_agents_is_refused_before_docker(self):
+        self.refused({'main': 'shared', 'other': 'shared'}, 'shared', ['--session-id', 'fixture'],
+                     'exactly one configured agent workspace')
+
+    def test_launch_without_claude_session_is_refused_before_docker(self):
+        self.refused({'main': 'main'}, 'main', ['--mcp-config', '/tmp/openclaw-x/mcp.json'], 'names no Claude session')
 
     def test_old_manifest_fails_before_docker_creation(self):
         self.launch('other', None)

@@ -149,7 +149,8 @@ def build_plan(manifest: dict[str, Any], current_jobs: list[dict[str, Any]]) -> 
     for current in current_jobs:
         if not isinstance(current, dict):
             raise ReconcileError("cron list returned a non-object job")
-        for field in ("id", "name", "agentId"):
+        # agentId may be null: OpenClaw 2026.9.8's own jobs (e.g. memory dreaming) belong to no agent.
+        for field in ("id", "name"):
             if not isinstance(current.get(field), str) or not current[field]:
                 raise ReconcileError(f"live cron job has an invalid {field}")
         _require_bool(current.get("enabled"), f"live cron job {current['name']} enabled")

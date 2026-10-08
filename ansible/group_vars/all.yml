@@ -50,11 +50,12 @@ openclaw_custom_models:
           input: ["text", "image"]
           contextWindow: 200000
           maxTokens: 128000
-nodejs_major_version: 25
-openclaw_version: "2026.6.6"
+# OpenClaw 2026.9.3+ supports Node >=24.16 <25 or >=26.1 (Node 26 recommended).
+nodejs_major_version: 26
+openclaw_version: "2026.9.8"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
-claude_code_version: "2.1.286"  # Opus 5.5 needs >= 2.1.280
+claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
 # Claude Code compacts claude-cli sessions when the context reaches this window
 # minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
@@ -64,6 +65,9 @@ claude_code_auto_compact_window: 305000
 # false runs turns natively (apply with --tags config). Container files stay installed when off.
 openclaw_claude_cli_enabled: false
 openclaw_claude_cli_command: /home/ubuntu/.openclaw/claude-cli-container
+# Claude flags the launcher adds to every container launch (staging: ["--tools", ""]).
+# It refuses a flag OpenClaw already passes, e.g. --strict-mcp-config since 2026.9.8.
+openclaw_claude_cli_extra_args: []
 openclaw_claude_cli_network: openclaw-claude-cli
 openclaw_claude_cli_bridge_interface: oc-claude0
 openclaw_claude_cli_ipv4_subnet: 172.30.55.0/24
@@ -82,14 +86,15 @@ openclaw_claude_cli_skill_env:
   - NOTION_API_TOKEN
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in scripts/check-openclaw-contract.sh. Provisioning refuses scheduler changes on a mismatch.
-openclaw_docs_reviewed_version: "2026.6.6"
+openclaw_docs_reviewed_version: "2026.9.8"
 # Agent existence never opts into autonomous work. Deployments must explicitly
 # enable scheduled automation per agent in group_vars/openclaw.yml.
 openclaw_scheduled_automation_default: false
 # Latent cadence used only after an agent opts into scheduled automation.
 openclaw_heartbeat_interval: "30m"
 openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (default: 600)
-openclaw_cooldown_failure_window_hours: 1  # reset cooldown error count after 1h (default: 24)
+# Derived, not set: WhatsApp is configured (channel config, owner binding) only when an agent delivers there.
+openclaw_whatsapp_used: "{{ openclaw_agents | default([]) | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 }}"
 openclaw_elevated_default: "off"
 
 # Voice transcription (Groq Whisper)
@@ -110,8 +115,7 @@ openclaw_subagents_max_concurrent: 16
 
 # OpenClaw's own exec tool runs in the sandbox.
 openclaw_exec_host: "sandbox"
-openclaw_exec_security: "full"       # Native Claude tools use bypassPermissions; C supplies OS containment.
-openclaw_exec_ask: "off"             # Native execution is not blocked by elevated=false; see SECURITY §4.
+openclaw_exec_mode: "full"           # No approval prompts for native or OpenClaw exec; containers supply OS containment, see SECURITY §4.
 
 # Sandbox settings
 openclaw_sandbox_mode: "all"
@@ -123,9 +127,6 @@ openclaw_browser_allow_host_control: false  # Allow sandboxed agents to use brow
 
 # Telegram: silently suppress error reply messages (true = user sees nothing on failure)
 openclaw_telegram_silent_error_replies: true
-
-# Health monitor: restart channels that go silent (no events) for this many minutes
-openclaw_health_monitor_stale_minutes: 15  # Default 30; lowered for faster disconnect detection
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
@@ -210,7 +211,7 @@ openclaw_mcp_server_types:
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.
 # Override in openclaw.yml to enable and configure per-deployment.
 obsidian_headless_enabled: false
-obsidian_headless_version: "0.0.12"
+obsidian_headless_version: "0.0.14"
 obsidian_headless_memory_max: "256M"
 obsidian_headless_agents: []
 obsidian_headless_initial_sync_timeout: 300

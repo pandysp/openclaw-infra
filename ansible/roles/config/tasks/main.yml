@@ -106,7 +106,7 @@
         # Voice transcription — Groq provider cleanup (setting is in the settings task,
         # after "openclaw config set models --json" which replaces the entire models object)
         {% if not (groq_api_key is defined and groq_api_key | length > 0) %}
-        for key in models.providers.groq tools.media.audio.enabled tools.media.audio.models; do
+        for key in models.providers.groq tools.media.audio.enabled tools.media.models; do
             check_unset "$key"
         done
         {% endif %}
@@ -235,16 +235,14 @@
             fi
         }
 
-        # Tailscale Serve
+        # Tailscale Serve (its routes end with the gateway since 2026.8.x; resetOnExit was retired)
         check_set gateway.tailscale.mode serve
-        check_set gateway.tailscale.resetOnExit true
 
         # Trusted proxies: localhost + Tailscale CGNAT range
         check_set_json gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
 
         # Control UI
         check_set gateway.controlUi.enabled true
-        check_set gateway.controlUi.allowInsecureAuth false
 
         # Auth: Tailscale identity
         check_set gateway.auth.allowTailscale true
@@ -293,8 +291,9 @@
 
         # Explicit allowlists must not be widened by the plugin profile extension.
         {% if openclaw_tools_allow is defined %}
+        # 2026.9.8 refuses allow next to alsoAllow, so clear alsoAllow first.
+        check_unset tools.alsoAllow
         check_set_json tools.allow '{{ openclaw_tools_allow | to_json }}'
-        check_set_json tools.alsoAllow '[]'
         {% elif openclaw_mcp_adapter is defined %}
         check_set_json tools.alsoAllow '["group:plugins"]'
         {% endif %}
@@ -307,17 +306,21 @@
         # — without it model turns fail with MissingAgentHarnessError.
         {# WhatsApp/Discord ship as external channel plugins again since 2026.5.12 #}
         {# (installed by each channel role in plugin.yml); allowlist when configured. #}
-        {% set plugin_allow = ["device-pair","memory-core","phone-control","talk-voice","telegram","anthropic"] %}
+        {% set plugin_allow = ["device-pair","memory-core","talk-voice","telegram","anthropic"] %}
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("xai") %}
         {% endif %}
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("google") %}
         {% endif %}
+        {# Groq is an external provider plugin since 2026.7.1; voice transcription needs it loaded. #}
+        {% if groq_api_key is defined and groq_api_key | length > 0 %}
+        {%   set _ = plugin_allow.append("groq") %}
+        {% endif %}
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
         {% endif %}
-        {% if openclaw_agents | default([]) | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 %}
+        {% if openclaw_whatsapp_used | bool %}
         {%   set _ = plugin_allow.append("whatsapp") %}
         {% endif %}
         {% if discord_bot_token is defined and discord_bot_token | length > 0 %}
@@ -357,7 +360,6 @@
 
         # Timezone
         check_set agents.defaults.userTimezone "{{ openclaw_timezone }}"
-        check_set agents.defaults.envelopeTimezone user
 
         # Agent timeout: max seconds per conversation turn (default 600 = 10min)
         check_set agents.defaults.timeoutSeconds "{{ openclaw_agent_timeout_seconds }}"
@@ -365,23 +367,22 @@
         # Message queue: collect messages while agent is busy, coalesce into one followup turn
         check_set messages.queue.mode collect
 
-        # Auth cooldown: reset error count after N hours
-        # Prevents timeouts from compounding into multi-hour lockouts
-        check_set auth.cooldowns.failureWindowHours "{{ openclaw_cooldown_failure_window_hours }}"
+        # 2026.9.8 schedules nightly memory dreaming and weekly skill reviews for every agent
+        # on its own. Off: unattended turns only run where an agent opts into schedules.
+        check_set_json plugins.entries.memory-core.config.dreaming.enabled 'false'
+        check_set skills.workshop.autonomous.mode off
 
         # Concurrency: allow more parallel sessions across all agents
         check_set agents.defaults.maxConcurrent "{{ openclaw_max_concurrent }}"
         check_set agents.defaults.subagents.maxConcurrent "{{ openclaw_subagents_max_concurrent }}"
 
-        # Context pruning: trim stale tool outputs after 15m, keep last 3 assistant responses
+        # Context pruning: trim stale tool outputs after 15m
         check_set agents.defaults.contextPruning.mode cache-ttl
         check_set agents.defaults.contextPruning.ttl 15m
-        check_set agents.defaults.contextPruning.keepLastAssistants "3"
 
         # Exec tool policy for OpenClaw itself
         check_set tools.exec.host "{{ openclaw_exec_host }}"
-        check_set tools.exec.security "{{ openclaw_exec_security }}"
-        check_set tools.exec.ask "{{ openclaw_exec_ask }}"
+        check_set tools.exec.mode "{{ openclaw_exec_mode }}"
 
         # Skip bootstrap: prevent gateway from re-scaffolding workspace context files
         # (SOUL.md, IDENTITY.md, etc.) with factory templates on every message/cron tick.
@@ -403,10 +404,10 @@
 
         # Image generation model (Google Gemini — provider apiKey merged into models JSON above)
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
-        check_set agents.defaults.imageGenerationModel.primary "{{ openclaw_image_generation_model }}"
-        check_set_json agents.defaults.imageGenerationModel.fallbacks '{{ openclaw_image_generation_fallbacks | to_json }}'
+        check_set agents.defaults.mediaModels.image.primary "{{ openclaw_image_generation_model }}"
+        check_set_json agents.defaults.mediaModels.image.fallbacks '{{ openclaw_image_generation_fallbacks | to_json }}'
         {% else %}
-        for key in agents.defaults.imageGenerationModel.primary agents.defaults.imageGenerationModel.fallbacks; do
+        for key in agents.defaults.mediaModels.image.primary agents.defaults.mediaModels.image.fallbacks; do
             check_unset "$key"
         done
         {% endif %}
@@ -414,16 +415,19 @@
         # Voice transcription — enable audio (provider merged into models JSON above; cleanup in secrets task)
         {% if groq_api_key is defined and groq_api_key | length > 0 %}
         check_set tools.media.audio.enabled true
-        check_set_json tools.media.audio.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}"}]'
+        check_set_json tools.media.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}","capabilities":["audio"]}]'
         {% endif %}
 
         # Telegram: suppress error reply messages (silent = user sees nothing on failure)
         check_set_json channels.telegram.silentErrorReplies '{{ openclaw_telegram_silent_error_replies | lower }}'
 
-        # Health monitor: faster detection of silent channel disconnections
-        check_set gateway.channelStaleEventThresholdMinutes "{{ openclaw_health_monitor_stale_minutes }}"
+        {% if openclaw_whatsapp_used | bool %}
         {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
         check_set_json channels.whatsapp.healthMonitor.enabled 'false'
+        {% else %}
+        {# After an upgrade, startup migrations (2026.7.1+) install any configured but missing channel plugin at its newest version; if that build needs a newer core, the gateway refuses to start. #}
+        check_unset channels.whatsapp
+        {% endif %}
 
         # Key names only (never values), so drift is visible in public CI logs.
         if [ -n "$CHANGED" ]; then echo "UPDATED:$CHANGED"; else echo "OK"; fi
@@ -468,15 +472,6 @@
         - /tmp/ansible-groq-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
-
-# The only writer of agents.defaults.cliBackends. With containers enabled, the
-# launcher replaces just the claude-cli command; everything else is as configured.
-- name: Apply the CLI backends, with containers when enabled
-  ansible.builtin.include_tasks: cli-backends.yml
-  vars:
-    _desired_cli_backends: >-
-      {{ openclaw_cli_backends | default({}) | combine({'claude-cli': {'command': openclaw_claude_cli_command}}
-         if openclaw_claude_cli_enabled | bool else {}, recursive=true) }}
 
 - name: Enforce agent auth-profiles — setup token present, api-key profile absent
   ansible.builtin.shell: |
@@ -539,24 +534,33 @@
   changed_when: "'CHANGED:' in auth_profiles_result.stdout"
   notify: restart openclaw-gateway
 
-# agents.defaults.models is the authoritative model allowlist + runtime mapping
-# (agentRuntime.id=claude-cli keeps turns on the claude CLI / Max subscription).
-# Protected map path since 2026.4.22 — --replace declares our tree authoritative,
-# which also clears stale legacy entries (e.g. "claude-cli/<model>" ids).
+# agents.defaults.models holds aliases and the runtime mapping (agentRuntime.id=
+# claude-cli keeps turns on the claude CLI / Max subscription); since 2026.8.1 the
+# allowlist itself is agents.defaults.modelPolicy.allow, which we derive from the
+# same keys. Protected map path since 2026.4.22 — --replace declares our tree
+# authoritative, which also clears stale legacy entries.
 - name: Pin agent model allowlist with claude-cli runtime mapping
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
     DESIRED='{{ openclaw_agent_models | to_json }}'
-    CURRENT=$(openclaw config get agents.defaults.models 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT="{}"
+    # The file, not `config get`: since 2026.9.8 that returns the effective map, with every
+    # model OpenClaw adds by default, so it never equals what we write.
+    CURRENT=$(jq -c '.agents.defaults.models // {}' /home/ubuntu/.openclaw/openclaw.json)
     C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED" | jq -cS '.')
+    UPDATED=""
     if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
         openclaw config set agents.defaults.models --json "$DESIRED" --replace
-        echo "UPDATED"
-    else
-        echo "OK"
+        UPDATED="$UPDATED agents.defaults.models"
     fi
+    DESIRED_ALLOW='{{ openclaw_agent_models | list | to_json }}'
+    CURRENT_ALLOW=$(openclaw config get agents.defaults.modelPolicy.allow 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_ALLOW="[]"
+    if [ "$(echo "$CURRENT_ALLOW" | jq -cS 'sort' 2>/dev/null || echo PARSE_FAIL)" != "$(echo "$DESIRED_ALLOW" | jq -cS 'sort')" ]; then
+        openclaw config set agents.defaults.modelPolicy.allow --json "$DESIRED_ALLOW"
+        UPDATED="$UPDATED agents.defaults.modelPolicy.allow"
+    fi
+    if [ -n "$UPDATED" ]; then echo "UPDATED:$UPDATED"; else echo "OK"; fi
   args:
     executable: /bin/bash
   register: agent_models_result
@@ -581,6 +585,10 @@
   register: anthropic_plugin_enable
   changed_when: "'ENABLED' in anthropic_plugin_enable.stdout"
   notify: restart openclaw-gateway
+
+- name: Install the Groq provider plugin
+  ansible.builtin.include_tasks: groq-plugin.yml
+  when: groq_api_key is defined and groq_api_key | length > 0
 
 - name: Migrate session model provider to match primary model
   ansible.builtin.shell: |

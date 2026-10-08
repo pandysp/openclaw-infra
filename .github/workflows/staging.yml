@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     # Step deadlines leave teardown time before the job deadline (fixture checked).
     # Cancellation or runner loss can still interrupt cleanup; this is not a teardown guarantee.
-    timeout-minutes: 165
+    timeout-minutes: 167
 
     steps:
       # ── Setup ────────────────────────────────────────────────────
@@ -65,9 +65,13 @@ jobs:
 
       - name: Install hcloud CLI
         timeout-minutes: 3
+        # Authenticated: anonymous API calls from shared runners hit the rate limit (HTTP 403).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION=$(curl --fail --silent --show-error https://api.github.com/repos/hetznercloud/cli/releases/latest |
+          VERSION=$(printf 'Authorization: Bearer %s\n' "$GH_TOKEN" |
+            curl --fail --silent --show-error -H @- https://api.github.com/repos/hetznercloud/cli/releases/latest |
             jq -ers 'if length == 1 and (.[0].tag_name | type == "string" and length > 0)
               then .[0].tag_name else error("Invalid hcloud release metadata") end')
           curl --fail --silent --show-error --location "https://github.com/hetznercloud/cli/releases/download/${VERSION}/hcloud-linux-amd64.tar.gz" -o hcloud.tar.gz
@@ -102,14 +106,9 @@ jobs:
           # Like production, every agent turn runs in its own container, here without a Mac.
           openclaw_claude_cli_enabled: true
 
-          # An override replaces OpenClaw's defaults, so this is production's exact
-          # invocation (openclaw 2026.6.6, extensions/anthropic/cli-backend.ts) plus
-          # only `--tools "" --strict-mcp-config`. Re-derive it on every version bump.
-          openclaw_cli_backends:
-            claude-cli:
-              command: "claude"
-              args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*"]
-              resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--allowedTools", "mcp__openclaw__*", "--resume", "{sessionId}"]
+          # OpenClaw's allowlist does not reach Claude's own tools, so the launcher
+          # adds `--tools ""` to every launch (OpenClaw already passes --strict-mcp-config).
+          openclaw_claude_cli_extra_args: ["--tools", ""]
 
           openclaw_heartbeat_interval: "30m"
           openclaw_heartbeat_active_hours:
@@ -466,7 +465,8 @@ jobs:
                             (.enabled | type == "boolean")) and
                  (map(.id) | unique | length) == length and
                  ([.[] | select(.agentId == "main" and .enabled)] | length) == 0 and
-                 ([.[] | select(.agentId == "test" and .enabled)] | length) == 1 then
+                 # Since 2026.9.8 a heartbeat is an automation job of its own.
+                 ([.[] | select(.agentId == "test" and .enabled) | .name] | sort) == ["heartbeat-test", "test: Staging Test Cron"] then
                 map({agentId,name,id,enabled}) | sort_by(.id)
               else error("Cron identity or staging scheduling policy is invalid") end'
           }
@@ -569,6 +569,18 @@ jobs:
             fi
           done
           exit "$STATUS"
+
+      # The staging host is reachable only from this runner. Show only the gateway's lifecycle
+      # lines (admission, start, reload, shutdown) before teardown; conversation records stay out.
+      - name: Show gateway log after a failure
+        timeout-minutes: 2
+        if: failure() && env.STAGING_HOST != ''
+        run: |
+          set -uo pipefail
+          # Anchored to the journal prefix, so text inside a conversation line cannot match.
+          tailscale ssh "ubuntu@$STAGING_HOST" 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway --no-pager -n 600' \
+            | grep -E '^[A-Z][a-z]{2} [ 0-9][0-9] [0-9:]{8} [^ ]+ (node\[[0-9]+\]: [0-9T:.+-]+ \[(admission|gateway|reload|shutdown)\] |systemd\[[0-9]+\]: )' \
+            | tail -150
 
       - name: Destroy staging infrastructure
         timeout-minutes: 12

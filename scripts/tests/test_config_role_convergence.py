@@ -45,7 +45,8 @@ def walk(key, create=False):
     return node, parts[-1]
 if args[:2] == ['config', 'get']:
     node, leaf = walk(args[2])
-    if node is None or leaf not in node: sys.exit(1)
+    if node is None or leaf not in node:
+        sys.stderr.write('Config path is valid but unset: ' + args[2] + '\\n'); sys.exit(1)
     value = node[leaf]
     print(value if isinstance(value, str) else json.dumps(value))
     sys.exit(0)
@@ -97,6 +98,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         cls.configure = find_task(tasks, CONFIGURE)
         cls.report = find_task(tasks, REPORT)
         cls.migrate = find_task(tasks, MIGRATE)
+        cls.pin_models = find_task(tasks, 'Pin agent model allowlist with claude-cli runtime mapping')
         cls.migrate_report = find_task(tasks, MIGRATE_REPORT)
         assert cls.temp_files and cls.configure and cls.report and cls.migrate and cls.migrate_report, 'Config role tasks moved'
 
@@ -166,6 +168,24 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
                 self.assertNotIn('UPDATED:', second.stdout)
 
+    def test_model_map_is_compared_with_the_written_config(self):
+        # Since 2026.9.8 `config get agents.defaults.models` returns the effective map,
+        # with every model OpenClaw adds by default; only the file holds what we wrote.
+        pin = self.pin_models
+        assert pin, 'Config role tasks moved'
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            desired = {model: {'agentRuntime': {'id': 'claude-cli'}, **({'alias': alias} if alias else {})}
+                       for model, alias in ((m, (v or {}).get('alias')) for m, v in self.defaults['openclaw_agent_models'].items())}
+            (root / 'state').mkdir()
+            (root / 'state/openclaw.json').write_text(json.dumps({'agents': {'defaults': {'models': desired}}}))
+            effective = {**desired, 'anthropic/claude-added-by-default': {'agentRuntime': {'id': 'claude-cli'}}}
+            (root / 'store.json').write_text(json.dumps({'agents': {'defaults': {
+                'models': effective, 'modelPolicy': {'allow': list(self.defaults['openclaw_agent_models'])}}}}))
+            result = self.run_task([pin], root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
+
     def test_no_adapter_is_allowed_when_none_is_declared(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
             root = Path(tmp)
@@ -181,6 +201,31 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertNotIn('openclaw-mcp-adapter', writes['plugins.allow'])
             self.assertNotIn('group:plugins', writes['tools.sandbox.tools.allow'])
             self.assertNotIn('tools.alsoAllow', writes)
+
+    def test_whatsapp_settings_exist_only_with_a_whatsapp_agent(self):
+        # From 2026.7.1, startup migrations after an upgrade install any configured but
+        # missing channel plugin at its newest version, which can refuse an older core.
+        whatsapp_agent = [{'id': 'main', 'is_default': True, 'deliver_channel': 'whatsapp',
+                           'deliver_to': '+15555550100', 'deliver_type': 'dm'}]
+        for agents, expected in ((None, None), (whatsapp_agent, {'healthMonitor': {'enabled': False}})):
+            with self.subTest(whatsapp=bool(agents)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / 'store.json').write_text(json.dumps({'channels': {'whatsapp': {'healthMonitor': {'enabled': False}}}}))
+                result = self.run_task([self.temp_files, self.configure], root,
+                                       {'openclaw_agents': agents} if agents else None)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                store = json.loads((root / 'store.json').read_text())
+                self.assertEqual(store.get('channels', {}).get('whatsapp'), expected)
+                self.assertEqual('whatsapp' in store['plugins']['allow'], bool(agents))
+
+    def test_groq_plugin_is_allowed_only_with_a_groq_key(self):
+        for key in ('', 'fixture-groq-key'):
+            with self.subTest(groq=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                result = self.run_task([self.temp_files, self.configure], root, {'groq_api_key': key})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('fixture-groq-key', result.stdout + result.stderr)
+                self.assertEqual('groq' in self.json_writes(root)['plugins.allow'], bool(key))
 
     def test_sessions_on_the_primary_models_runtime_are_left_alone(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:

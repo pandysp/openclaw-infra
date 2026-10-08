@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise pairing, actual gateway inference, and authenticated private MCP reads.
+# Exercise actual gateway inference and authenticated private MCP reads.
 # The workflow supplies an exact run-owned host and a private repository for read-only checks.
 set -euo pipefail
 
@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 let step = 'host identity';
@@ -50,15 +50,10 @@ try {
   assert.deepEqual([...config.tools.allow].sort(), ['github_get_file_contents', 'github-test_get_file_contents'].sort());
   assert((config.tools.alsoAllow || []).length === 0);
   assert(config.agents.defaults.models[intendedModel]?.agentRuntime?.id === 'claude-cli');
-  const configuredBackend = config.agents.defaults.cliBackends['claude-cli'];
-  step = 'agent turns run in containers';
-  const launcher = path.join(os.homedir(), '.openclaw/claude-cli-container');
-  assert(configuredBackend.command === launcher);
-  for (const args of [configuredBackend.args, configuredBackend.resumeArgs]) {
-    assert(Array.isArray(args));
-    const index = args.lastIndexOf('--tools');
-    assert(index >= 0 && args[index + 1] === '' && args.includes('--strict-mcp-config'));
-  }
+  // OpenClaw's allowlist does not reach Claude's own tools; the launcher turns them off.
+  step = 'container launches without native tools';
+  const runtime = JSON.parse(fs.readFileSync(path.join(state, 'claude-cli-runtime.json'), 'utf8'));
+  assert.deepEqual(runtime.extra_args, ['--tools', '']);
   const port = config.gateway.port || 18789;
   const run = args => JSON.parse(execFileSync('openclaw', args, {
     encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'],
@@ -67,24 +62,6 @@ try {
       OPENCLAW_CONFIG_PATH: path.join(state, 'openclaw.json'), OPENCLAW_STATE_DIR: state,
     },
   }));
-
-  step = 'pairing this CLI device';
-  // On first use, devices list creates the CLI identity/request and supports a
-  // local pairing fallback. Never approve a heading or somebody else's device.
-  let devices = run(['devices', 'list', '--json']);
-  const identity = JSON.parse(fs.readFileSync(path.join(state, 'identity/device.json'), 'utf8'));
-  assert(typeof identity.deviceId === 'string' && identity.deviceId.length > 0);
-  assert(Array.isArray(devices.pending) && Array.isArray(devices.paired));
-  const pending = devices.pending.filter(device => device.deviceId === identity.deviceId);
-  assert(pending.length <= 1);
-  if (pending.length === 1) {
-    assert(typeof pending[0].requestId === 'string' && pending[0].requestId.length > 0);
-    run(['devices', 'approve', pending[0].requestId, '--json']);
-    devices = run(['devices', 'list', '--json']);
-  }
-  assert(devices.paired.some(device => device.deviceId === identity.deviceId));
-  assert(!devices.pending.some(device => device.deviceId === identity.deviceId));
-  pass('This CLI device is paired');
 
   const [owner, repoName] = repository.split('/');
   const mainRead = {tool: 'github_get_file_contents', args: {owner, repo: repoName, path: ''}, sessionKey: 'agent:main:main'};
@@ -129,29 +106,16 @@ try {
     assert(contents.every(entry => ['file', 'dir', 'symlink', 'submodule'].includes(entry.type)));
     pass(`Private MCP directory read for ${agent}`);
   }
-  // A prompt is not an access control. Disable all tools on this disposable
+  // A prompt is not an access control. Disable all OpenClaw tools on this disposable
   // gateway, verify the policy against the previously working private reads,
   // then run inference. Restore the original policy even if inference fails.
-  step = 'checking native inference tool controls';
-  const originalBackends = config.agents.defaults.cliBackends;
-  const originalBackend = originalBackends?.['claude-cli'];
-  const nativeCli = execFileSync('which', [originalBackend?.command || 'claude'], {encoding: 'utf8'}).trim();
-  const nativeHelp = execFileSync(nativeCli, ['--help'], {encoding: 'utf8', timeout: 20000});
-  assert(nativeHelp.includes('--tools') && nativeHelp.includes('--strict-mcp-config'));
-  const wrapper = path.join(state, `.smoke-claude-${randomUUID()}.sh`);
-  const nativeProof = `${wrapper}.invoked`;
-  const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  fs.writeFileSync(wrapper, `#!/bin/sh\nprintf done > ${shellQuote(nativeProof)}\nexec ${shellQuote(nativeCli)} "$@" --tools "" --strict-mcp-config\n`, {mode: 0o700});
   const writeInferencePolicy = disabled => {
     const current = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     current.tools = disabled ? {...config.tools, deny: ['*']} : config.tools;
-    current.agents.defaults.cliBackends = disabled
-      ? {...originalBackends, 'claude-cli': {...originalBackend, command: wrapper}}
-      : originalBackends;
     const temporary = `${configPath}.smoke.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(current), {mode: 0o600});
     fs.renameSync(temporary, configPath);
-    // The gateway pins the config it started with; tools.* and agents.* file
+    // The gateway pins the config it started with; tools.* file
     // edits never reach it (reload class "none"). Restart so it runs this policy.
     step = `restarting the gateway to ${disabled ? 'disable' : 'restore'} tools`;
     execFileSync('systemctl', ['--user', 'restart', 'openclaw-gateway'], {
@@ -185,6 +149,8 @@ try {
       assert(applied);
     }
   };
+  const launchLog = path.join(state, 'claude-cli-invocations.jsonl');
+  const launchesBefore = fs.existsSync(launchLog) ? fs.readFileSync(launchLog, 'utf8').split('\n').filter(Boolean).length : 0;
   try {
     writeInferencePolicy(true);
     await waitForToolPolicy(true);
@@ -201,13 +167,13 @@ try {
     // Direct gateway RPC has no embedded/local fallback.
     step = 'completed gateway inference';
     assert(response.status === 'ok');
-    step = 'native tool-free backend invocation';
-    assert(fs.readFileSync(nativeProof, 'utf8') === 'done');
-    // The launcher logs each container it starts for a session; a reply means it ran.
+    // The launcher logs each container with Claude's session ID, which names the transcript.
     step = 'inference ran in an agent container';
-    const session = createHash('sha256').update(`agent:main:phoenix-${runId}`).digest('hex').slice(0, 12);
-    const launches = fs.readFileSync(path.join(os.homedir(), '.openclaw/claude-cli-invocations.jsonl'), 'utf8');
-    assert(launches.split('\n').some(line => line && JSON.parse(line).session_hash === session));
+    const workspace = config.agents.entries.main.workspace || config.agents.defaults.workspace;
+    const transcripts = path.join(os.homedir(), '.claude/projects', workspace.replace(/[^A-Za-z0-9]/g, '-'));
+    const launches = fs.readFileSync(launchLog, 'utf8').split('\n').filter(Boolean).slice(launchesBefore).map(line => JSON.parse(line));
+    assert(launches.some(launch => launch.agent === 'main' && launch.session
+      && fs.readFileSync(path.join(transcripts, `${launch.session}.jsonl`), 'utf8').includes(marker)));
     step = 'exact inference reply';
     assert(response.result.payloads.length === 1 && response.result.payloads[0].text?.trim() === marker);
     step = 'expected inference model';
@@ -220,8 +186,6 @@ try {
     const inferenceStep = step;
     writeInferencePolicy(false);
     await waitForToolPolicy(false);
-    fs.rmSync(wrapper);
-    fs.rmSync(nativeProof, {force: true});
     step = inferenceStep;
   }
   console.log('Smoke test passed');

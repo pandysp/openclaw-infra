@@ -32,6 +32,7 @@
   environment:
     PATH: "{{ (npm_prefix.stdout_lines | last) | trim }}/bin:{{ ansible_facts['env']['PATH'] }}"
   loop: "{{ openclaw_mcp_adapter.npm_packages }}"
+  register: mcp_server_packages
 
 - name: Resolve mcp-server-github binary path
   ansible.builtin.shell: |
@@ -144,6 +145,15 @@
     label: "{{ item.name }}"
 
 - name: Configure mcp-adapter plugin
+  vars:
+    # One comparison for the maintenance decision and for the write after a reinstall.
+    _mcp_adapter_config_state: >-
+      if ($desired | length) != 1 or ($current | length) != 1 or
+          ($desired[0] | type) != "object" or ($current[0] | type) != "object" then
+        error("Expected one desired and one current config object")
+      elif $desired[0] == $current[0].plugins.entries["openclaw-mcp-adapter"].config and
+          $current[0].plugins.entries["openclaw-mcp-adapter"].enabled == true then "same"
+      else "differs" end
   block:
     - name: Write server tokens to temp files (de-duplicated by token_var)
       ansible.builtin.copy:
@@ -237,101 +247,114 @@
       changed_when: false
       no_log: true
 
-    # Installation auto-enables its entry. The global switch keeps native CLI
-    # loads from registering the new adapter before preparation has completed.
-    - name: Stop gateway for exclusive MCP maintenance
-      ansible.builtin.command:
-        argv: [openclaw, gateway, stop, --json]
-      environment:
-        XDG_RUNTIME_DIR: /run/user/1000
-      register: mcp_gateway_stopped
-      notify: restart openclaw-gateway
-
-    - name: Disable plugin loading during MCP maintenance
-      ansible.builtin.command:
-        argv: [openclaw, config, set, plugins.enabled, 'false']
-      register: mcp_loading_disabled
-      no_log: true
-
-    - name: Install plugin from npm
+    # The tool cache holds what the servers report, so maintenance (stopping the gateway)
+    # runs only when the adapter, its config, the server packages or qmd changed.
+    - name: Compare desired MCP adapter config with the live config
       ansible.builtin.command:
         argv:
-          - openclaw
-          - plugins
-          - install
-          - --force
-          - --pin
-          - '{{ openclaw_mcp_adapter.npm_package }}'
-      environment:
-        XDG_RUNTIME_DIR: /run/user/1000
+          - jq
+          - -ner
+          - --slurpfile
+          - desired
+          - /tmp/ansible-plugin-config
+          - --slurpfile
+          - current
+          - /home/ubuntu/.openclaw/openclaw.json
+          - "{{ _mcp_adapter_config_state }}"
+      register: mcp_config_compare
+      changed_when: false
       no_log: true
+
+    - name: Exclusive MCP maintenance
       when: >-
         (mcp_install.stdout | from_json).version != openclaw_mcp_adapter.npm_package.split('@')[-1]
         or force_plugin_reinstall | default(false) | bool
+        or mcp_config_compare.stdout == 'differs'
+        or (mcp_server_packages is defined and mcp_server_packages is changed)
+        or (qmd_install is defined and qmd_install is changed)
+      block:
+        # Installation auto-enables its entry. The global switch keeps native CLI
+        # loads from registering the new adapter before preparation has completed.
+        # Through systemd: since 2026.9.8 `openclaw gateway stop` refuses the operator's
+        # service without --force.
+        - name: Stop gateway for exclusive MCP maintenance
+          ansible.builtin.systemd:
+            name: openclaw-gateway
+            state: stopped
+            scope: user
+          environment:
+            XDG_RUNTIME_DIR: /run/user/1000
+          register: mcp_gateway_stopped
+          notify: restart openclaw-gateway
 
-    - name: Prepare MCP tool cache and contracts
-      ansible.builtin.shell: |
-        set -euo pipefail
-        PLUGIN_DIR=$(openclaw plugins inspect openclaw-mcp-adapter --json |
-          jq -er '.install.installPath | select(type == "string" and length > 0)')
-        node "$PLUGIN_DIR/dist/prepare.js" < /tmp/ansible-plugin-config
-      args:
-        executable: /bin/bash
-      register: mcp_preparation
-      changed_when: (mcp_preparation.stdout | from_json).changed | bool
-      no_log: true
+        - name: Disable plugin loading during MCP maintenance
+          ansible.builtin.command:
+            argv: [openclaw, config, set, plugins.enabled, 'false']
+          register: mcp_loading_disabled
+          no_log: true
 
-    - name: Set plugin config and enable
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        # Compare and apply the config and enabled state together.
-        CONFIG_DIFFERS=$(jq -ner --slurpfile desired /tmp/ansible-plugin-config \
-            --slurpfile current /home/ubuntu/.openclaw/openclaw.json '
-            if ($desired | length) != 1 or ($current | length) != 1 or
-                ($desired[0] | type) != "object" or ($current[0] | type) != "object" then
-              error("Expected one desired and one current config object")
-            elif $desired[0] == $current[0].plugins.entries["openclaw-mcp-adapter"].config and
-                $current[0].plugins.entries["openclaw-mcp-adapter"].enabled == true then "no"
-            else "yes" end')
-        if [ "$CONFIG_DIFFERS" = "yes" ]; then
-            jq '{plugins: {entries: {"openclaw-mcp-adapter": {config: ., enabled: true}}}}' /tmp/ansible-plugin-config |
-                openclaw config patch --stdin --replace-path plugins.entries.openclaw-mcp-adapter.config
-            echo "UPDATED"
-        else
-            echo "OK"
-        fi
-      args:
-        executable: /bin/bash
-      no_log: true
-      register: plugin_config_result
-      changed_when: "'UPDATED' in plugin_config_result.stdout"
-      notify: restart openclaw-gateway
+        # Our own pinned package sits outside ClawHub review; since 2026.9.8 a non-interactive
+        # install needs explicit capability consent or it is refused.
+        - name: Install plugin from npm
+          ansible.builtin.command:
+            argv:
+              - openclaw
+              - plugins
+              - install
+              - --force
+              - --pin
+              - --accept-capabilities
+              - '{{ openclaw_mcp_adapter.npm_package }}'
+          environment:
+            XDG_RUNTIME_DIR: /run/user/1000
+          when: >-
+            (mcp_install.stdout | from_json).version != openclaw_mcp_adapter.npm_package.split('@')[-1]
+            or force_plugin_reinstall | default(false) | bool
 
-    - name: Restore global plugin loading policy after preparation
-      ansible.builtin.command:
-        argv: >-
-          {{ ['openclaw', 'config', 'set', 'plugins.enabled',
-              (mcp_plugin_policy.stdout | from_json).enabled | to_json]
-             if (mcp_plugin_policy.stdout | from_json).present
-             else ['openclaw', 'config', 'unset', 'plugins.enabled'] }}
-      no_log: true
+        - name: Prepare MCP tool cache and contracts
+          ansible.builtin.shell: |
+            set -euo pipefail
+            PLUGIN_DIR=$(openclaw plugins inspect openclaw-mcp-adapter --json |
+              jq -er '.install.installPath | select(type == "string" and length > 0)')
+            node "$PLUGIN_DIR/dist/prepare.js" < /tmp/ansible-plugin-config
+          args:
+            executable: /bin/bash
+          register: mcp_preparation
+          changed_when: (mcp_preparation.stdout | from_json).changed | bool
+          no_log: true
+
+        - name: Set plugin config and enable
+          ansible.builtin.shell: |
+            set -euo pipefail
+            export XDG_RUNTIME_DIR=/run/user/1000
+            # Compare again after a reinstall, then apply the config and enabled state together.
+            CONFIG_STATE=$(jq -ner --slurpfile desired /tmp/ansible-plugin-config \
+                --slurpfile current /home/ubuntu/.openclaw/openclaw.json '{{ _mcp_adapter_config_state }}')
+            if [ "$CONFIG_STATE" = "differs" ]; then
+                jq '{plugins: {entries: {"openclaw-mcp-adapter": {config: ., enabled: true}}}}' /tmp/ansible-plugin-config |
+                    openclaw config patch --stdin --replace-path plugins.entries.openclaw-mcp-adapter.config
+                echo "UPDATED"
+            else
+                echo "OK"
+            fi
+          args:
+            executable: /bin/bash
+          no_log: true
+          register: plugin_config_result
+          changed_when: "'UPDATED' in plugin_config_result.stdout"
+          notify: restart openclaw-gateway
+
+        - name: Restore global plugin loading policy after preparation
+          ansible.builtin.command:
+            argv: >-
+              {{ ['openclaw', 'config', 'set', 'plugins.enabled',
+                  (mcp_plugin_policy.stdout | from_json).enabled | to_json]
+                 if (mcp_plugin_policy.stdout | from_json).present
+                 else ['openclaw', 'config', 'unset', 'plugins.enabled'] }}
+          no_log: true
 
     # tools.sandbox.tools.allow has one writer, the config role, which lists the
     # adapter whenever it is declared. A second writer here re-sorted it every run.
-
-    - name: Verify plugin config was applied
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        ENABLED=$(jq -r '.plugins.entries["openclaw-mcp-adapter"].enabled // false' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null)
-        if [ "$ENABLED" != "true" ]; then
-            echo "ERROR: Plugin enabled state is '$ENABLED', expected 'true'"
-            exit 1
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
 
     - name: Verify MCP adapter has servers configured
       ansible.builtin.shell: |
@@ -350,7 +373,7 @@
 
   rescue:
     - name: Keep the failed adapter disabled while restoring other plugins
-      when: mcp_loading_disabled is defined and mcp_loading_disabled is succeeded
+      when: mcp_loading_disabled is defined and mcp_loading_disabled is not skipped and mcp_loading_disabled is succeeded
       block:
         - name: Disable adapter after failed maintenance
           ansible.builtin.command:
@@ -367,12 +390,13 @@
           no_log: true
 
     - name: Restore gateway service after failed MCP maintenance
-      when: mcp_gateway_stopped is defined and mcp_gateway_stopped is succeeded
-      ansible.builtin.command:
-        argv: [openclaw, gateway, start, --json]
+      when: mcp_gateway_stopped is defined and mcp_gateway_stopped is not skipped and mcp_gateway_stopped is succeeded
+      ansible.builtin.systemd:
+        name: openclaw-gateway
+        state: started
+        scope: user
       environment:
         XDG_RUNTIME_DIR: /run/user/1000
-      no_log: true
 
     - name: Report failed MCP maintenance
       ansible.builtin.fail:
@@ -399,10 +423,6 @@
 - name: Flush handlers to restart gateway before verification
   ansible.builtin.meta: flush_handlers
 
-- name: Wait for gateway to stabilize after plugin config
-  ansible.builtin.pause:
-    seconds: 5
-
 - name: Verify gateway is active after plugin config
   ansible.builtin.command: systemctl --user is-active openclaw-gateway
   environment:
@@ -413,25 +433,20 @@
   until: gateway_active_check.rc == 0
   changed_when: false
 
-- name: Check gateway logs for mcp-adapter errors
+# The gateway's journal is no signal: a healthy long-running gateway logs
+# "[mcp-adapter] qmd transport error" when an idle session closes, and qmd tools keep working.
+# This reads OpenClaw's plugin registry; the final health check covers the running gateway.
+- name: Verify the MCP adapter is enabled and loaded
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    LOGS=$(journalctl --user -u openclaw-gateway --since "30 seconds ago" --no-pager)
-    if echo "$LOGS" | grep -qi "mcp.*error\|error.*mcp\|failed.*mcp-adapter\|docker.*error\|container.*failed\|image.*not found"; then
-        echo "ERROR: Gateway logs contain MCP adapter errors:"
-        echo "$LOGS" | grep -i "mcp"
-        exit 1
-    fi
-    echo "$LOGS" | grep -i "mcp" || echo "No mcp-adapter log entries yet (normal for lazy-loaded plugins)"
+    openclaw plugins list --json | jq -ce '
+      [.plugins[] | select(.id == "openclaw-mcp-adapter")] as $found
+      | if ($found | length) == 1 and $found[0].enabled == true and $found[0].status == "loaded"
+        then {status: $found[0].status} else error("MCP adapter is not enabled and loaded: \($found)") end'
   args:
     executable: /bin/bash
-  register: mcp_logs
   changed_when: false
-
-- name: Show mcp-adapter log status
-  ansible.builtin.debug:
-    var: mcp_logs.stdout_lines
 
 # --- Per-agent MCP tool scoping ---
 # Each agent denies all MCP server tool prefixes except its own.
@@ -440,39 +455,22 @@
 # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
 # e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
 
-- name: Get agent list for index resolution
-  ansible.builtin.shell: |
-    jq -c '.agents.list // []' /home/ubuntu/.openclaw/openclaw.json
-  args:
-    executable: /bin/bash
-  register: agents_list_json
-  changed_when: false
-
-- name: Write agents list to temp file for deny rules
-  ansible.builtin.copy:
-    content: "{{ agents_list_json.stdout }}"
-    dest: /tmp/ansible-agents-list.json
-    mode: "0600"
-  changed_when: false
-
 - name: Set per-agent tool deny rules for MCP tools
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    AGENTS_JSON=$(cat /tmp/ansible-agents-list.json)
-    AGENT_INDEX=$(echo "$AGENTS_JSON" | jq -r 'to_entries[] | select(.value.id == "{{ item.id }}") | .key')
-    if [ -z "$AGENT_INDEX" ]; then
-        echo "SKIP: Agent '{{ item.id }}' not found in agents list"
-        exit 0
-    fi
-    CURRENT=$(jq -c ".agents.list[${AGENT_INDEX}].tools.deny // []" /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || CURRENT="[]"
+    # A missing agent would run without its deny rules: stop instead.
+    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
+        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
+        exit 1
+    }
     DESIRED='{{ deny_list | to_json }}'
     C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
     D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
     if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
         echo "OK"
     else
-        openclaw config set "agents.list.${AGENT_INDEX}.tools.deny" --json "$DESIRED"
+        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
         echo "UPDATED"
     fi
   args:
@@ -491,16 +489,10 @@
   changed_when: "'UPDATED' in deny_result.stdout"
   notify: restart openclaw-gateway
 
-- name: Clean up agents list temp file
-  ansible.builtin.file:
-    path: /tmp/ansible-agents-list.json
-    state: absent
-  changed_when: false
-
-# --- Disable built-in memorySearch when qmd servers are registered ---
+# --- Disable built-in memory search (memory.search) when qmd servers are registered ---
 # Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are
 # confirmed in the plugin config. If provisioning fails between qmd and plugins,
-# agents still have memorySearch as fallback.
+# agents still have built-in memory search as fallback.
 
 - name: Check if qmd servers are in plugin config
   ansible.builtin.shell: |
@@ -513,12 +505,12 @@
   register: qmd_server_count
   changed_when: false
 
-- name: Check current memorySearch state
+- name: Check current built-in memory search state
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
     # The jq // operator treats false as "missing" and returns the RHS, so we
     # use an explicit null check to distinguish false from an absent key.
-    RESULT=$(jq -r '.agents.defaults.memorySearch.enabled | if . == null then "unset" else tostring end' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "unset")
+    RESULT=$(jq -r '.memory.search.enabled | if . == null then "unset" else tostring end' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "unset")
     echo "$RESULT"
   args:
     executable: /bin/bash
@@ -526,10 +518,10 @@
   changed_when: false
   when: (qmd_server_count.stdout | int) > 0
 
-- name: Disable built-in memorySearch (replaced by qmd)
+- name: Disable built-in memory search (replaced by qmd)
   ansible.builtin.shell: |
     export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw config set agents.defaults.memorySearch.enabled false
+    openclaw config set memory.search.enabled false
   args:
     executable: /bin/bash
   when:

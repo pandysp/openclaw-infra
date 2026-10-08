@@ -68,7 +68,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `system` | system | Update system packages |
 | `docker` | docker | Docker upgrade or group changes |
 | `ufw` | ufw | Firewall rule changes |
-| `openclaw` | openclaw | Reinstall/update OpenClaw binary |
+| `openclaw` | openclaw | Reinstall the OpenClaw binary; version bumps need a full provision ([Update OpenClaw](#update-openclaw)) |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
 | `agents` | agents | Add/remove non-default agents, update Telegram bindings |
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
@@ -124,7 +124,7 @@ openclaw status              # Session health
 ### Phoenix Safety
 
 - `STAGING_PRIVATE_REPOSITORY` names a dedicated private fixture (`pandysp/openclaw-staging-vault`: one README, no notes, no secrets) readable by the staging PAT. Real notes never enter staging. Direct MCP checks are read-only; inference disables gateway and native Claude tools; write tests belong in the staging workspace repositories. Public reads do not prove private access.
-- Staging agents are permanently read-only: `openclaw_tools_allow` limits every session (heartbeats included) to the two `*_get_file_contents` MCP reads, `tools.alsoAllow` is cleared, and `openclaw_cli_backends` passes `--tools "" --strict-mcp-config` to the Claude CLI so no native tool can write private content into the publicly backed-up staging workspaces. The smoke test verifies this policy before any MCP read.
+- Staging agents are permanently read-only: `openclaw_tools_allow` limits every session (heartbeats included) to the two `*_get_file_contents` MCP reads, `tools.alsoAllow` is cleared, and because that allowlist does not reach Claude's own tools, `openclaw_claude_cli_extra_args` makes the container launcher add `--tools ""` (OpenClaw already passes `--strict-mcp-config`) so no native tool can write private content into the publicly backed-up staging workspaces. The smoke test verifies this policy before any MCP read.
 - Obsidian Sync is out of Phoenix scope (decided 2026-09-25). The role picks the cloud vault by agent ID (`<agent>-workspace`), so a staging run would attach the public staging backup to the real vault; staging therefore never runs it and receives no Obsidian credentials. Check it read-only on production instead: `systemctl --user status obsidian-headless-main`, `ob sync-status --path ~/.openclaw/workspace`.
 - Phoenix runs `scripts/test-workspace-isolation.sh` on the staging VPS: a controlled Git hook in the public staging workspace proves the sync unit executes hooks as UID 1000 with no capabilities, no host config or Docker socket, and no route to the credential proxy (an unrestricted control container proves the proxy is reachable), then confirms the push by anonymous readback and removes its fixture.
 - The staging server joins the tailnet as `tag:openclaw-staging` with a key minted per run by the CI OAuth client (`TS_OAUTH_CLIENT_ID`/`TS_OAUTH_SECRET`, tag `tag:ci`): single use, ephemeral, pre-authorized, one hour. No stored auth key exists to expire.
@@ -183,13 +183,11 @@ ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journal
 
 **Important:** Always keep the local CLI and VPS gateway on the same version. Version mismatches cause protocol errors (e.g., `system.run.prepare` not supported). After upgrading the gateway, upgrade local too:
 
-```bash
-# 1. Update VPS gateway (via Ansible — preferred)
-./scripts/provision.sh --tags openclaw
+A version bump changes more than the binary: the channel and Groq plugins, the container launcher and the plugin allowlist move with it, so `--tags openclaw` alone can leave every agent turn failing. Run the full provisioning:
 
-# Or via SSH (manual)
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 curl -fsSL https://openclaw.ai/install.sh | bash'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user restart openclaw-gateway'
+```bash
+# 1. Bump openclaw_version (and openclaw_docs_reviewed_version after the contract review) in ansible/group_vars/all.yml
+./scripts/provision.sh
 
 # 2. Update the local CLI to match
 brew upgrade openclaw-cli

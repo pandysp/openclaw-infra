@@ -113,7 +113,7 @@
     export XDG_RUNTIME_DIR=/run/user/1000
     DESIRED='{{ _heartbeat_defaults | to_json }}'
     CURRENT=$(openclaw config get "agents.defaults.heartbeat" 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
-        if echo "$CURRENT" | grep -qiE '^Config path not found:'; then
+        if echo "$CURRENT" | grep -qE '^Config path is valid but unset:'; then
             CURRENT="{}"
         else
             echo "ERROR: could not read agents.defaults.heartbeat" >&2
@@ -169,9 +169,10 @@
   changed_when: "'UPDATED' in (default_sandbox_result.stdout | default(''))"
   notify: restart openclaw-gateway
 
-# Every agent, including main, uses an explicit list heartbeat block only when
-# scheduled automation is enabled. This follows the v2026.6.6 heartbeat
-# allowlist rule and removes the old default-agent special case.
+# Every agent, including main, uses an explicit agents.entries heartbeat block
+# only when scheduled automation is enabled. This follows the heartbeat allowlist rule
+# of openclaw_docs_reviewed_version and removes the old default-agent special
+# case.
 - block:
     - name: Write current agents JSON to temp file
       ansible.builtin.copy:
@@ -192,17 +193,16 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
-        AGENT_INDEX=$(jq -r --arg id {{ item.id | quote }} 'to_entries[] | select(.value.id == $id) | .key' /tmp/ansible_agents_current.json)
-        if [ -z "$AGENT_INDEX" ]; then
+        jq -e --arg id {{ item.id | quote }} 'any(.[]; .id == $id)' /tmp/ansible_agents_current.json >/dev/null || {
             echo "ERROR: Agent {{ item.id | quote }} not found in agents list" >&2
             exit 1
-        fi
-        CURRENT=$(openclaw config get "agents.list.${AGENT_INDEX}.sandbox.mode" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT=""
+        }
+        CURRENT=$(openclaw config get "agents.entries.{{ item.id }}.sandbox.mode" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT=""
         DESIRED="{{ item.sandbox_mode }}"
         if [ "$CURRENT" = "$DESIRED" ]; then
             echo "OK"
         else
-            openclaw config set "agents.list.${AGENT_INDEX}.sandbox.mode" "$DESIRED"
+            openclaw config set "agents.entries.{{ item.id }}.sandbox.mode" "$DESIRED"
             echo "UPDATED: {{ item.id }} sandbox.mode → {{ item.sandbox_mode }}"
         fi
       args:

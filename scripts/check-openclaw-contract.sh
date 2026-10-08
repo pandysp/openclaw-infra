@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # Check that the pinned OpenClaw version matches the reviewed heartbeat and cron
-# contract and that the roles still honour it. The contract, as of v2026.6.6:
+# contract and that the roles still honour it. The contract, as of openclaw_docs_reviewed_version:
 # - Upstream runs a 30-minute heartbeat when cadence is omitted; IaC sets the
 #   default to 0m and each agent opts in explicitly.
-# - Heartbeats live in agents.list[]; once any entry has a heartbeat block,
-#   only entries with a block run.
-# - `cron list` omits disabled jobs; use `cron list --all`. `cron edit
-#   --enable/--disable` keeps IDs and history; missing jobs are created with
-#   --disabled. Never edit scheduler storage directly.
+# - Heartbeats live in agents.entries.<id>.heartbeat; once any entry has a
+#   heartbeat block, only entries with a block run.
+# - Each heartbeat runs as a system-owned automation ("Heartbeat (<id>)");
+#   its standing instructions live in that job's scratch. HEARTBEAT.md has no
+#   effect.
+# - `cron` is an alias of `automations`. `cron list` omits disabled jobs; use
+#   `cron list --all`. `cron edit --enable/--disable` keeps IDs and history;
+#   missing jobs are created with --disabled. Never edit scheduler storage directly.
 # After reviewing a new version, bump openclaw_docs_reviewed_version in
 # ansible/group_vars/all.yml.
-# --latest-docs also diffs the pinned docs against OpenClaw main, where the
-# known drift is agents.entries.* and `openclaw automations`.
+# --latest-docs also checks that OpenClaw main still documents this contract.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ALL_VARS="$REPO_DIR/ansible/group_vars/all.yml"
 AGENTS_TASKS="$REPO_DIR/ansible/roles/agents/tasks/main.yml"
+HEARTBEAT_TASKS="$REPO_DIR/ansible/roles/agents/tasks/heartbeat.yml"
 CONFIG_TASKS="$REPO_DIR/ansible/roles/config/tasks/main.yml"
 CRON_TASKS="$REPO_DIR/ansible/roles/telegram/tasks/cron.yml"
 CRON_RECONCILER="$REPO_DIR/ansible/roles/telegram/files/reconcile_openclaw_cron.py"
@@ -41,6 +44,7 @@ REVIEWED_VERSION=$(sed -nE 's/^openclaw_docs_reviewed_version: "([^"]+)"/\1/p' "
 [ "$REVIEWED_VERSION" = "$IAC_VERSION" ] || fail "IaC pins $IAC_VERSION but contract review pins ${REVIEWED_VERSION:-missing}"
 
 grep -q 'agents.defaults.heartbeat.*0m\|every.*0m' "$AGENTS_TASKS" || fail "agents role does not enforce the 0m heartbeat default"
+grep -q 'agents.entries.{{ _heartbeat_agent.id }}.heartbeat' "$HEARTBEAT_TASKS" || fail "agents role does not write per-agent heartbeats under agents.entries"
 if grep -q 'agents.defaults.heartbeat' "$CONFIG_TASKS"; then
     fail "config role still writes heartbeat state; agents must be the sole owner"
 fi
@@ -63,15 +67,18 @@ if [ "$CHECK_LATEST_DOCS" = true ]; then
     curl -fsSL --retry 3 "$LATEST_BASE/automation/cron-jobs.md" -o "$DOCS_TMP/latest-cron.md" \
         || fail "could not fetch latest cron docs"
 
-    grep -Fq 'agents.list[]' "$DOCS_TMP/pinned-heartbeat.md" \
-        || fail "pinned heartbeat docs no longer describe agents.list[]; re-review the v$IAC_VERSION contract"
-    grep -Fq 'openclaw cron list' "$DOCS_TMP/pinned-cron.md" \
-        || fail "pinned cron docs no longer describe the v$IAC_VERSION cron CLI"
-    grep -Fq 'agents.entries.*.heartbeat' "$DOCS_TMP/latest-heartbeat.md" \
-        || fail "latest heartbeat docs drifted beyond the known agents.entries contract; review required"
-    grep -Fq 'openclaw automations list' "$DOCS_TMP/latest-cron.md" \
-        || fail "latest scheduler docs drifted beyond the known automations CLI; review required"
-    echo "Latest docs drift is still the reviewed agents.entries + automations contract"
+    for docs in pinned latest; do
+        grep -Fq 'agents.entries.*.heartbeat' "$DOCS_TMP/$docs-heartbeat.md" \
+            || fail "$docs heartbeat docs no longer describe agents.entries.*.heartbeat; review the contract"
+        grep -Fq '**only those agents** run heartbeats' "$DOCS_TMP/$docs-heartbeat.md" \
+            || fail "$docs heartbeat docs no longer state the per-agent heartbeat allowlist; review the contract"
+        grep -Fq 'heartbeat monitor scratch' "$DOCS_TMP/$docs-heartbeat.md" \
+            || fail "$docs heartbeat docs no longer keep instructions in the monitor scratch; review the contract"
+        # shellcheck disable=SC2016  # literal Markdown backticks, not a command
+        grep -Fq '`openclaw cron` remains an alias' "$DOCS_TMP/$docs-cron.md" \
+            || fail "$docs scheduler docs no longer keep the cron alias; review the contract"
+    done
+    echo "Pinned and latest docs match the reviewed contract"
 fi
 
 if [ -n "${OPENCLAW_CONTRACT_HOST:-}" ]; then

@@ -5,6 +5,7 @@ The ownership conditions are checked as YAML, not emulated as a GitHub runner.
 No test contacts GitHub, Tailscale, Hetzner or a Pulumi backend.
 """
 import json
+import re
 import os
 from pathlib import Path
 import signal
@@ -145,7 +146,7 @@ elif cmd == 'tailscale':
             count_path = root / 'cron-reads'
             count = int(count_path.read_text()) + 1 if count_path.exists() else 1
             count_path.write_text(str(count))
-            default = json.dumps({'jobs': [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False}, {'agentId': 'test', 'name': 'test cron', 'id': 'test-id', 'enabled': True}]})
+            default = json.dumps({'jobs': [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False}, {'agentId': 'test', 'name': 'test: Staging Test Cron', 'id': 'test-id', 'enabled': True}, {'agentId': 'test', 'name': 'heartbeat-test', 'id': 'heartbeat-id', 'enabled': True}]})
             before = opts.get('raw_cron_output', default)
             print(opts.get('raw_cron_after_output', before) if count > 1 else before)
             sys.exit(opts.get('cron_after_exit', 0) if count > 1 else opts.get('cron_exit', 0))
@@ -321,6 +322,8 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             if name not in ('TELEGRAM_USER_ID', 'STAGING_PRIVATE_REPOSITORY', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET'):
                 self.env[name] = 'fixture-' + name.lower()
         self.env['STAGING_PRIVATE_REPOSITORY'] = 'pandysp/private-phoenix-probe'
+        # The workflow's own token (${{ github.token }}), which the hcloud step uses.
+        self.env['GH_TOKEN'] = 'fixture-github-token'
 
     def run_step(self, name, **options):
         env = self.env | {'FIXTURE_OPTIONS': json.dumps(options)}
@@ -424,6 +427,11 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         result = self.run_step('Install hcloud CLI')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / 'hcloud-installed').is_file())
+        # Anonymous API calls from shared runners hit the rate limit; the token goes over stdin.
+        metadata = [call for call in self.calls() if call['cmd'] == 'curl' and 'api.github.com' in ' '.join(call['args'])]
+        self.assertEqual(len(metadata), 1)
+        self.assertIn('@-', metadata[0]['args'])
+        self.assertEqual(metadata[0]['stdin'], 'Authorization: Bearer fixture-github-token\n')
         for options in ({'release_exit': 79}, {'release_body': '{}'},
                         {'release_body': '{"tag_name":null}'}, {'release_body': '{"tag_name":12}'},
                         {'release_body': '{"tag_name":""}'}, {'release_body': ''},
@@ -461,17 +469,9 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.assertEqual(config['openclaw_model_primary'], 'anthropic/claude-sonnet-5-5')
         self.assertEqual(config['openclaw_model_fallbacks'], [])
 
-        # An override replaces OpenClaw's defaults (openclaw 2026.6.6,
-        # extensions/anthropic/cli-backend.ts), and its schema requires `command`.
-        # Staging must run production's exact Claude CLI invocation plus only the
-        # two lockdown flags; anything else makes Phoenix test a different runtime.
-        upstream = ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
-                    '--setting-sources', 'user', '--allowedTools', 'mcp__openclaw__*']
-        lockdown = ['--tools', '', '--strict-mcp-config']
-        backend = config['openclaw_cli_backends']['claude-cli']
-        self.assertEqual(backend['command'], 'claude')
-        self.assertEqual(backend['args'], upstream[:5] + lockdown + upstream[5:])
-        self.assertEqual(backend['resumeArgs'], upstream[:5] + lockdown + upstream[5:] + ['--resume', '{sessionId}'])
+        # OpenClaw's tools.allow does not restrict Claude's own tools (measured on 2026.9.8),
+        # so staging's launcher adds exactly `--tools ""` and nothing else.
+        self.assertEqual(config['openclaw_claude_cli_extra_args'], ['--tools', ''])
 
     def test_existing_stack_rejection_never_claims_ownership_or_removes_state(self):
         result = self.run_step('Initialize Pulumi staging stack', init_exit=71)
@@ -850,16 +850,20 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 
     def test_idempotence_validates_cron_identity_and_policy_before_ansible(self):
         self.install_provisioner()
+        # Since 2026.9.8 the test agent's heartbeat is an enabled job next to its declared cron.
         jobs = [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False},
-                {'agentId': 'test', 'name': 'test cron', 'id': 'test-id', 'enabled': True}]
+                {'agentId': 'test', 'name': 'test: Staging Test Cron', 'id': 'test-id', 'enabled': True},
+                {'agentId': 'test', 'name': 'heartbeat-test', 'id': 'heartbeat-id', 'enabled': True}]
         clean = CLEAN_RECAP.replace('changed=18', 'changed=0').replace('=== Provisioning complete ===\n', '')
         variants = [
             [{key: value for key, value in job.items() if key != 'id'} for job in jobs],
-            [jobs[0], jobs[1] | {'id': ''}],
-            [jobs[0], jobs[1] | {'id': 123}],
-            [jobs[0], jobs[1] | {'id': 'main-id'}],
-            [jobs[0], jobs[1] | {'name': ''}],
-            [jobs[0], jobs[1] | {'enabled': 'false'}],
+            [jobs[0], jobs[1] | {'id': ''}, jobs[2]],
+            [jobs[0], jobs[1] | {'id': 123}, jobs[2]],
+            [jobs[0], jobs[1] | {'id': 'main-id'}, jobs[2]],
+            [jobs[0], jobs[1] | {'name': ''}, jobs[2]],
+            [jobs[0], jobs[1] | {'enabled': 'false'}, jobs[2]],
+            [jobs[0], jobs[1]],
+            jobs + [{'agentId': 'test', 'name': 'skill-collection-review-test', 'id': 'review-id', 'enabled': True}],
         ]
         options = [{'raw_cron_output': json.dumps({'jobs': variant})} for variant in variants]
         options += [{'raw_status_output': json.dumps({'heartbeat': {'agents': [
@@ -876,12 +880,14 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 
     def test_idempotence_checks_post_run_policy_and_withholds_private_job_names(self):
         self.install_provisioner()
+        # Since 2026.9.8 the test agent's heartbeat is an enabled job next to its declared cron.
         jobs = [{'agentId': 'main', 'name': 'main cron', 'id': 'main-id', 'enabled': False},
-                {'agentId': 'test', 'name': 'test cron', 'id': 'test-id', 'enabled': True}]
+                {'agentId': 'test', 'name': 'test: Staging Test Cron', 'id': 'test-id', 'enabled': True},
+                {'agentId': 'test', 'name': 'heartbeat-test', 'id': 'heartbeat-id', 'enabled': True}]
         clean = CLEAN_RECAP.replace('changed=18', 'changed=0').replace('=== Provisioning complete ===\n', '')
         options = [
-            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'enabled': False}]})},
-            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'id': 'new-id', 'name': 'fixture-private-title'}]})},
+            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'enabled': False}, jobs[2]]})},
+            {'raw_cron_after_output': json.dumps({'jobs': [jobs[0], jobs[1] | {'id': 'new-id', 'name': 'fixture-private-title'}, jobs[2]]})},
             {'cron_after_exit': 1},
         ]
         for values in options:
@@ -1077,6 +1083,22 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             self.assertNotIn('accept-new', code)
         self.assertIn('PHOENIX_RESOURCE_NAME', self.steps['Run deployment verification']['run'])
 
+
+class FailureLogFilterTest(unittest.TestCase):
+    def test_only_gateway_lifecycle_lines_reach_the_public_log(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/staging.yml').read_text()
+        step = workflow.split('- name: Show gateway log after a failure', 1)[1].split('\n      - name:', 1)[0]
+        pattern = re.search(r"grep -E '([^']+)'", step).group(1)
+        kept = ['Oct 07 19:14:36 openclaw-spike node[2739436]: 2026-10-07T19:14:36.629+00:00 [gateway] loading configuration',
+                'Oct 07 20:35:21 openclaw-spike node[2922054]: 2026-10-07T20:35:21.491+00:00 [shutdown] completed cleanly in 82ms',
+                'Oct  7 09:03:17 openclaw-spike node[1250815]: 2026-10-07T09:03:17.235+00:00 [admission] closed: restart',
+                'Oct 07 20:35:21 openclaw-spike systemd[18674]: openclaw-gateway.service: Main process exited, code=exited, status=78/CONFIG']
+        dropped = ['Oct 07 19:14:40 openclaw-spike node[2739436]: {"type":"assistant","text":"[gateway] my diary"}',
+                   'Oct 07 19:14:40 openclaw-spike node[2739436]: my reply mentions [gateway] restart plans',
+                   'Oct 07 19:14:40 openclaw-spike node[2739436]: state owner offline maintenance of my notes']
+        result = subprocess.run(['grep', '-E', pattern], input='\n'.join(kept + dropped) + '\n',
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.stdout.splitlines(), kept, result.stderr)
 
 if __name__ == '__main__':
     unittest.main()

@@ -30,7 +30,8 @@
     if [ "$CURRENT" = "{{ obsidian_headless_version }}" ]; then
       echo "OK"
     else
-      npm install -g obsidian-headless@{{ obsidian_headless_version }}
+      # The install step of better-sqlite3 fetches its compiled addon; npm 12 blocks it unless allowed.
+      npm install -g obsidian-headless@{{ obsidian_headless_version }} --allow-scripts=better-sqlite3
       echo "INSTALLED"
     fi
   args:

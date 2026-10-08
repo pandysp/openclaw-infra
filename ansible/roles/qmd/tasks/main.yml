@@ -20,15 +20,43 @@
   register: qmd_installed_version
   changed_when: false
 
+# qmd's SQLite addon is compiled for one Node module version; a Node major switch
+# (25 -> 26) breaks it with ERR_DLOPEN_FAILED although the qmd version is unchanged.
+- name: Read the Node module version qmd must be built for
+  ansible.builtin.command: node -p process.versions.modules
+  register: qmd_node_abi
+  changed_when: false
+
+- name: Check which Node module version qmd was built for
+  ansible.builtin.stat:
+    path: /home/ubuntu/.bun/qmd-node-abi
+  register: qmd_built_abi_file
+
+- name: Read which Node module version qmd was built for
+  ansible.builtin.slurp:
+    src: /home/ubuntu/.bun/qmd-node-abi
+  register: qmd_built_abi
+  when: qmd_built_abi_file.stat.exists
+
 - name: Install qmd via bun
   ansible.builtin.shell: |
     export PATH="$HOME/.bun/bin:$PATH"
-    bun install -g "@tobilu/qmd@{{ qmd_version }}"
+    bun install -g --force "@tobilu/qmd@{{ qmd_version }}"
   args:
     executable: /bin/bash
-  when: qmd_installed_version.stdout != qmd_version
+  register: qmd_install
+  when: >-
+    qmd_installed_version.stdout != qmd_version
+    or not qmd_built_abi_file.stat.exists
+    or (qmd_built_abi.content | b64decode | trim) != qmd_node_abi.stdout
   notify:
     - restart qmd-http services
+
+- name: Record which Node module version qmd was built for
+  ansible.builtin.copy:
+    content: "{{ qmd_node_abi.stdout }}\n"
+    dest: /home/ubuntu/.bun/qmd-node-abi
+    mode: "0644"
 
 - name: Install uv (for extract script inline deps)
   ansible.builtin.shell: curl -LsSf https://astral.sh/uv/install.sh | sh
