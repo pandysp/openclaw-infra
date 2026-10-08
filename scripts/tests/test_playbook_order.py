@@ -114,6 +114,10 @@ class PlaybookOrderTest(unittest.TestCase):
         self.assertIn('--global', command['argv'])
         self.assertEqual(command['argv'][command['argv'].index('--version') + 1], '1.0.0')
         self.assertEqual(command['creates'], '/home/ubuntu/.openclaw/skills/video-frames/SKILL.md')
+        # OpenClaw hides a skill whose required binaries are missing on the host.
+        system, = load_yaml(ROOT / 'ansible/roles/system/tasks/main.yml')
+        packages = next(t for t in system if t.get('name') == 'Install base packages')['ansible.builtin.apt']['name']
+        self.assertIn('ffmpeg', packages)
 
 if __name__ == '__main__':
     unittest.main()

@@ -18,6 +18,7 @@
       - gnupg
       - lsb-release
       - jq
+      - ffmpeg              # OpenClaw checks skill requirements on the host (video-frames needs it)
       - python3
       - git
       - unzip               # Required by bun installer

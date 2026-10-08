@@ -189,7 +189,7 @@ try:
                  runtime['image'], '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=1',
                  '-pix_fmt', 'yuv420p', '-y', str(video)])
             media_reply = turn(
-                f'Operator workflow fixture: read and follow the bundled video-frames SKILL.md. '
+                f'Operator workflow fixture: read and follow the video-frames skill (SKILL.md). '
                 f'Use its frame.sh script to extract a PNG from {video} into {frame}. '
                 f'Read that image using native Read. Reply with only the dominant color you see.')
         warm = turn('Reply only with the marker I asked you to remember.')
@@ -250,7 +250,7 @@ try:
             'unverified_checks': [] if mac_target else ['no_mac_host_entry']}
         if agent == 'main':
             frame = diagnostic.with_suffix('.png')
-            evidence['checks']['native_video_frames_workflow'] = any(success(call) and 'frame.sh' in call.get('input', {}).get('command', '') for call in bash)
+            evidence['checks']['native_video_frames_workflow'] = any(success(call) and 'video-frames/scripts/frame.sh' in call.get('input', {}).get('command', '') for call in bash)
             evidence['checks']['native_image_read'] = any(call.get('name') == 'Read' and call.get('input', {}).get('file_path') == str(frame) and success(call) for call in calls) and frame.read_bytes().startswith(b'\x89PNG\r\n\x1a\n') and 'red' in reply(media_reply).lower()
         (scratch / ('restricted-gateway-' + agent + '.json')).write_text(json.dumps(evidence) + '\n')
         print(json.dumps(evidence), flush=True)

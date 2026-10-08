@@ -69,3 +69,12 @@
 # already exist, which is the case on a fresh host if this runs first.
 - name: Set up Claude CLI auth
   ansible.builtin.include_tasks: claude-cli-auth.yml
+
+# 2026.9 no longer bundles video-frames; it moved to ClawHub unchanged (frame.sh identical,
+# SKILL.md differs only in its metadata header). main's video workflow uses it.
+- name: Install the video-frames skill from ClawHub
+  ansible.builtin.command:
+    argv: [openclaw, skills, install, "@steipete/video-frames", --version, "1.0.0", --global]
+    creates: /home/ubuntu/.openclaw/skills/video-frames/SKILL.md
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
