@@ -119,5 +119,32 @@ class PlaybookOrderTest(unittest.TestCase):
         packages = next(t for t in system if t.get('name') == 'Install base packages')['ansible.builtin.apt']['name']
         self.assertIn('ffmpeg', packages)
 
+    def test_provisioning_never_upgrades_tailscale_itself(self):
+        # Upgrading Tailscale restarts tailscaled, which carries the provisioning connection.
+        tasks, = load_yaml(ROOT / 'ansible/roles/system/tasks/main.yml')
+        upgrade = next((t for t in tasks if any(c.get('ansible.builtin.apt', {}).get('upgrade') == 'dist'
+                                                for c in t.get('block', []))), None)
+        self.assertIsNotNone(upgrade, 'the dist-upgrade must run inside a block that holds Tailscale')
+        hold = upgrade['block'][0]['ansible.builtin.dpkg_selections']
+        self.assertEqual((hold['name'], hold['selection']), ('tailscale', 'hold'))
+        release = upgrade['always'][0]['ansible.builtin.dpkg_selections']
+        self.assertEqual((release['name'], release['selection']), ('tailscale', 'install'))
+        names = [t.get('name') for t in tasks]
+        # Tailscale's own updater keeps it current; its check needs jq from the base packages.
+        self.assertGreater(names.index('Let Tailscale update itself'), names.index('Install base packages'))
+
+    def test_the_gateway_restarts_whenever_tailscaled_restarts(self):
+        # The gateway's Serve route ends with tailscaled and is not claimed again (seen in production).
+        main, = load_yaml(ROOT / 'ansible/roles/openclaw/tasks/main.yml')
+        names = [t.get('name') for t in main]
+        self.assertIn('Restart the gateway whenever tailscaled restarts', names)
+        unit = next(t for t in main if t.get('name') == 'Restart the gateway whenever tailscaled restarts')
+        content = unit['ansible.builtin.copy']['content']
+        for line in ('PartOf=tailscaled.service', 'RemainAfterExit=yes', 'WantedBy=tailscaled.service',
+                     'try-restart openclaw-gateway.service'):
+            self.assertIn(line, content)
+        enable = next(t for t in main if t.get('name') == 'Enable the gateway restart after tailscaled restarts')
+        self.assertTrue(enable['ansible.builtin.systemd']['enabled'])
+
 if __name__ == '__main__':
     unittest.main()
