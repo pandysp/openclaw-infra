@@ -92,5 +92,28 @@ class PlaybookOrderTest(unittest.TestCase):
         self.assertEqual(main[restrict]['ansible.builtin.file']['mode'], '0700')
         self.assertLess(restrict, names.index('Install OpenClaw'))
 
+    def test_a_failed_workspace_sync_restores_the_timers_it_stopped(self):
+        # One agent's merge conflict once left all nine production workspaces without backup.
+        tasks, = load_yaml(ROOT / 'ansible/roles/workspace/tasks/main.yml')
+        block = next((t for t in tasks if any(c.get('ansible.builtin.include_tasks') == 'sync.yml'
+                                              for c in t.get('block', []))), None)
+        self.assertIsNotNone(block, 'the sync loop must run inside a block')
+        restore = [t for t in block.get('always', []) if 'ansible.builtin.systemd' in t]
+        self.assertEqual(len(restore), 1, 'the timers must come back in always')
+        self.assertIn('workspace_existing_units', restore[0]['loop'])
+        self.assertEqual(restore[0]['ansible.builtin.systemd']['state'], 'started')
+        self.assertTrue(restore[0]['ansible.builtin.systemd']['enabled'])
+
+    def test_video_frames_skill_is_installed_from_clawhub(self):
+        # 2026.9 stopped bundling it; main's video workflow reads it.
+        tasks, = load_yaml(ROOT / 'ansible/roles/openclaw/tasks/main.yml')
+        install = [t for t in tasks if '@steipete/video-frames' in json.dumps(t)]
+        self.assertEqual(len(install), 1)
+        command = install[0]['ansible.builtin.command']
+        self.assertEqual(command['argv'][:3], ['openclaw', 'skills', 'install'])
+        self.assertIn('--global', command['argv'])
+        self.assertEqual(command['argv'][command['argv'].index('--version') + 1], '1.0.0')
+        self.assertEqual(command['creates'], '/home/ubuntu/.openclaw/skills/video-frames/SKILL.md')
+
 if __name__ == '__main__':
     unittest.main()

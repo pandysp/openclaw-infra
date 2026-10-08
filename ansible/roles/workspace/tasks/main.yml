@@ -149,21 +149,38 @@
       - /home/ubuntu/.local/share/workspace-sync-build
   when: workspace_image.rc != 0 or workspace_image_sources.changed
 
-- name: Install and synchronize each workspace
-  ansible.builtin.include_tasks: sync.yml
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    loop_var: workspace
-    label: "{{ workspace.agent_id }}"
+# A failed sync must not leave every agent without backup: the timers stopped above come
+# back on failure too (seen in production, where one agent's merge conflict stopped all nine).
+- name: Synchronize workspaces and restore their timers
+  block:
+    - name: Install and synchronize each workspace
+      ansible.builtin.include_tasks: sync.yml
+      loop: "{{ active_workspaces }}"
+      loop_control:
+        loop_var: workspace
+        label: "{{ workspace.agent_id }}"
 
-- name: Enable workspace timers after successful synchronization
-  ansible.builtin.systemd:
-    name: "workspace-git-sync-{{ item.agent_id }}.timer"
-    state: started
-    enabled: true
-    scope: user
-  environment:
-    XDG_RUNTIME_DIR: /run/user/1000
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
+    - name: Enable workspace timers after successful synchronization
+      ansible.builtin.systemd:
+        name: "workspace-git-sync-{{ item.agent_id }}.timer"
+        state: started
+        enabled: true
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      loop: "{{ active_workspaces }}"
+      loop_control:
+        label: "{{ item.agent_id }}"
+
+  always:
+    - name: Restore the workspace timers that existed before this run
+      ansible.builtin.systemd:
+        name: "{{ item.stat.path | basename }}"
+        state: started
+        enabled: true
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      loop: "{{ workspace_existing_units.results | selectattr('item.1', 'equalto', 'timer') | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.0.agent_id }}"
