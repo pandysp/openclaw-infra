@@ -1,6 +1,6 @@
 # OpenClaw Infrastructure
 
-Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. About €11/month ([cost breakdown](./CLAUDE.md#cost-breakdown)).
+Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-trust Tailscale networking. No public ports exposed. About €11/month ([cost breakdown](./AGENTS.md#cost-breakdown)).
 
 **This is a reference template.** Clone it and adapt for your own deployment — the config values (timezone, model, cron prompts) are working examples you'll customize.
 
@@ -24,7 +24,7 @@ Self-hosted [OpenClaw](https://openclaw.ai) gateway on a Hetzner VPS with zero-t
 - Tailscale MagicDNS and HTTPS enabled ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)) — required for Tailscale Serve
 - Claude setup token (run `claude setup-token`)
 
-See [CLAUDE.md](./CLAUDE.md#first-time-setup) for detailed setup instructions.
+See [AGENTS.md](./AGENTS.md#first-time-setup) for detailed setup instructions.
 
 ### First-Time Tailscale Setup
 
@@ -140,7 +140,7 @@ OpenClaw requires **device pairing** for all connections — including the serve
 
 > No public SSH port is exposed. SSH works over Tailscale only.
 
-See [CLAUDE.md](./CLAUDE.md#device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
+See [AGENTS.md](./AGENTS.md#device-pairing) for details and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for common issues.
 
 ## Architecture
 
@@ -154,7 +154,7 @@ Your Machine ──(Tailscale)──> Hetzner VPS ──> OpenClaw Gateway
 
 ## Documentation
 
-- [CLAUDE.md](./CLAUDE.md) — Setup, operations, security, and troubleshooting
+- [AGENTS.md](./AGENTS.md) — Setup, operations, security, and troubleshooting
 - [docs/](./docs/) — Topic guides (security, troubleshooting, integrations, Mac node) and dated records
 
 ## License

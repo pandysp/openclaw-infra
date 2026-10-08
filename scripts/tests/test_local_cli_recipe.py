@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def local_cli_recipe(source=None):
-    source = source if source is not None else (ROOT / "CLAUDE.md").read_text()
+    source = source if source is not None else (ROOT / "AGENTS.md").read_text()
     section = source.split("## Local CLI\n", 1)[1].split("# Trigger pairing", 1)[0]
     return section[section.index("(\n  set -euo pipefail"):].replace("<tailnet>", "tail-test")
 

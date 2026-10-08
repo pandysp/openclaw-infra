@@ -34,7 +34,7 @@ Gateway runs via systemd (not Docker) as unprivileged user. Docker runs OpenClaw
 
 ```
 openclaw-infra/
-├── CLAUDE.md           # This file - AI assistant guide
+├── AGENTS.md           # This file - AI assistant guide
 ├── README.md           # Human overview
 ├── package.json        # Node.js dependencies
 ├── tsconfig.json       # TypeScript config

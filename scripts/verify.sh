@@ -375,7 +375,7 @@ elif [ "$TOKEN_LEN" -gt 0 ] 2>/dev/null; then
 else
     # Non-fatal: verify continues to report all checks
     check_fail "Local gateway.remote.token is EMPTY — the local CLI cannot authenticate"
-    echo "   Fix: configure the local CLI as in CLAUDE.md (Local CLI); never print the gateway token."
+    echo "   Fix: configure the local CLI as in AGENTS.md (Local CLI); never print the gateway token."
 fi
 
 # 14. Version match — IaC pin vs installed. Catches drift between the VPS and the
