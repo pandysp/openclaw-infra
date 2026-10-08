@@ -86,7 +86,7 @@ If Tailscale never started (can't SSH), use the Hetzner Cloud console (web termi
 
 Each redeploy creates a new Tailscale device with an incremented suffix. Check `tailscale status` for the current hostname, and clean up stale devices in the [Tailscale admin console](https://login.tailscale.com/admin/machines).
 
-See [CLAUDE.md — Clean Up Stale Tailscale Devices](../CLAUDE.md#clean-up-stale-tailscale-devices).
+See [AGENTS.md — Clean Up Stale Tailscale Devices](../AGENTS.md#clean-up-stale-tailscale-devices).
 
 ## Connectivity Issues
 
@@ -217,7 +217,7 @@ XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-gateway -n 200
 
 **Symptom**: Agent turns fail with Claude auth errors (401) in the gateway log.
 
-Agent turns run through the Claude CLI, which reads only `~/.claude/shared/auth/.credentials.json`; re-running `openclaw onboard` or changing `claudeSetupToken` does not replace it. Replace the login as in [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation), then check the CLI directly:
+Agent turns run through the Claude CLI, which reads only `~/.claude/shared/auth/.credentials.json`; re-running `openclaw onboard` or changing `claudeSetupToken` does not replace it. Replace the login as in [AGENTS.md — Key Rotation](../AGENTS.md#key-rotation), then check the CLI directly:
 
 ```bash
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'cd /tmp && echo "Reply OK" | claude -p'

@@ -91,7 +91,7 @@ Threat model and mitigations for the OpenClaw Hetzner/Tailscale deployment.
 
 **Residual Risk**: Medium while the stored Tailscale auth key is reusable and unexpired.
 
-See [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation) for rotation procedures.
+See [AGENTS.md — Key Rotation](../AGENTS.md#key-rotation) for rotation procedures.
 
 ### 4. Agent Host Command Abuse
 
@@ -286,12 +286,12 @@ The `~/.openclaw/` directory is restricted to owner-only access (mode `700`), en
 - [ ] Review paired OpenClaw devices: `openclaw devices list`
 - [ ] Check for OpenClaw updates: `npm outdated -g openclaw`
 - [ ] Run `openclaw security audit --deep`
-- [ ] Rotate Tailscale auth key and Claude setup token (see [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation))
+- [ ] Rotate Tailscale auth key and Claude setup token (see [AGENTS.md — Key Rotation](../AGENTS.md#key-rotation))
 
 ## Incident Response
 
 1. **Isolate**: Remove server from Tailscale (`tailscale logout`)
-2. **Revoke**: Rotate compromised credentials (see [CLAUDE.md — Key Rotation](../CLAUDE.md#key-rotation))
+2. **Revoke**: Rotate compromised credentials (see [AGENTS.md — Key Rotation](../AGENTS.md#key-rotation))
 3. **Preserve**: Take Hetzner snapshot for forensics
 4. **Destroy**: `pulumi destroy`
 5. **Rebuild**: Fresh deployment with new credentials

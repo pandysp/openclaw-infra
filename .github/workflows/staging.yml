@@ -6,7 +6,7 @@
 # Cost: ~€0.01/run (Hetzner hourly billing)
 # Duration: ~35-45 minutes
 #
-# One-time setup required before first run — see docs in CLAUDE.md.
+# One-time setup required before first run — see docs in AGENTS.md.
 #
 # Secret config values use stdin; the resource identity is GitHub's run/attempt ID.
 # No untrusted event payload or branch name is interpolated into shell commands.

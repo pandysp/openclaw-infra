@@ -14,12 +14,10 @@
       dest: /tmp/ansible-gateway-token
     - content: "{{ xai_api_key | default('') }}"
       dest: /tmp/ansible-xai-api-key
-    - content: "{{ groq_api_key | default('') }}"
-      dest: /tmp/ansible-groq-api-key
     - content: >-
-        {%- set _groq = {'providers': {'groq': {'baseUrl': openclaw_groq_base_url, 'apiKey': groq_api_key, 'models': []}}} if (groq_api_key is defined and groq_api_key | length > 0) else {} -%}
+        {%- set _openrouter = {'providers': {'openrouter': {'baseUrl': openclaw_openrouter_base_url, 'apiKey': openrouter_api_key, 'models': []}}} if (openrouter_api_key is defined and openrouter_api_key | length > 0) else {} -%}
         {%- set _google = {'providers': {'google': {'baseUrl': 'https://generativelanguage.googleapis.com/v1beta', 'apiKey': gemini_api_key, 'models': []}}} if (gemini_api_key is defined and gemini_api_key | length > 0) else {} -%}
-        {{ openclaw_custom_models | combine(_groq, recursive=true) | combine(_google, recursive=true) | to_json }}
+        {{ openclaw_custom_models | combine(_openrouter, recursive=true) | combine(_google, recursive=true) | to_json }}
       dest: /tmp/ansible-custom-models
     - content: "{{ openclaw_model_fallbacks | to_json }}"
       dest: /tmp/ansible-model-fallbacks
@@ -103,10 +101,10 @@
         done
         {% endif %}
 
-        # Voice transcription — Groq provider cleanup (setting is in the settings task,
+        # Voice transcription — OpenRouter provider cleanup (setting is in the settings task,
         # after "openclaw config set models --json" which replaces the entire models object)
-        {% if not (groq_api_key is defined and groq_api_key | length > 0) %}
-        for key in models.providers.groq tools.media.audio.enabled tools.media.models; do
+        {% if not (openrouter_api_key is defined and openrouter_api_key | length > 0) %}
+        for key in models.providers.openrouter tools.media.audio.enabled tools.media.models; do
             check_unset "$key"
         done
         {% endif %}
@@ -254,7 +252,7 @@
 
         # Custom models: hash-based comparison (server enriches config with extra fields,
         # so direct JSON comparison always finds a diff). Hash the desired value instead.
-        # When Groq voice is configured, the Groq provider is merged into the temp file at template time.
+        # When voice transcription is configured, the OpenRouter provider is merged into the temp file at template time.
         # Guard: if the config key was wiped (e.g. by onboard), force re-set even if hash matches.
         DESIRED_MODELS=$(cat /tmp/ansible-custom-models)
         HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
@@ -313,9 +311,9 @@
         {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("google") %}
         {% endif %}
-        {# Groq is an external provider plugin since 2026.7.1; voice transcription needs it loaded. #}
-        {% if groq_api_key is defined and groq_api_key | length > 0 %}
-        {%   set _ = plugin_allow.append("groq") %}
+        {# OpenRouter (bundled) transcribes voice; plugins.allow blocks unlisted bundled plugins. #}
+        {% if openrouter_api_key is defined and openrouter_api_key | length > 0 %}
+        {%   set _ = plugin_allow.append("openrouter") %}
         {% endif %}
         {% if openclaw_mcp_adapter is defined %}
         {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
@@ -413,7 +411,7 @@
         {% endif %}
 
         # Voice transcription — enable audio (provider merged into models JSON above; cleanup in secrets task)
-        {% if groq_api_key is defined and groq_api_key | length > 0 %}
+        {% if openrouter_api_key is defined and openrouter_api_key | length > 0 %}
         check_set tools.media.audio.enabled true
         check_set_json tools.media.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}","capabilities":["audio"]}]'
         {% endif %}
@@ -469,7 +467,6 @@
       loop:
         - /tmp/ansible-gateway-token
         - /tmp/ansible-xai-api-key
-        - /tmp/ansible-groq-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
 
@@ -585,10 +582,6 @@
   register: anthropic_plugin_enable
   changed_when: "'ENABLED' in anthropic_plugin_enable.stdout"
   notify: restart openclaw-gateway
-
-- name: Install the Groq provider plugin
-  ansible.builtin.include_tasks: groq-plugin.yml
-  when: groq_api_key is defined and groq_api_key | length > 0
 
 - name: Migrate session model provider to match primary model
   ansible.builtin.shell: |
