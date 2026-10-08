@@ -5,9 +5,25 @@
     cache_valid_time: 3600
   changed_when: false
 
-- name: Dist-upgrade all packages
-  ansible.builtin.apt:
-    upgrade: dist
+# Tailscale carries the provisioning connection: upgrading it here restarted tailscaled and
+# dropped the run (seen three times). Tailscale's own updater keeps it current (set below).
+- name: Dist-upgrade all packages except Tailscale
+  block:
+    - name: Hold Tailscale during the dist-upgrade
+      ansible.builtin.dpkg_selections:
+        name: tailscale
+        selection: hold
+      changed_when: false  # released again below; the net selection does not change
+
+    - name: Dist-upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+  always:
+    - name: Release Tailscale after the dist-upgrade
+      ansible.builtin.dpkg_selections:
+        name: tailscale
+        selection: install
+      changed_when: false
 
 - name: Install base packages
   ansible.builtin.apt:
@@ -28,6 +44,20 @@
       - build-essential      # make/gcc for npm native modules (e.g., @discordjs/opus)
       - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
+
+# Production updates itself (its apt history shows the updater's `tailscale=<version>` installs);
+# Pulumi's `tailscale up` does not ask for it, so make sure every host does.
+- name: Let Tailscale update itself
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if [ "$(tailscale debug prefs | jq -r '.AutoUpdate.Apply // false')" != true ]; then
+        tailscale set --auto-update
+        echo CHANGED
+    fi
+  args:
+    executable: /bin/bash
+  register: tailscale_auto_update
+  changed_when: "'CHANGED' in tailscale_auto_update.stdout"
 
 - name: Check installed Node.js version
   ansible.builtin.command: node --version
