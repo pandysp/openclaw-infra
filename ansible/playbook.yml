@@ -44,6 +44,20 @@
         fail_msg: openclaw_agents and openclaw_cron_jobs must both be lists.
       tags: [always]
 
+    # Agents deliver heartbeats, cron results and alerts to a chat. Without one, the
+    # agents role used to be skipped silently and the host came up without agents.
+    - name: Require at least one chat channel
+      ansible.builtin.assert:
+        that: >-
+          (telegram_bot_token | default('') | length > 0) or
+          (discord_bot_token | default('') | length > 0) or
+          (openclaw_agents | selectattr('deliver_channel', 'defined')
+            | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0)
+        fail_msg: >-
+          No chat channel is configured. Set telegram_bot_token or discord_bot_token,
+          or give an agent deliver_channel: whatsapp.
+      tags: [always]
+
     - name: Validate agent object shapes
       ansible.builtin.assert:
         that:
@@ -299,13 +313,7 @@
       when: _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list | length > 0
     - { role: openclaw,  tags: [openclaw] }
     - { role: config,    tags: [config] }
-    - role: agents
-      tags: [agents]
-      when: >-
-        (telegram_bot_token is defined and telegram_bot_token | length > 0) or
-        (openclaw_agents | selectattr('deliver_channel', 'defined')
-          | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0) or
-        (discord_bot_token is defined and discord_bot_token | length > 0)
+    - { role: agents,    tags: [agents] }
     # telegram must run immediately after agents — if sandbox runs in between,
     # agents exist without bindings and incoming messages get misrouted.
     - { role: telegram,  tags: [telegram],  when: telegram_bot_token is defined and telegram_bot_token | length > 0 }

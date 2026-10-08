@@ -146,5 +146,35 @@ class PlaybookOrderTest(unittest.TestCase):
         enable = next(t for t in main if t.get('name') == 'Enable the gateway restart after tailscaled restarts')
         self.assertTrue(enable['ansible.builtin.systemd']['enabled'])
 
+    def test_a_host_without_any_chat_channel_is_refused(self):
+        # The agents role used to be skipped silently without a channel, leaving a host without agents.
+        play, = load_yaml(PLAYBOOK)
+        provision = next(p for p in play if p.get('roles'))
+        agents = next(r for r in provision['roles'] if (r.get('role') if isinstance(r, dict) else r) == 'agents')
+        self.assertNotIn('when', agents)
+        check = next((t for t in provision['pre_tasks'] if t.get('name') == 'Require at least one chat channel'), None)
+        self.assertIsNotNone(check, 'provisioning must stop when no chat channel is configured')
+        self.assertIn('always', check['tags'])
+        for channel in ('telegram_bot_token', 'discord_bot_token', "'whatsapp'"):
+            self.assertIn(channel, check['ansible.builtin.assert']['that'])
+
+    def test_a_failed_workspace_sync_alerts_the_owner(self):
+        # main's sync failed every hour for 39 hours without anyone noticing.
+        templates = ROOT / 'ansible/roles/workspace/templates'
+        self.assertIn('OnFailure=workspace-sync-failed@{{ item.agent_id }}.service',
+                      (templates / 'workspace-git-sync.service.j2').read_text())
+        alert = (templates / 'workspace-sync-failed@.service.j2').read_text()
+        self.assertIn('openclaw message send --channel {{ _owner.deliver_channel }} --target {{ _owner.deliver_to }}', alert)
+        tasks, = load_yaml(ROOT / 'ansible/roles/workspace/tasks/main.yml')
+        names = [t.get('name') for t in tasks]
+        install = tasks[names.index('Install the owner alert for failed workspace syncs')]
+        self.assertEqual(install['ansible.builtin.template']['dest'],
+                         '/home/ubuntu/.config/systemd/user/workspace-sync-failed@.service')
+        self.assertIn("selectattr('is_default', 'equalto', true)", install['vars']['_owner'])
+        # Installed into the user unit directory once it exists, and before the first sync can fail.
+        alert_index = names.index('Install the owner alert for failed workspace syncs')
+        self.assertGreater(alert_index, names.index('Ensure workspace support directories exist'))
+        self.assertLess(alert_index, names.index('Synchronize workspaces and restore their timers'))
+
 if __name__ == '__main__':
     unittest.main()

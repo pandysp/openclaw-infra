@@ -1,5 +1,6 @@
 [Unit]
 Description=Sync OpenClaw workspace ({{ item.agent_id }}) to git
+OnFailure=workspace-sync-failed@{{ item.agent_id }}.service
 
 [Service]
 Type=oneshot

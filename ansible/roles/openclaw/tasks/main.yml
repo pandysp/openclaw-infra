@@ -3,9 +3,9 @@
 # install.yml starts the existing service (seen on the test server). Everything that start
 # must already have comes first.
 # gateway.tailscale.mode serve: since 2026.8 the gateway runs `tailscale serve --bg=false`
-# for as long as it lives, falling back to `sudo -n` without operator rights. A root child
-# outlives a stop that systemd's user manager cannot kill, keeps port 443, and the next start
-# exits 78 for good (reproduced on the test server). As operator, ubuntu runs it inside the
+# for as long as it lives, falling back to `sudo -n` without operator rights. Stopped while
+# still starting, the gateway leaves that root child running on port 443, and every later
+# start exits 78 (reproduced in production on 2026.9.8). As operator, ubuntu runs it inside the
 # service, as OpenClaw's own error message recommends. Set before anything below can start it.
 - name: Let the gateway run Tailscale Serve without sudo
   become: true
@@ -24,6 +24,7 @@
 # when tailscaled restarts (self-update, crash), and the gateway does not claim it again: port 443
 # stays down until the gateway restarts (seen in production). This unit restarts the gateway
 # whenever tailscaled (re)starts; try-restart leaves a stopped gateway alone.
+# Upstream: openclaw/openclaw#148308 (fix PR #137454). Delete this unit once the pinned version has the fix.
 - name: Restart the gateway whenever tailscaled restarts
   become: true
   ansible.builtin.copy:
