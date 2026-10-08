@@ -45,8 +45,8 @@
       - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
 
-# Production updates itself (its apt history shows the updater's `tailscale=<version>` installs);
-# Pulumi's `tailscale up` does not ask for it, so make sure every host does.
+# Provisioning no longer upgrades Tailscale (held above), so its own updater must stay on.
+# Production and fresh staging hosts already had it on (2026-10-08); this keeps it that way.
 - name: Let Tailscale update itself
   ansible.builtin.shell: |
     set -euo pipefail
