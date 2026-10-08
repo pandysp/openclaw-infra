@@ -24,6 +24,7 @@
 # when tailscaled restarts (self-update, crash), and the gateway does not claim it again: port 443
 # stays down until the gateway restarts (seen in production). This unit restarts the gateway
 # whenever tailscaled (re)starts; try-restart leaves a stopped gateway alone.
+# Upstream: openclaw/openclaw#148308 (fix PR #137454). Delete this unit once the pinned version has the fix.
 - name: Restart the gateway whenever tailscaled restarts
   become: true
   ansible.builtin.copy:
