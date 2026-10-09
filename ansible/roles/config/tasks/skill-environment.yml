@@ -1,18 +1,21 @@
 ---
 # Provider config powers OpenClaw tools; native skill scripts need process env.
 # Keep secrets outside C's writable auth bind and forward only its approved keys.
+# ELEVENLABS_API_KEY is for the gateway's own voice transcription, which reads it
+# from process env; it is not in openclaw_claude_cli_skill_env, so containers never get it.
 - name: Create the host-only native skill environment directory
   ansible.builtin.file:
     path: /home/ubuntu/.config/openclaw
     state: directory
     mode: "0700"
 
-- name: Write configured Groq and Gemini credentials for native skill scripts
+- name: Write configured Groq, Gemini and ElevenLabs credentials to the gateway environment
   ansible.builtin.copy:
     dest: /home/ubuntu/.config/openclaw/claude-skills.env
     content: |
       GROQ_API_KEY={{ groq_api_key | default('') | to_json }}
       GEMINI_API_KEY={{ gemini_api_key | default('') | to_json }}
+      ELEVENLABS_API_KEY={{ elevenlabs_api_key | default('') | to_json }}
     mode: "0600"
   no_log: true
   notify: restart openclaw-gateway

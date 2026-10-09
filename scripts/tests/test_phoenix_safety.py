@@ -932,7 +932,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
             'telegramGroupId': ('PROVISION_TELEGRAM_GROUP_ID', '-12345'),
             'xaiApiKey': ('PROVISION_XAI_API_KEY', 'fixture-xai'),
             'groqApiKey': ('PROVISION_GROQ_API_KEY', 'fixture-groq'),
-            'openrouterApiKey': ('PROVISION_OPENROUTER_API_KEY', 'fixture-openrouter'),
+            'elevenlabsApiKey': ('PROVISION_ELEVENLABS_API_KEY', 'fixture-elevenlabs'),
             'geminiApiKey': ('PROVISION_GEMINI_API_KEY', 'fixture-gemini'),
             'obsidianAuthToken': ('PROVISION_OBSIDIAN_AUTH_TOKEN', 'fixture-obsidian'),
             'obsidianVaultPassword': ('PROVISION_OBSIDIAN_VAULT_PASSWORD', 'fixture-quote"\\slash\nline'),
