@@ -218,17 +218,22 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 self.assertEqual(store.get('channels', {}).get('whatsapp'), expected)
                 self.assertEqual('whatsapp' in store['plugins']['allow'], bool(agents))
 
-    def test_openrouter_plugin_is_allowed_only_with_an_openrouter_key(self):
-        for key in ('', 'fixture-openrouter-key'):
-            with self.subTest(openrouter=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+    def test_elevenlabs_plugin_is_allowed_only_with_an_elevenlabs_key(self):
+        for key in ('', 'fixture-elevenlabs-key'):
+            with self.subTest(elevenlabs=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
                 root = Path(tmp)
                 result = self.run_task([self.temp_files, self.configure], root,
-                                       {'openrouter_api_key': key, 'groq_api_key': 'fixture-groq-key'})
+                                       {'elevenlabs_api_key': key, 'groq_api_key': 'fixture-groq-key'})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertNotIn('fixture-openrouter-key', result.stdout + result.stderr)
-                allowed = self.json_writes(root)['plugins.allow']
-                self.assertEqual('openrouter' in allowed, bool(key))
+                self.assertNotIn('fixture-elevenlabs-key', result.stdout + result.stderr)
+                writes = self.json_writes(root)
+                allowed = writes['plugins.allow']
+                self.assertEqual('elevenlabs' in allowed, bool(key))
+                self.assertNotIn('openrouter', allowed)
                 self.assertNotIn('groq', allowed)
+                if key:
+                    self.assertEqual(writes['tools.media.models'][0]['provider'], 'elevenlabs')
+                self.assertNotIn('fixture-elevenlabs-key', (root / 'store.json').read_text())
 
     def test_sessions_on_the_primary_models_runtime_are_left_alone(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
