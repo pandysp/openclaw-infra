@@ -1,4 +1,22 @@
 ---
+# Plugin inventory uses the live gateway. A systemd restart returns before startup
+# finishes, especially after an upgrade. /startupz does not require healthy channels
+# (unlike /readyz), so broken channel configuration cannot block its own repair.
+- name: Wait for gateway startup before managing web providers
+  ansible.builtin.uri:
+    url: http://127.0.0.1:18789/startupz
+    use_proxy: false
+    timeout: 5
+    status_code: 200
+  register: web_plugin_startup
+  until:
+    - web_plugin_startup.status == 200
+    - web_plugin_startup.json.ok | default(false) == true
+    - web_plugin_startup.json.status | default('') == 'started'
+  retries: 30
+  delay: 5
+  changed_when: false
+
 # Search/fetch providers are official external plugins. Keep their SDK in
 # lockstep with core; newer packages can require a newer plugin API.
 - name: "Install compatible {{ web_plugin }} web provider"
