@@ -52,7 +52,7 @@ openclaw_custom_models:
           maxTokens: 128000
 # OpenClaw 2026.9.3+ supports Node >=24.16 <25 or >=26.1 (Node 26 recommended).
 nodejs_major_version: 26
-openclaw_version: "2026.9.8"
+openclaw_version: "2026.9.9"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
 claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
@@ -86,7 +86,7 @@ openclaw_claude_cli_skill_env:
   - NOTION_API_TOKEN
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in scripts/check-openclaw-contract.sh. Provisioning refuses scheduler changes on a mismatch.
-openclaw_docs_reviewed_version: "2026.9.8"
+openclaw_docs_reviewed_version: "2026.9.9"
 # Agent existence never opts into autonomous work. Deployments must explicitly
 # enable scheduled automation per agent in group_vars/openclaw.yml.
 openclaw_scheduled_automation_default: false
@@ -96,6 +96,10 @@ openclaw_agent_timeout_seconds: 1500  # 25 minutes per conversation turn (defaul
 # Derived, not set: WhatsApp is configured (channel config, owner binding) only when an agent delivers there.
 openclaw_whatsapp_used: "{{ openclaw_agents | default([]) | selectattr('deliver_channel', 'defined') | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0 }}"
 openclaw_elevated_default: "off"
+
+# Exa web search is enabled when exaApiKey is set in Pulumi.
+# Firecrawl's keyless web_fetch fallback runs only when local extraction fails.
+openclaw_firecrawl_enabled: true
 
 # Voice transcription (ElevenLabs Scribe v2)
 # Set via: pulumi config set elevenlabsApiKey --secret

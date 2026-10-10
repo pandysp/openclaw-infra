@@ -2,6 +2,14 @@
 - name: Provide configured credentials to native skill scripts
   ansible.builtin.include_tasks: skill-environment.yml
 
+- name: Install the configured web provider plugins
+  ansible.builtin.include_tasks: web-plugin.yml
+  loop: >-
+    {{ (['exa'] if exa_api_key | default('') | length > 0 else []) +
+       (['firecrawl'] if openclaw_firecrawl_enabled | bool else []) }}
+  loop_control:
+    loop_var: web_plugin
+
 - name: Write secrets and config to temp files
   ansible.builtin.copy:
     content: "{{ item.content }}"
@@ -12,8 +20,6 @@
   loop:
     - content: "{{ gateway_token }}"
       dest: /tmp/ansible-gateway-token
-    - content: "{{ xai_api_key | default('') }}"
-      dest: /tmp/ansible-xai-api-key
     - content: >-
         {%- set _google = {'providers': {'google': {'baseUrl': 'https://generativelanguage.googleapis.com/v1beta', 'apiKey': gemini_api_key, 'models': []}}} if (gemini_api_key is defined and gemini_api_key | length > 0) else {} -%}
         {{ openclaw_custom_models | combine(_google, recursive=true) | to_json }}
@@ -28,7 +34,6 @@
         set -euo pipefail
         export XDG_RUNTIME_DIR=/run/user/1000
         GATEWAY_TOKEN=$(cat /tmp/ansible-gateway-token)
-        XAI_API_KEY=$(cat /tmp/ansible-xai-api-key)
         CHANGED=""
         HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
         mkdir -p "$HASH_DIR"
@@ -76,29 +81,6 @@
         # Gateway auth + remote tokens (redacted by config get)
         check_set_secret gateway.auth.token "$GATEWAY_TOKEN" gateway-auth-token
         check_set_secret gateway.remote.token "$GATEWAY_TOKEN" gateway-remote-token
-
-        # Web search (Grok / xAI) — apiKey injected at plugins.entries.xai.config.webSearch.apiKey
-        # in playbook post_tasks. The legacy path tools.web.search.grok.apiKey is stripped by
-        # config validation in 2026.3.24+ (normalizeLegacyWebSearchConfigRecord), and the xai
-        # provider lacks getConfiguredCredentialValue to read the migrated value.
-        {% if xai_api_key is defined and xai_api_key | length > 0 %}
-        CURRENT_PROVIDER=$(openclaw config get tools.web.search.provider 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_PROVIDER=""
-        if [ "$CURRENT_PROVIDER" != "grok" ]; then
-            openclaw config set tools.web.search.provider grok
-            CHANGED="yes"
-        fi
-        CURRENT_TIMEOUT=$(openclaw config get tools.web.search.timeoutSeconds 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_TIMEOUT=""
-        if [ "$CURRENT_TIMEOUT" != "60" ]; then
-            openclaw config set tools.web.search.timeoutSeconds 60
-            CHANGED="yes"
-        fi
-        # Clean up legacy path (idempotent for fresh installs)
-        openclaw config unset tools.web.search.apiKey 2>/dev/null || true
-        {% else %}
-        for key in tools.web.search.provider tools.web.search.apiKey tools.web.search.grok.apiKey tools.web.search.timeoutSeconds plugins.entries.xai.config.webSearch.apiKey; do
-            check_unset "$key"
-        done
-        {% endif %}
 
         # Voice transcription cleanup (the setting is in the settings task)
         {% if not (elevenlabs_api_key is defined and elevenlabs_api_key | length > 0) %}
@@ -231,6 +213,33 @@
             fi
         }
 
+        # Exa searches; Firecrawl is a separate, explicitly selected fetch fallback.
+        # The Exa key stays in the gateway environment, not command arguments.
+        check_unset tools.web.search.apiKey
+        check_unset tools.web.search.grok.apiKey
+        {% if not (xai_api_key | default('') | length > 0) %}
+        check_unset plugins.entries.xai.config.webSearch.apiKey
+        {% endif %}
+        {% if exa_api_key | default('') | length > 0 %}
+        check_set tools.web.search.provider exa
+        check_set_json tools.web.search.enabled true
+        check_set tools.web.search.timeoutSeconds 60
+        check_set_json plugins.entries.exa.enabled true
+        {% else %}
+        check_set_json tools.web.search.enabled false
+        check_unset tools.web.search.provider
+        check_unset tools.web.search.timeoutSeconds
+        check_set_json plugins.entries.exa.enabled false
+        {% endif %}
+        {% if openclaw_firecrawl_enabled | bool %}
+        check_set tools.web.fetch.provider firecrawl
+        check_set_json tools.web.fetch.enabled true
+        check_set_json plugins.entries.firecrawl.enabled true
+        {% else %}
+        check_unset tools.web.fetch.provider
+        check_set_json plugins.entries.firecrawl.enabled false
+        {% endif %}
+
         # Tailscale Serve (its routes end with the gateway since 2026.8.x; resetOnExit was retired)
         check_set gateway.tailscale.mode serve
 
@@ -302,6 +311,13 @@
         {# WhatsApp/Discord ship as external channel plugins again since 2026.5.12 #}
         {# (installed by each channel role in plugin.yml); allowlist when configured. #}
         {% set plugin_allow = ["device-pair","memory-core","talk-voice","telegram","anthropic"] %}
+        {% if exa_api_key | default('') | length > 0 %}
+        {%   set _ = plugin_allow.append("exa") %}
+        {% endif %}
+        {% if openclaw_firecrawl_enabled | bool %}
+        {%   set _ = plugin_allow.append("firecrawl") %}
+        {% endif %}
+        {# xAI remains available for X search, independently of Exa web search. #}
         {% if xai_api_key is defined and xai_api_key | length > 0 %}
         {%   set _ = plugin_allow.append("xai") %}
         {% endif %}
@@ -463,7 +479,6 @@
       changed_when: false
       loop:
         - /tmp/ansible-gateway-token
-        - /tmp/ansible-xai-api-key
         - /tmp/ansible-custom-models
         - /tmp/ansible-model-fallbacks
 

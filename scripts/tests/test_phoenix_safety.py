@@ -29,9 +29,9 @@ BACKEND_ENV = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'PULUMI_BACKEND_URL
 REQUIRED_INPUTS = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'PULUMI_BACKEND_URL',
                    'PULUMI_CONFIG_PASSPHRASE', 'HCLOUD_TOKEN', 'GH_TOKEN', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET',
                    'CLAUDE_SETUP_TOKEN', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_USER_ID',
-                   'XAI_API_KEY', 'GITHUB_TOKEN_PAT', 'STAGING_PRIVATE_REPOSITORY')
+                   'XAI_API_KEY', 'EXA_API_KEY', 'GITHUB_TOKEN_PAT', 'STAGING_PRIVATE_REPOSITORY')
 SECRET_CONFIG_KEYS = ('hcloud:token', 'tailscaleAuthKey', 'claudeSetupToken', 'telegramBotToken',
-                      'xaiApiKey', 'githubToken', 'githubTokenTest')
+                      'xaiApiKey', 'exaApiKey', 'githubToken', 'githubTokenTest')
 
 # This fixture records argv/stdin separately so a secret in argv cannot go unnoticed.
 CLI = r'''#!/usr/bin/env python3

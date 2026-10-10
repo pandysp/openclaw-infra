@@ -334,6 +334,18 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
             self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
 
+    def test_removed_xai_key_is_cleared_but_configured_x_search_is_kept(self):
+        for key in ('', 'fixture-xai-key'):
+            with self.subTest(xai=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / 'store.json').write_text(json.dumps({'plugins': {'entries': {
+                    'xai': {'config': {'webSearch': {'apiKey': 'fixture-xai-key'}}}}}}))
+                result = self.run_task([self.temp_files, self.configure], root, {'xai_api_key': key})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                store = json.loads((root / 'store.json').read_text())
+                search = store['plugins']['entries']['xai']['config']['webSearch']
+                self.assertEqual(search.get('apiKey'), key or None)
+
     def test_sessions_on_the_primary_models_runtime_are_left_alone(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
             root = Path(tmp)
