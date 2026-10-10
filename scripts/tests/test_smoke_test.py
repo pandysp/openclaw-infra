@@ -68,7 +68,12 @@ globalThis.fetch = async (url, options = {}) => {
   assert(['github_get_file_contents', 'github-test_get_file_contents'].includes(body.tool));
   assert.equal(body.args.repo, 'private-repo');
   const refused = os.homedir()+'/gateway-restarting';
-  if (fs.existsSync(refused)) { fs.rmSync(refused); throw new TypeError('fetch failed'); }
+  if (fs.existsSync(refused)) {
+    if (mode !== 'policy_timeout_forever') fs.rmSync(refused);
+    if (mode.startsWith('policy_timeout')) throw new DOMException('fixture-secret-timeout', 'TimeoutError');
+    if (mode === 'policy_abort') throw new DOMException('fixture-secret-abort', 'AbortError');
+    throw new TypeError('fetch failed');
+  }
   const config = JSON.parse(fs.readFileSync(os.homedir()+'/gateway-snapshot.json','utf8'));
   if (config.tools?.deny?.includes('*') && mode !== 'tools_not_disabled') return {status:404};
   return {status: mode === 'mcp_failure' ? 500 : 200, json: async () => ({ok: true, result: {
@@ -149,7 +154,7 @@ else:raise AssertionError('Unexpected command')
             return result
 
     def test_inference_and_private_reads(self):
-        for case in ('success',):
+        for case in ('success', 'policy_timeout_once'):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -163,7 +168,7 @@ else:raise AssertionError('Unexpected command')
                      'no_auth', 'empty_gateway_token', 'unauthenticated_gateway_allowed',
                      'embedded_fallback', 'no_model_usage', 'invalid_usage', 'public_repo',
                      'anonymous_allowed', 'mcp_failure', 'mcp_error_result', 'invalid_mcp_json', 'tools_not_disabled',
-                     'no_container_launch'):
+                     'no_container_launch', 'policy_timeout_forever', 'policy_abort'):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertNotEqual(result.returncode, 0)
@@ -175,6 +180,8 @@ else:raise AssertionError('Unexpected command')
                     self.assertRegex(result.stdout, r'Inference run: [0-9a-f-]{36}')
                 if case == 'mcp_failure':
                     self.assertIn('HTTP 500', result.stderr)
+                if case == 'policy_timeout_forever':
+                    self.assertIn('120 s deadline exceeded', result.stderr)
 
     def test_write_capabilities_outside_inference_window_are_rejected(self):
         for case in ['native_tools_enabled','unsafe_tool_allowlist']:
