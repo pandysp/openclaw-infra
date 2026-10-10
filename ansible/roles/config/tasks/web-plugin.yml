@@ -1,0 +1,21 @@
+---
+# Search/fetch providers are official external plugins. Keep their SDK in
+# lockstep with core; newer packages can require a newer plugin API.
+- name: "Install compatible {{ web_plugin }} web provider"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    CURRENT=$(openclaw plugins list --json | jq -er --arg id "{{ web_plugin }}" '
+      .plugins | if type != "array" then error("Missing plugin inventory") else . end |
+      map(select(.id == $id)) | .[0].version // ""')
+    if [ "$CURRENT" != "{{ openclaw_version }}" ]; then
+        openclaw plugins install --pin --force "@openclaw/{{ web_plugin }}-plugin@{{ openclaw_version }}"
+        echo "INSTALLED: {{ web_plugin }}"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  register: web_plugin_install
+  changed_when: "'INSTALLED:' in web_plugin_install.stdout"
+  notify: restart openclaw-gateway

@@ -9,13 +9,15 @@
     state: directory
     mode: "0700"
 
-- name: Write configured Groq, Gemini and ElevenLabs credentials to the gateway environment
+- name: Write configured provider credentials to the gateway environment
   ansible.builtin.copy:
     dest: /home/ubuntu/.config/openclaw/claude-skills.env
     content: |
       GROQ_API_KEY={{ groq_api_key | default('') | to_json }}
       GEMINI_API_KEY={{ gemini_api_key | default('') | to_json }}
       ELEVENLABS_API_KEY={{ elevenlabs_api_key | default('') | to_json }}
+      EXA_API_KEY={{ exa_api_key | default('') | to_json }}
+      FIRECRAWL_API_KEY={{ firecrawl_api_key | default('') | to_json }}
     mode: "0600"
   no_log: true
   notify: restart openclaw-gateway

@@ -91,8 +91,9 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             raise RuntimeError("Install the project's Ansible development dependency first")
         python = shlex.split(Path(cls.ansible).read_text().splitlines()[0].removeprefix('#!'))
         code = 'import json,sys,yaml; print(json.dumps([yaml.safe_load(open(p)) for p in sys.argv[1:]]))'
-        tasks, cls.defaults = json.loads(subprocess.run(
-            [*python, '-c', code, str(TASKS), str(ROOT / 'ansible/group_vars/all.yml')],
+        tasks, cls.defaults, cls.skill_environment = json.loads(subprocess.run(
+            [*python, '-c', code, str(TASKS), str(ROOT / 'ansible/group_vars/all.yml'),
+             str(ROOT / 'ansible/roles/config/tasks/skill-environment.yml')],
             capture_output=True, text=True, check=True).stdout)
         cls.temp_files = find_task(tasks, TEMP_FILES)
         cls.configure = find_task(tasks, CONFIGURE)
@@ -112,6 +113,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         systemctl.chmod(0o700)
         # Point the tasks' fixed server and temp paths at this fixture tree.
         tasks = json.loads(json.dumps(tasks).replace('/home/ubuntu/.openclaw', str(root / 'state'))
+                           .replace('/home/ubuntu/.config', str(root / 'config'))
                            .replace('/tmp/ansible-', str(root / 'tmp-ansible-')))
         for task in tasks:
             task.pop('notify', None)
@@ -234,6 +236,120 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 if key:
                     self.assertEqual(writes['tools.media.models'][0]['provider'], 'elevenlabs')
                 self.assertNotIn('fixture-elevenlabs-key', (root / 'store.json').read_text())
+
+    def test_web_credentials_reach_gateway_environment_but_not_container_allowlist(self):
+        # Run only the directory and file tasks; systemd is outside this fixture.
+        tasks = [task for task in self.skill_environment
+                 if task.get('ansible.builtin.file', {}).get('path') == '/home/ubuntu/.config/openclaw'
+                 or task.get('ansible.builtin.copy', {}).get('dest') == '/home/ubuntu/.config/openclaw/claude-skills.env']
+        self.assertEqual(len(tasks), 2)
+        for provider in ('exa', 'firecrawl'):
+            env_name = f'{provider.upper()}_API_KEY'
+            self.assertNotIn(env_name, self.defaults['openclaw_claude_cli_skill_env'])
+            with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                for phase, key in (('initial', f'fixture-{provider}-key'),
+                                   ('repeated', f'fixture-{provider}-key'), ('removed', '')):
+                    with self.subTest(provider=provider, phase=phase):
+                        result = self.run_task(tasks, root, {f'{provider}_api_key': key})
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        env_file = root / 'config/openclaw/claude-skills.env'
+                        values = dict(line.split('=', 1) for line in shlex.split(env_file.read_text()))
+                        self.assertEqual(values[env_name], key)
+                        self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+                        self.assertEqual(env_file.parent.stat().st_mode & 0o777, 0o700)
+                        self.assertNotIn(f'fixture-{provider}-key', result.stdout + result.stderr)
+                        if phase == 'repeated':
+                            self.assertRegex(result.stdout, r'localhost\s+: ok=2\s+changed=0 ')
+
+    def test_exa_replaces_grok_without_removing_x_search_credentials(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            (root / 'store.json').write_text(json.dumps({
+                'tools': {'web': {'search': {'provider': 'grok', 'enabled': False, 'timeoutSeconds': 30}}},
+                'plugins': {'entries': {'xai': {'config': {'webSearch': {'apiKey': 'fixture-xai-key'}}}}},
+            }))
+            result = self.run_task([self.temp_files, self.configure], root,
+                                   {'exa_api_key': 'fixture-exa-key', 'xai_api_key': 'fixture-xai-key'})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            search = store['tools']['web']['search']
+            self.assertEqual(search['provider'], 'exa')
+            self.assertEqual(str(search['enabled']).lower(), 'true')
+            self.assertEqual(int(search['timeoutSeconds']), 60)
+            self.assertEqual(str(store['plugins']['entries']['exa']['enabled']).lower(), 'true')
+            self.assertIn('exa', store['plugins']['allow'])
+            self.assertIn('xai', store['plugins']['allow'])
+            self.assertEqual(store['plugins']['entries']['xai']['config']['webSearch']['apiKey'], 'fixture-xai-key')
+            self.assertNotIn('fixture-exa-key', (root / 'store.json').read_text())
+            self.assertNotIn('fixture-exa-key', result.stdout + result.stderr)
+
+    def test_an_absent_exa_key_disables_search_instead_of_falling_back_to_grok(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            (root / 'store.json').write_text(json.dumps({
+                'tools': {'web': {'search': {'provider': 'grok', 'enabled': True, 'timeoutSeconds': 60}}},
+                'plugins': {'entries': {'exa': {'enabled': True}}},
+            }))
+            result = self.run_task([self.temp_files, self.configure], root,
+                                   {'exa_api_key': '', 'xai_api_key': 'fixture-xai-key'})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            search = store['tools']['web']['search']
+            self.assertEqual(str(search['enabled']).lower(), 'false')
+            self.assertNotIn('provider', search)
+            self.assertNotIn('timeoutSeconds', search)
+            self.assertNotIn('exa', store['plugins']['allow'])
+            self.assertEqual(str(store['plugins']['entries']['exa']['enabled']).lower(), 'false')
+            self.assertIn('xai', store['plugins']['allow'])
+
+    def test_exa_and_keyless_firecrawl_converge_then_can_be_disabled(self):
+        self.assertIs(self.defaults['openclaw_firecrawl_enabled'], True)
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            tasks = [self.temp_files, self.configure, self.report]
+            extra = {'exa_api_key': 'fixture-exa-key'}
+            first = self.run_task(tasks, root, extra)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            fetch = store['tools']['web']['fetch']
+            self.assertEqual(fetch['provider'], 'firecrawl')
+            self.assertEqual(str(fetch['enabled']).lower(), 'true')
+            self.assertIn('firecrawl', store['plugins']['allow'])
+            self.assertEqual(str(store['plugins']['entries']['firecrawl']['enabled']).lower(), 'true')
+            self.assertNotIn('apiKey', store['plugins']['entries']['firecrawl'].get('config', {}).get('webFetch', {}))
+            (root / 'writes').unlink()
+            second = self.run_task(tasks, root, extra)
+            self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+            self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
+
+            disabled = self.run_task(tasks, root, {'exa_api_key': '', 'openclaw_firecrawl_enabled': False})
+            self.assertEqual(disabled.returncode, 0, disabled.stdout + disabled.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            self.assertNotIn('provider', store['tools']['web']['search'])
+            self.assertEqual(str(store['tools']['web']['search']['enabled']).lower(), 'false')
+            self.assertNotIn('provider', store['tools']['web']['fetch'])
+            # Disabling the hosted fallback must not disable ordinary page reads.
+            self.assertEqual(str(store['tools']['web']['fetch']['enabled']).lower(), 'true')
+            for plugin in ('exa', 'firecrawl'):
+                self.assertNotIn(plugin, store['plugins']['allow'])
+                self.assertEqual(str(store['plugins']['entries'][plugin]['enabled']).lower(), 'false')
+            (root / 'writes').unlink()
+            repeated = self.run_task(tasks, root, {'exa_api_key': '', 'openclaw_firecrawl_enabled': False})
+            self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+            self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
+
+    def test_removed_xai_key_is_cleared_but_configured_x_search_is_kept(self):
+        for key in ('', 'fixture-xai-key'):
+            with self.subTest(xai=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / 'store.json').write_text(json.dumps({'plugins': {'entries': {
+                    'xai': {'config': {'webSearch': {'apiKey': 'fixture-xai-key'}}}}}}))
+                result = self.run_task([self.temp_files, self.configure], root, {'xai_api_key': key})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                store = json.loads((root / 'store.json').read_text())
+                search = store['plugins']['entries']['xai']['config']['webSearch']
+                self.assertEqual(search.get('apiKey'), key or None)
 
     def test_sessions_on_the_primary_models_runtime_are_left_alone(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:

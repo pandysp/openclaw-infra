@@ -103,6 +103,18 @@ class ProvisionTransportTests(unittest.TestCase):
         self.assertTrue((self.root/'ansible-ran').exists())
         self.assertNotIn('ssh',(self.root/'calls').read_text().splitlines())
 
+    def test_web_provider_keys_are_serialized_without_shell_interpretation(self):
+        for provider in ('exa', 'firecrawl'):
+            with self.subTest(provider=provider):
+                key = f'fixture-{provider}-quote"\\slash\nline: true\nü'
+                self.env[f'PROVISION_{provider.upper()}_API_KEY'] = key
+                expected = json.loads(self.env['EXPECTED_SECRETS'])
+                expected[f'{provider}_api_key'] = key
+                self.env['EXPECTED_SECRETS'] = json.dumps(expected)
+                result = self.run_provisioner()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((self.root / 'ansible-ran').exists())
+
     def test_concurrent_run_is_refused_before_reading_anything(self):
         import fcntl
         lock = self.root/'.cache/openclaw-provision.lock'
