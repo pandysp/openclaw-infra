@@ -98,7 +98,8 @@ openclaw_whatsapp_used: "{{ openclaw_agents | default([]) | selectattr('deliver_
 openclaw_elevated_default: "off"
 
 # Exa web search is enabled when exaApiKey is set in Pulumi.
-# Firecrawl's keyless web_fetch fallback runs only when local extraction fails.
+# Firecrawl web_fetch fallback runs when local extraction fails; firecrawlApiKey
+# in Pulumi authenticates it (keyless access can be rejected by the service).
 openclaw_firecrawl_enabled: true
 
 # Voice transcription (ElevenLabs Scribe v2)
