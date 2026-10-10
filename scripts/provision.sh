@@ -120,6 +120,7 @@ else
     PROVISION_WORKSPACE_REPO_URL=$(config_value workspaceRepoUrl)
     PROVISION_XAI_API_KEY=$(config_value xaiApiKey)
     PROVISION_EXA_API_KEY=$(config_value exaApiKey)
+    PROVISION_FIRECRAWL_API_KEY=$(config_value firecrawlApiKey)
     PROVISION_GROQ_API_KEY=$(config_value groqApiKey)
     PROVISION_ELEVENLABS_API_KEY=$(config_value elevenlabsApiKey)
     PROVISION_GEMINI_API_KEY=$(config_value geminiApiKey)
@@ -134,7 +135,7 @@ else
         PROVISION_CLAUDE_SETUP_TOKEN \
         PROVISION_TELEGRAM_BOT_TOKEN PROVISION_TELEGRAM_USER_ID PROVISION_TELEGRAM_GROUP_ID \
         PROVISION_WORKSPACE_REPO_URL PROVISION_WORKSPACE_DEPLOY_KEY \
-        PROVISION_XAI_API_KEY PROVISION_EXA_API_KEY PROVISION_GROQ_API_KEY PROVISION_ELEVENLABS_API_KEY PROVISION_GEMINI_API_KEY PROVISION_GITHUB_TOKEN \
+        PROVISION_XAI_API_KEY PROVISION_EXA_API_KEY PROVISION_FIRECRAWL_API_KEY PROVISION_GROQ_API_KEY PROVISION_ELEVENLABS_API_KEY PROVISION_GEMINI_API_KEY PROVISION_GITHUB_TOKEN \
         PROVISION_OBSIDIAN_AUTH_TOKEN PROVISION_OBSIDIAN_VAULT_PASSWORD \
         PROVISION_DISCORD_BOT_TOKEN PROVISION_DISCORD_GUILD_ID PROVISION_DISCORD_USER_ID
 
@@ -234,7 +235,9 @@ echo "  claude_setup_token: set"
 echo "  telegram: $([ -n "$(read_env PROVISION_TELEGRAM_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  discord: $([ -n "$(read_env PROVISION_DISCORD_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (main): $([ -n "$(read_env PROVISION_WORKSPACE_REPO_URL)" ] && echo "configured" || echo "skipped")"
-echo "  grok_search: $([ -n "$(read_env PROVISION_XAI_API_KEY)" ] && echo "configured" || echo "skipped")"
+echo "  exa_search: $([ -n "$(read_env PROVISION_EXA_API_KEY)" ] && echo "configured" || echo "skipped")"
+echo "  firecrawl_credential: $([ -n "$(read_env PROVISION_FIRECRAWL_API_KEY)" ] && echo "configured" || echo "keyless")"
+echo "  x_search: $([ -n "$(read_env PROVISION_XAI_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  groq_skills: $([ -n "$(read_env PROVISION_GROQ_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  elevenlabs_voice: $([ -n "$(read_env PROVISION_ELEVENLABS_API_KEY)" ] && echo "configured" || echo "skipped")"
 echo "  gemini_image: $([ -n "$(read_env PROVISION_GEMINI_API_KEY)" ] && echo "configured" || echo "skipped")"
@@ -269,6 +272,7 @@ static = [
     ('workspace_deploy_key', 'PROVISION_WORKSPACE_DEPLOY_KEY'),
     ('xai_api_key', 'PROVISION_XAI_API_KEY'),
     ('exa_api_key', 'PROVISION_EXA_API_KEY'),
+    ('firecrawl_api_key', 'PROVISION_FIRECRAWL_API_KEY'),
     ('groq_api_key', 'PROVISION_GROQ_API_KEY'),
     ('elevenlabs_api_key', 'PROVISION_ELEVENLABS_API_KEY'),
     ('gemini_api_key', 'PROVISION_GEMINI_API_KEY'),
