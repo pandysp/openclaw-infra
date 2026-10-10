@@ -126,7 +126,7 @@ try {
   const waitForToolPolicy = async denied => {
     for (const agent of ['main', 'test']) {
       step = `${denied ? 'disabling' : 'restoring'} tool access for ${agent}`;
-      // A restart takes ~10-20 s on staging; refused connections mean "not up yet".
+      // A running service can still refuse or stall HTTP requests while booting.
       const deadline = Date.now() + 120000;
       let applied = false;
       while (!applied && Date.now() < deadline) {
@@ -138,7 +138,8 @@ try {
             body: JSON.stringify({...mainRead, tool: `${agent === 'main' ? 'github' : 'github-test'}_get_file_contents`, sessionKey: `agent:${agent}:main`}),
           });
         } catch (error) {
-          if (!(error instanceof TypeError)) throw error;
+          if (!(error instanceof TypeError) && error.name !== 'TimeoutError') throw error;
+          if (error.name === 'TimeoutError') console.log('    Waiting for a gateway tool-policy response after restart...');
           await new Promise(resolve => setTimeout(resolve, 1000));
           continue;
         }
@@ -146,6 +147,7 @@ try {
         applied = response.status === (denied ? 404 : 200);
         if (!applied) await new Promise(resolve => setTimeout(resolve, 1000));
       }
+      if (!applied) step += ' (120 s deadline exceeded)';
       assert(applied);
     }
   };
@@ -194,6 +196,8 @@ try {
   const detail = typeof error.status === 'number' ? `CLI exit ${error.status}`
     : ['SIGTERM', 'SIGKILL'].includes(error.signal) ? `CLI terminated by ${error.signal}`
     : error instanceof SyntaxError ? 'invalid JSON response'
+    : error.name === 'TimeoutError' ? 'request timed out'
+    : error.name === 'AbortError' ? 'request cancelled'
     : error.code === 'ERR_ASSERTION' ? 'unexpected result' : 'request or local read failed';
   console.error(`Smoke test failed during ${step}: ${detail}. Raw output withheld.`);
   process.exitCode = 1;

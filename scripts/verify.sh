@@ -103,22 +103,11 @@ else
     echo "   Check logs: ssh ubuntu@$FULL_HOSTNAME 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status openclaw-gateway'"
 fi
 
-# 5. Check Tailscale Serve
+# Foreground Serve can use a dynamic edge port; verify the public HTTPS route
+# instead of inferring availability from the human-readable Serve configuration.
+# 5. Check gateway health endpoint
 echo ""
-echo "5. Checking Tailscale Serve configuration..."
-SERVE_STATUS=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
-    "tailscale serve status 2>&1" || echo "")
-
-if [[ "$SERVE_STATUS" == *"18789"* ]]; then
-    check_pass "Tailscale Serve configured correctly"
-else
-    check_warn "Tailscale Serve may not be configured"
-    echo "   Status: $SERVE_STATUS"
-fi
-
-# 6. Check gateway health endpoint
-echo ""
-echo "6. Checking gateway health..."
+echo "5. Checking gateway health..."
 if HTTP_STATUS=$(curl --silent --show-error --max-time 10 --output /dev/null \
     --write-out '%{http_code}' "https://$FULL_HOSTNAME/") && [[ "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
     check_pass "Gateway responding at https://$FULL_HOSTNAME/"
@@ -126,9 +115,9 @@ else
     check_fail "Gateway HTTPS request did not complete with HTTP success"
 fi
 
-# 7. Check gateway port on localhost (18789 is the only port openclaw binds)
+# 6. Check gateway port on localhost (18789 is the only port openclaw binds)
 echo ""
-echo "7. Checking local ports on server..."
+echo "6. Checking local ports on server..."
 PORTS_CHECK=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "ss -tlnp | grep -E ':18789'" 2>/dev/null || echo "")
 
@@ -139,12 +128,12 @@ else
     check_warn "Gateway port 18789 not found"
 fi
 
-# 8. Security audit: no public ports
+# 7. Security audit: no public ports
 # Force IPv4 for the scan — BSD nc on macOS ignores -w for IPv6 and hangs
 # indefinitely on unreachable addresses. The Hetzner cloud firewall applies
 # uniformly to v4 and v6, so scanning v4 is sufficient to confirm the intent.
 echo ""
-echo "8. Security audit: Checking for exposed ports..."
+echo "7. Security audit: Checking for exposed ports..."
 PUBLIC_IP="${STAGING_PUBLIC_IP:-}"
 if { [[ -n "$PUBLIC_IP" ]] || PUBLIC_IP=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "curl --fail --silent --show-error --ipv4 --max-time 5 https://ifconfig.me" 2>/dev/null); } &&
@@ -179,10 +168,10 @@ else
     check_fail "Could not determine server public IPv4; public-port checks were not performed"
 fi
 
-# 9. OpenClaw health check
+# 8. OpenClaw health check
 # Require a completed command and an explicit healthy JSON result.
 echo ""
-echo "9. Checking OpenClaw health..."
+echo "8. Checking OpenClaw health..."
 if OPENCLAW_HEALTH=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" "timeout 60 openclaw health --json"); then
     if printf '%s' "$OPENCLAW_HEALTH" | jq -se 'length == 1 and (.[0] | type == "object" and .ok == true)' >/dev/null; then
         check_pass "OpenClaw health OK"
@@ -193,9 +182,9 @@ else
     check_fail "OpenClaw health did not complete successfully (SSH, timeout or health failure)"
 fi
 
-# 10. OpenClaw security audit
+# 9. OpenClaw security audit
 echo ""
-echo "10. Running OpenClaw security audit..."
+echo "9. Running OpenClaw security audit..."
 if SECURITY_AUDIT=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "timeout 180 openclaw security audit --deep --json"); then
     if printf '%s' "$SECURITY_AUDIT" | jq -se \
@@ -208,9 +197,9 @@ else
     check_fail "Security audit did not complete successfully (SSH, timeout or audit failure)"
 fi
 
-# 11. Channel status — one SSH call, parse once per channel
+# 10. Channel status — one SSH call, parse once per channel
 echo ""
-echo "11. Checking configured channels..."
+echo "10. Checking configured channels..."
 if CHANNELS_STATUS=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "timeout 60 openclaw channels status --json" 2>/dev/null) &&
     printf '%s' "$CHANNELS_STATUS" | jq -es --arg required "${REQUIRED_CHANNELS:-}" '
@@ -227,9 +216,9 @@ else
     check_fail "Channel query failed, a required channel is missing, or an account is unhealthy"
 fi
 
-# 12. Check scheduled automation policy
+# 11. Check scheduled automation policy
 echo ""
-echo "12. Checking scheduled automation policy..."
+echo "11. Checking scheduled automation policy..."
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 POLICY_OK=true
 POLICY_PYTHON=python3
@@ -358,10 +347,10 @@ else
     check_fail "agents.defaults.skipBootstrap is '$SKIP_BOOTSTRAP', expected true — context files may be re-scaffolded"
 fi
 
-# 13. Check local gateway token (Mac client only)
+# 12. Check local gateway token (Mac client only)
 LOCAL_CONFIG="$HOME/.openclaw/openclaw.json"
 echo ""
-echo "13. Checking local gateway token..."
+echo "12. Checking local gateway token..."
 if [[ ! -f "$LOCAL_CONFIG" ]]; then
     echo "   Local OpenClaw CLI config not present (optional on this machine)"
 elif ! TOKEN_LEN=$(OPENCLAW_CONFIG="$LOCAL_CONFIG" python3 -c "
@@ -378,10 +367,10 @@ else
     echo "   Fix: configure the local CLI as in AGENTS.md (Local CLI); never print the gateway token."
 fi
 
-# 14. Version match — IaC pin vs installed. Catches drift between the VPS and the
+# 13. Version match — IaC pin vs installed. Catches drift between the VPS and the
 # local CLI, which must stay in lockstep to avoid protocol mismatches.
 echo ""
-echo "14. Checking version alignment (IaC pin vs installed)..."
+echo "13. Checking version alignment (IaC pin vs installed)..."
 IAC_VERSION=$(grep -E '^openclaw_version:' "$(dirname "${BASH_SOURCE[0]}")/../ansible/group_vars/all.yml" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
 VPS_VERSION=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" 'openclaw --version' 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
 LOCAL_VERSION=$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")

@@ -14,11 +14,11 @@ class SecurityAuditGateTests(unittest.TestCase):
     def run_gate(self, payload, ssh_status=0, section='audit', socket_error=None):
         source = SCRIPT.read_text()
         functions = source[source.index('check_pass() {'):source.index('# 1. Check Tailscale')]
-        markers = {'audit': ('# 10. OpenClaw security audit', '# 11. Channel status'),
-                   'health': ('# 9. OpenClaw health check', '# 10. OpenClaw security audit'),
-                   'https': ('# 6. Check gateway health endpoint', '# 7. Check gateway port'),
-                   'ports': ('# 8. Security audit', '# 9. OpenClaw health check'),
-                   'channels': ('# 11. Channel status', '# 12. Check scheduled automation')}
+        markers = {'audit': ('# 9. OpenClaw security audit', '# 10. Channel status'),
+                   'health': ('# 8. OpenClaw health check', '# 9. OpenClaw security audit'),
+                   'https': ('# 5. Check gateway health endpoint', '# 6. Check gateway port'),
+                   'ports': ('# 7. Security audit', '# 8. OpenClaw health check'),
+                   'channels': ('# 10. Channel status', '# 11. Check scheduled automation')}
         start, end = markers[section]
         audit = source[source.index(start):source.index(end)]
         final = source[source.index('if [[ "$FAILURES" -gt 0 ]]'):]
@@ -66,8 +66,9 @@ class SecurityAuditGateTests(unittest.TestCase):
             self.assertEqual(calls.read_text().splitlines(), ['status --json'])
             self.assertIn('Tailscale can reach fixture', result.stdout)
 
-    def test_only_structured_openclaw_status_remains(self):
+    def test_no_redundant_human_readable_gateway_status_checks(self):
         source = SCRIPT.read_text()
+        self.assertNotIn('tailscale serve status', source)
         self.assertEqual(source.count('openclaw status'), 1)
         self.assertIn('openclaw status --json', source)
         self.assertNotIn('OPENCLAW_STATUS', source)
