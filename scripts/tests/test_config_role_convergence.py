@@ -237,25 +237,30 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                     self.assertEqual(writes['tools.media.models'][0]['provider'], 'elevenlabs')
                 self.assertNotIn('fixture-elevenlabs-key', (root / 'store.json').read_text())
 
-    def test_exa_credential_reaches_gateway_environment_but_not_container_allowlist(self):
-        self.assertNotIn('EXA_API_KEY', self.defaults['openclaw_claude_cli_skill_env'])
+    def test_web_credentials_reach_gateway_environment_but_not_container_allowlist(self):
         # Run only the directory and file tasks; systemd is outside this fixture.
         tasks = [task for task in self.skill_environment
                  if task.get('ansible.builtin.file', {}).get('path') == '/home/ubuntu/.config/openclaw'
                  or task.get('ansible.builtin.copy', {}).get('dest') == '/home/ubuntu/.config/openclaw/claude-skills.env']
         self.assertEqual(len(tasks), 2)
-        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
-            root = Path(tmp)
-            for key in ('fixture-exa-key', ''):
-                with self.subTest(configured=bool(key)):
-                    result = self.run_task(tasks, root, {'exa_api_key': key})
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    env_file = root / 'config/openclaw/claude-skills.env'
-                    values = dict(line.split('=', 1) for line in shlex.split(env_file.read_text()))
-                    self.assertEqual(values['EXA_API_KEY'], key)
-                    self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
-                    self.assertEqual(env_file.parent.stat().st_mode & 0o777, 0o700)
-                    self.assertNotIn('fixture-exa-key', result.stdout + result.stderr)
+        for provider in ('exa', 'firecrawl'):
+            env_name = f'{provider.upper()}_API_KEY'
+            self.assertNotIn(env_name, self.defaults['openclaw_claude_cli_skill_env'])
+            with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                for phase, key in (('initial', f'fixture-{provider}-key'),
+                                   ('repeated', f'fixture-{provider}-key'), ('removed', '')):
+                    with self.subTest(provider=provider, phase=phase):
+                        result = self.run_task(tasks, root, {f'{provider}_api_key': key})
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        env_file = root / 'config/openclaw/claude-skills.env'
+                        values = dict(line.split('=', 1) for line in shlex.split(env_file.read_text()))
+                        self.assertEqual(values[env_name], key)
+                        self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+                        self.assertEqual(env_file.parent.stat().st_mode & 0o777, 0o700)
+                        self.assertNotIn(f'fixture-{provider}-key', result.stdout + result.stderr)
+                        if phase == 'repeated':
+                            self.assertRegex(result.stdout, r'localhost\s+: ok=2\s+changed=0 ')
 
     def test_exa_replaces_grok_without_removing_x_search_credentials(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
