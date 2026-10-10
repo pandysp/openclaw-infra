@@ -350,9 +350,10 @@ Do not run host-side Git inside an agent workspace: the agent can write `.git/co
 
 Exa provides search results and source excerpts. Set the Pulumi secret `exaApiKey`;
 Ansible supplies `EXA_API_KEY` through the gateway's private environment file.
-Without the key, managed web search is disabled rather than falling back to xAI.
-Claude's native search is a separate capability. The optional `xaiApiKey` remains
-available for X search.
+Without the key, web search is disabled rather than falling back to xAI.
+In 2026.9.9, explicitly selecting Exa also disables Claude's native WebSearch,
+leaving OpenClaw's search tool available through its MCP bridge. The optional
+`xaiApiKey` remains available for X search.
 
 The config role installs the official Exa and Firecrawl plugins pinned to
 `openclaw_version`. Firecrawl is an explicitly selected, keyless `web_fetch`
@@ -376,10 +377,10 @@ openclaw gateway call webSearch.status --json
 openclaw gateway call webSearch.test --params '{"providerId":"exa","query":"OpenClaw documentation"}' --json
 ```
 
-A provider test proves Exa works; a separate agent-turn test is needed to prove
-Claude chose that tool rather than its native search. Likewise, fetching a page
-with Readability does not prove Firecrawl ran: inspect the fetch result's
-`extractor` when testing the fallback.
+A provider test proves Exa works, not that an agent completed a search turn.
+Firecrawl applies to OpenClaw's `web_fetch`; Claude's native WebFetch is not
+reconfigured by this setting. Fetching a page with Readability does not prove
+Firecrawl ran: inspect the fetch result's `extractor` when testing the fallback.
 
 To disable managed search, remove the key and re-provision:
 
