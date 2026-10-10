@@ -378,10 +378,12 @@ cd ..
 Check the provider, not just gateway health. These calls do not create a chat:
 
 ```bash
-openclaw gateway call webSearch.status --json
-openclaw gateway call webSearch.test --params '{"providerId":"exa","query":"OpenClaw documentation"}' --json
+openclaw gateway call webSearch.status --params '{"agentId":"main"}' --json
+openclaw gateway call webSearch.test --params '{"agentId":"main","providerId":"exa","query":"OpenClaw documentation"}' --json
 ```
 
+Select a configured agent explicitly (`main` above); multi-agent deployments
+otherwise reject the test because model authentication has no single owner.
 A provider test proves Exa works, not that an agent completed a search turn.
 Firecrawl applies to OpenClaw's `web_fetch`; Claude's native WebFetch is not
 reconfigured by this setting. Fetching a page with Readability does not prove
