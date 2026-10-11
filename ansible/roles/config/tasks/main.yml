@@ -10,477 +10,73 @@
   loop_control:
     loop_var: web_plugin
 
-- name: Write secrets and config to temp files
+- name: Apply managed gateway configuration
+  ansible.builtin.include_tasks: gateway-config.yml
+
+- name: Check daemon service file token matches gateway.auth.token
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    SERVICE_FILE="/home/ubuntu/.config/systemd/user/openclaw-gateway.service"
+    [ -f "$SERVICE_FILE" ] || { echo "SKIP: no service file"; exit 0; }
+
+    # Older service files can retain a token that overrides the config.
+    SERVICE_TOKEN=$(grep -oP 'OPENCLAW_GATEWAY_TOKEN=\K[^\s"]+' "$SERVICE_FILE") || {
+        rc=$?
+        [ "$rc" -eq 1 ] || exit "$rc"
+        SERVICE_TOKEN=""
+    }
+    [ -n "$SERVICE_TOKEN" ] || { echo "SKIP: no token in service file"; exit 0; }
+    CONFIG_TOKEN=$(jq -r '.gateway.auth.token // empty' /home/ubuntu/.openclaw/openclaw.json)
+    [ -n "$CONFIG_TOKEN" ] || { echo "ERROR: configured gateway token is missing"; exit 1; }
+    if [ "$SERVICE_TOKEN" != "$CONFIG_TOKEN" ]; then
+        openclaw daemon install --force
+        systemctl --user daemon-reload
+        echo "REGENERATED: service file token updated to match gateway.auth.token"
+    else
+        echo "OK"
+    fi
+  args:
+    executable: /bin/bash
+  no_log: true
+  register: daemon_token_sync
+  changed_when: "'REGENERATED' in daemon_token_sync.stdout"
+  notify: restart openclaw-gateway
+
+# Workaround for openclaw/openclaw#54555: xAI's web search credential reader
+# misses plugin config. The environment also supplies independent X search.
+- name: Ensure gateway service drop-in directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d
+    state: directory
+    mode: "0755"
+
+- name: Set XAI_API_KEY env var in gateway service (openclaw#54555 workaround)
   ansible.builtin.copy:
-    content: "{{ item.content }}"
-    dest: "{{ item.dest }}"
+    dest: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/xai-api-key.conf
+    content: |
+      [Service]
+      Environment=XAI_API_KEY={{ xai_api_key }}
     mode: "0600"
   no_log: true
-  changed_when: false
-  loop:
-    - content: "{{ gateway_token }}"
-      dest: /tmp/ansible-gateway-token
-    - content: >-
-        {%- set _google = {'providers': {'google': {'baseUrl': 'https://generativelanguage.googleapis.com/v1beta', 'apiKey': gemini_api_key, 'models': []}}} if (gemini_api_key is defined and gemini_api_key | length > 0) else {} -%}
-        {{ openclaw_custom_models | combine(_google, recursive=true) | to_json }}
-      dest: /tmp/ansible-custom-models
-    - content: "{{ openclaw_model_fallbacks | to_json }}"
-      dest: /tmp/ansible-model-fallbacks
+  when: xai_api_key is defined and xai_api_key | length > 0
+  register: xai_dropin
 
-- name: Configure gateway with secret cleanup
-  block:
-    - name: Configure gateway secrets (auth tokens, API keys)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        GATEWAY_TOKEN=$(cat /tmp/ansible-gateway-token)
-        CHANGED=""
-        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
-        mkdir -p "$HASH_DIR"
+- name: Remove XAI_API_KEY drop-in when key is absent
+  ansible.builtin.file:
+    path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/xai-api-key.conf
+    state: absent
+  when: not (xai_api_key is defined and xai_api_key | length > 0)
+  register: xai_dropin_absent
 
-        # Helper: unset a config key, ignoring "not found" errors
-        check_unset() {
-            local key="$1" output
-            output=$(openclaw config unset "$key" 2>&1) && {
-                CHANGED="yes"
-            } || {
-                if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
-                    true
-                else
-                    echo "ERROR: Failed to unset $key: $output"
-                    exit 1
-                fi
-            }
-        }
-
-        # Helper: hash-file comparison for secrets (config get redacts secrets,
-        # so we store the hash of what we SET and compare on next run)
-        check_set_secret() {
-            local key="$1" value="$2" hash_name="$3"
-            local desired_hash current_hash key_exists
-            desired_hash=$(echo -n "$value" | sha256sum | cut -d' ' -f1)
-            current_hash=$(cat "$HASH_DIR/$hash_name" 2>/dev/null) || current_hash=""
-            # Guard: if the config key was wiped (e.g. by onboard), force re-set
-            # even if hash matches. config get on secrets returns redacted text,
-            # but returns non-zero / "not found" if the key is missing entirely.
-            key_exists=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || key_exists=""
-            if [ "$desired_hash" != "$current_hash" ] || [ -z "$key_exists" ]; then
-                openclaw config set "$key" "$value"
-                echo "$desired_hash" > "$HASH_DIR/$hash_name"
-                CHANGED="yes"
-            fi
-        }
-
-        # Auth: token mode
-        CURRENT_MODE=$(openclaw config get gateway.auth.mode 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_MODE=""
-        if [ "$CURRENT_MODE" != "token" ]; then
-            openclaw config set gateway.auth.mode token
-            CHANGED="yes"
-        fi
-
-        # Gateway auth + remote tokens (redacted by config get)
-        check_set_secret gateway.auth.token "$GATEWAY_TOKEN" gateway-auth-token
-        check_set_secret gateway.remote.token "$GATEWAY_TOKEN" gateway-remote-token
-
-        # Voice transcription cleanup (the setting is in the settings task)
-        {% if not (elevenlabs_api_key is defined and elevenlabs_api_key | length > 0) %}
-        for key in tools.media.audio.enabled tools.media.models; do
-            check_unset "$key"
-        done
-        {% endif %}
-
-        if [ -n "$CHANGED" ]; then echo "UPDATED"; else echo "OK"; fi
-      args:
-        executable: /bin/bash
-      no_log: true
-      register: config_secrets
-      changed_when: "'UPDATED' in config_secrets.stdout"
-      notify: restart openclaw-gateway
-
-    - name: Check daemon service file token matches gateway.auth.token
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        SERVICE_FILE="/home/ubuntu/.config/systemd/user/openclaw-gateway.service"
-        [ -f "$SERVICE_FILE" ] || { echo "SKIP: no service file"; exit 0; }
-
-        # Extract token from service file Environment= line
-        SERVICE_TOKEN=$(grep -oP 'OPENCLAW_GATEWAY_TOKEN=\K[^\s"]+' "$SERVICE_FILE" 2>/dev/null) || SERVICE_TOKEN=""
-        [ -n "$SERVICE_TOKEN" ] || { echo "SKIP: no token in service file"; exit 0; }
-
-        # Get current config token (read from JSON file — config get redacts secrets)
-        CONFIG_TOKEN=$(jq -r '.gateway.auth.token // empty' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null) || CONFIG_TOKEN=""
-        [ -n "$CONFIG_TOKEN" ] || { echo "SKIP: no config token"; exit 0; }
-
-        # Compare via SHA-256 hash
-        SERVICE_HASH=$(echo -n "$SERVICE_TOKEN" | sha256sum | cut -d' ' -f1)
-        CONFIG_HASH=$(echo -n "$CONFIG_TOKEN" | sha256sum | cut -d' ' -f1)
-
-        if [ "$SERVICE_HASH" != "$CONFIG_HASH" ]; then
-            openclaw daemon install --force
-            systemctl --user daemon-reload
-            echo "REGENERATED: service file token updated to match gateway.auth.token"
-        else
-            echo "OK"
-        fi
-      args:
-        executable: /bin/bash
-      no_log: true
-      register: daemon_token_sync
-      changed_when: "'REGENERATED' in daemon_token_sync.stdout"
-      notify: restart openclaw-gateway
-
-    # Workaround for openclaw/openclaw#54555: the xai web search provider is
-    # missing getConfiguredCredentialValue, so it can't read the API key from
-    # plugins.entries.xai.config.webSearch.apiKey (where the config loader
-    # migrates it). The env var fallback bypasses this entirely.
-    # Remove when #54555 is fixed (PR #54621 pending review).
-    - name: Ensure gateway service drop-in directory exists
-      ansible.builtin.file:
-        path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d
-        state: directory
-        mode: "0755"
-
-    - name: Set XAI_API_KEY env var in gateway service (openclaw#54555 workaround)
-      ansible.builtin.copy:
-        dest: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/xai-api-key.conf
-        content: |
-          [Service]
-          Environment=XAI_API_KEY={{ xai_api_key }}
-        mode: "0600"
-      no_log: true
-      when: xai_api_key is defined and xai_api_key | length > 0
-      register: xai_dropin
-
-    - name: Remove XAI_API_KEY drop-in when key is absent
-      ansible.builtin.file:
-        path: /home/ubuntu/.config/systemd/user/openclaw-gateway.service.d/xai-api-key.conf
-        state: absent
-      when: not (xai_api_key is defined and xai_api_key | length > 0)
-      register: xai_dropin_absent
-
-    - name: Reload systemd after drop-in change
-      ansible.builtin.systemd:
-        daemon_reload: true
-        scope: user
-      environment:
-        XDG_RUNTIME_DIR: "/run/user/1000"
-      when: (xai_dropin is defined and xai_dropin.changed) or (xai_dropin_absent is defined and xai_dropin_absent.changed)
-      notify: restart openclaw-gateway
-
-    - name: Configure gateway settings
-      ansible.builtin.shell: |
-        set -euo pipefail
-        export XDG_RUNTIME_DIR=/run/user/1000
-        CHANGED=""
-
-        # Helper: compare scalar config value, set if different
-        check_set() {
-            local key="$1" desired="$2"
-            local current
-            current=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || current=""
-            if [ "$current" != "$desired" ]; then
-                openclaw config set "$key" "$desired"
-                CHANGED="$CHANGED $key"
-            fi
-        }
-
-        # Helper: unset a config key, ignoring "not found" errors
-        check_unset() {
-            local key="$1" output
-            output=$(openclaw config unset "$key" 2>&1) && {
-                CHANGED="$CHANGED $key"
-            } || {
-                if echo "$output" | grep -qi "not set\|not found\|does not exist"; then
-                    true
-                else
-                    echo "ERROR: Failed to unset $key: $output"
-                    exit 1
-                fi
-            }
-        }
-
-        # Helper: compare JSON config value (normalized), set if different
-        check_set_json() {
-            local key="$1" desired="$2"
-            local current c_norm d_norm
-            current=$(openclaw config get "$key" 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || current=""
-            c_norm=$(echo "$current" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
-            d_norm=$(echo "$desired" | jq -cS '.')
-            if [ "$c_norm" = "PARSE_FAIL" ] || [ "$c_norm" != "$d_norm" ]; then
-                openclaw config set "$key" --json "$desired"
-                CHANGED="$CHANGED $key"
-            fi
-        }
-
-        # Exa searches; Firecrawl is a separate, explicitly selected fetch fallback.
-        # The Exa key stays in the gateway environment, not command arguments.
-        check_unset tools.web.search.apiKey
-        check_unset tools.web.search.grok.apiKey
-        {% if not (xai_api_key | default('') | length > 0) %}
-        check_unset plugins.entries.xai.config.webSearch.apiKey
-        {% endif %}
-        {% if exa_api_key | default('') | length > 0 %}
-        check_set tools.web.search.provider exa
-        check_set_json tools.web.search.enabled true
-        check_set tools.web.search.timeoutSeconds 60
-        check_set_json plugins.entries.exa.enabled true
-        {% else %}
-        check_set_json tools.web.search.enabled false
-        check_unset tools.web.search.provider
-        check_unset tools.web.search.timeoutSeconds
-        check_set_json plugins.entries.exa.enabled false
-        {% endif %}
-        {% if openclaw_firecrawl_enabled | bool %}
-        check_set tools.web.fetch.provider firecrawl
-        check_set_json tools.web.fetch.enabled true
-        check_set_json plugins.entries.firecrawl.enabled true
-        {% else %}
-        check_unset tools.web.fetch.provider
-        check_set_json plugins.entries.firecrawl.enabled false
-        {% endif %}
-
-        # Tailscale Serve (its routes end with the gateway since 2026.8.x; resetOnExit was retired)
-        check_set gateway.tailscale.mode serve
-
-        # Trusted proxies: localhost + Tailscale CGNAT range
-        check_set_json gateway.trustedProxies '["127.0.0.1", "100.64.0.0/10"]'
-
-        # Control UI
-        check_set gateway.controlUi.enabled true
-
-        # Auth: Tailscale identity
-        check_set gateway.auth.allowTailscale true
-
-        # Model defaults
-        check_set agents.defaults.model.primary "{{ openclaw_model_primary }}"
-        check_set_json agents.defaults.model.fallbacks "$(cat /tmp/ansible-model-fallbacks)"
-        check_set agents.defaults.thinkingDefault "{{ openclaw_thinking_default }}"
-
-        # Custom models: hash-based comparison (server enriches config with extra fields,
-        # so direct JSON comparison always finds a diff). Hash the desired value instead.
-        # Guard: if the config key was wiped (e.g. by onboard), force re-set even if hash matches.
-        DESIRED_MODELS=$(cat /tmp/ansible-custom-models)
-        HASH_DIR="/home/ubuntu/.openclaw/.ansible-hashes"
-        mkdir -p "$HASH_DIR"
-        DESIRED_HASH=$(echo "$DESIRED_MODELS" | jq -cS '.' | sha256sum | cut -d' ' -f1)
-        CURRENT_HASH=$(cat "$HASH_DIR/custom-models" 2>/dev/null) || CURRENT_HASH=""
-        # Detect an external reset by comparing the mode, when one is declared: an
-        # empty custom-model set has no mode, and treating that as "missing"
-        # rewrote it on every run.
-        DESIRED_MODE=$(echo "$DESIRED_MODELS" | jq -r '.mode // empty')
-        CURRENT_MODE=""
-        if [ -n "$DESIRED_MODE" ]; then
-            CURRENT_MODE=$(openclaw config get models.mode 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_MODE=""
-        fi
-        if [ "$DESIRED_HASH" != "$CURRENT_HASH" ] || [ "$CURRENT_MODE" != "$DESIRED_MODE" ]; then
-            # --replace: since 2026.4.22, models.providers is a protected map path that
-            # rejects replacements removing existing entries (e.g. a gateway-discovered
-            # model or a narrowed model set on day-2). Our declarative tree is
-            # authoritative — a full replace is the intent.
-            openclaw config set models --json "$DESIRED_MODELS" --replace
-            echo "$DESIRED_HASH" > "$HASH_DIR/custom-models"
-            CHANGED="$CHANGED models"
-        fi
-
-        # Sandbox tool allowlist (all groups + plugins)
-        {% set tool_allow = ["group:openclaw","group:runtime","group:fs","group:sessions","group:memory","group:web","group:ui","group:automation","group:messaging","group:nodes"] %}
-        {# The adapter is policy when declared, installed or not: OpenClaw 2026.6 only #}
-        {# warns about an allowed plugin that is not installed yet (validation.ts). #}
-        {% if openclaw_mcp_adapter is defined %}
-        {%   set _ = tool_allow.append("group:plugins") %}
-        {%   set _ = tool_allow.append("openclaw-mcp-adapter") %}
-        {% endif %}
-        check_set_json tools.sandbox.tools.allow '{{ tool_allow | to_json }}'
-
-        # Explicit allowlists must not be widened by the plugin profile extension.
-        {% if openclaw_tools_allow is defined %}
-        # 2026.9.8 refuses allow next to alsoAllow, so clear alsoAllow first.
-        check_unset tools.alsoAllow
-        check_set_json tools.allow '{{ openclaw_tools_allow | to_json }}'
-        {% elif openclaw_mcp_adapter is defined %}
-        check_set_json tools.alsoAllow '["group:plugins"]'
-        {% endif %}
-
-
-        # Plugin loading allowlist — only trusted plugins can load into gateway
-        # Includes bundled plugins (device-pair, memory-core, etc.) because
-        # plugins.allow blocks ALL plugins not listed, including bundled ones.
-        # "anthropic" carries the claude-cli backend (bundled plugin since 2026.6.1)
-        # — without it model turns fail with MissingAgentHarnessError.
-        {# WhatsApp/Discord ship as external channel plugins again since 2026.5.12 #}
-        {# (installed by each channel role in plugin.yml); allowlist when configured. #}
-        {% set plugin_allow = ["device-pair","memory-core","talk-voice","telegram","anthropic"] %}
-        {% if exa_api_key | default('') | length > 0 %}
-        {%   set _ = plugin_allow.append("exa") %}
-        {% endif %}
-        {% if openclaw_firecrawl_enabled | bool %}
-        {%   set _ = plugin_allow.append("firecrawl") %}
-        {% endif %}
-        {# xAI remains available for X search, independently of Exa web search. #}
-        {% if xai_api_key is defined and xai_api_key | length > 0 %}
-        {%   set _ = plugin_allow.append("xai") %}
-        {% endif %}
-        {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
-        {%   set _ = plugin_allow.append("google") %}
-        {% endif %}
-        {# ElevenLabs (bundled) transcribes voice; plugins.allow blocks unlisted bundled plugins. #}
-        {% if elevenlabs_api_key is defined and elevenlabs_api_key | length > 0 %}
-        {%   set _ = plugin_allow.append("elevenlabs") %}
-        {% endif %}
-        {% if openclaw_mcp_adapter is defined %}
-        {%   set _ = plugin_allow.append("openclaw-mcp-adapter") %}
-        {% endif %}
-        {% if openclaw_whatsapp_used | bool %}
-        {%   set _ = plugin_allow.append("whatsapp") %}
-        {% endif %}
-        {% if discord_bot_token is defined and discord_bot_token | length > 0 %}
-        {%   set _ = plugin_allow.append("discord") %}
-        {% endif %}
-        check_set_json plugins.allow '{{ plugin_allow | to_json }}'
-
-        # Elevated tools — DISABLED to prevent sandbox escape to VPS host.
-        # elevated=true on exec calls bypasses tools.exec.host and grants root.
-        check_set tools.elevated.enabled false
-        {% set elevated_users = [] %}
-        {% if telegram_user_id is defined and telegram_user_id | length > 0 %}
-        {%   set _ = elevated_users.append(telegram_user_id | int) %}
-        {% endif %}
-        {% if elevated_users | length > 0 %}
-        check_set_json tools.elevated.allowFrom.telegram '{{ elevated_users | to_json }}'
-        {% endif %}
-        {% set whatsapp_elevated = [] %}
-        {% for agent in openclaw_agents %}
-        {%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_to | default('') | length > 0 %}
-        {%     set _ = whatsapp_elevated.append(agent.deliver_to) %}
-        {%   endif %}
-        {% endfor %}
-        {% if whatsapp_elevated | length > 0 %}
-        check_set_json tools.elevated.allowFrom.whatsapp '{{ whatsapp_elevated | to_json }}'
-        {% endif %}
-        {% set discord_elevated = [] %}
-        {% if discord_user_id is defined and discord_user_id | length > 0 %}
-        {%   set _ = discord_elevated.append(discord_user_id) %}
-        {% endif %}
-        {% if discord_elevated | length > 0 %}
-        check_set_json tools.elevated.allowFrom.discord '{{ discord_elevated | to_json }}'
-        {% endif %}
-
-        # Elevated default
-        check_set agents.defaults.elevatedDefault "{{ openclaw_elevated_default }}"
-
-        # Timezone
-        check_set agents.defaults.userTimezone "{{ openclaw_timezone }}"
-
-        # Agent timeout: max seconds per conversation turn (default 600 = 10min)
-        check_set agents.defaults.timeoutSeconds "{{ openclaw_agent_timeout_seconds }}"
-
-        # Message queue: collect messages while agent is busy, coalesce into one followup turn
-        check_set messages.queue.mode collect
-
-        # 2026.9.8 schedules nightly memory dreaming and weekly skill reviews for every agent
-        # on its own. Off: unattended turns only run where an agent opts into schedules.
-        check_set_json plugins.entries.memory-core.config.dreaming.enabled 'false'
-        check_set skills.workshop.autonomous.mode off
-
-        # Concurrency: allow more parallel sessions across all agents
-        check_set agents.defaults.maxConcurrent "{{ openclaw_max_concurrent }}"
-        check_set agents.defaults.subagents.maxConcurrent "{{ openclaw_subagents_max_concurrent }}"
-
-        # Context pruning: trim stale tool outputs after 15m
-        check_set agents.defaults.contextPruning.mode cache-ttl
-        check_set agents.defaults.contextPruning.ttl 15m
-
-        # Exec tool policy for OpenClaw itself
-        check_set tools.exec.host "{{ openclaw_exec_host }}"
-        check_set tools.exec.mode "{{ openclaw_exec_mode }}"
-
-        # Skip bootstrap: prevent gateway from re-scaffolding workspace context files
-        # (SOUL.md, IDENTITY.md, etc.) with factory templates on every message/cron tick.
-        # Without this, Obsidian Sync conflict resolution can delete a file momentarily,
-        # and ensureAgentWorkspace() recreates it from template — causing a wipe loop.
-        # Day-0 safe: onboard runs before config role, so initial scaffold still happens.
-        check_set agents.defaults.skipBootstrap true
-
-        # Sandbox configuration
-        check_set agents.defaults.sandbox.mode "{{ openclaw_sandbox_mode }}"
-        check_set agents.defaults.sandbox.workspaceAccess "{{ openclaw_sandbox_workspace_access }}"
-        check_set agents.defaults.sandbox.docker.network "{{ openclaw_sandbox_docker_network }}"
-        check_set agents.defaults.sandbox.docker.image "{{ openclaw_sandbox_docker_image }}"
-        check_set_json agents.defaults.sandbox.docker.readOnlyRoot '{{ openclaw_sandbox_read_only_root | to_json }}'
-        check_set_json agents.defaults.sandbox.browser.allowHostControl '{{ openclaw_browser_allow_host_control | to_json }}'
-        # Mount generated media (images) read-only so agents can verify their own output
-        check_set_json agents.defaults.sandbox.docker.binds '["/home/ubuntu/.openclaw/media:/media:ro"]'
-        check_set_json agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources 'true'
-
-        # Image generation model (Google Gemini — provider apiKey merged into models JSON above)
-        {% if gemini_api_key is defined and gemini_api_key | length > 0 %}
-        check_set agents.defaults.mediaModels.image.primary "{{ openclaw_image_generation_model }}"
-        check_set_json agents.defaults.mediaModels.image.fallbacks '{{ openclaw_image_generation_fallbacks | to_json }}'
-        {% else %}
-        for key in agents.defaults.mediaModels.image.primary agents.defaults.mediaModels.image.fallbacks; do
-            check_unset "$key"
-        done
-        {% endif %}
-
-        # Voice transcription — the key reaches the gateway as ELEVENLABS_API_KEY (skill-environment.yml); cleanup in secrets task
-        {% if elevenlabs_api_key is defined and elevenlabs_api_key | length > 0 %}
-        check_set tools.media.audio.enabled true
-        check_set_json tools.media.models '[{"provider":"{{ openclaw_audio_provider }}","model":"{{ openclaw_audio_model }}","capabilities":["audio"]}]'
-        {% endif %}
-
-        # Telegram: suppress error reply messages (silent = user sees nothing on failure)
-        check_set_json channels.telegram.silentErrorReplies '{{ openclaw_telegram_silent_error_replies | lower }}'
-
-        {% if openclaw_whatsapp_used | bool %}
-        {# WhatsApp (Baileys) has unpredictable idle event cadence - disable to prevent restart loops #}
-        check_set_json channels.whatsapp.healthMonitor.enabled 'false'
-        {% else %}
-        {# After an upgrade, startup migrations (2026.7.1+) install any configured but missing channel plugin at its newest version; if that build needs a newer core, the gateway refuses to start. #}
-        check_unset channels.whatsapp
-        {% endif %}
-
-        # Key names only (never values), so drift is visible in public CI logs.
-        if [ -n "$CHANGED" ]; then echo "UPDATED:$CHANGED"; else echo "OK"; fi
-      args:
-        executable: /bin/bash
-      register: config_settings
-      changed_when: "'UPDATED' in config_settings.stdout"
-      notify: restart openclaw-gateway
-
-    - name: Show which gateway settings were updated
-      ansible.builtin.debug:
-        msg: "{{ config_settings.stdout_lines | select('match', '^UPDATED:') | list }}"
-      when: config_settings is changed
-
-    - name: Remove stale sandbox containers after config change
-      ansible.builtin.shell: |
-        set -euo pipefail
-        containers=$(docker ps -q --filter "name=openclaw-sbx-" 2>/dev/null || true)
-        if [ -n "$containers" ]; then
-          count=$(echo "$containers" | wc -l)
-          echo "Removing $count sandbox container(s) to apply new Docker flags"
-          echo "$containers" | xargs docker rm -f
-        else
-          echo "No running sandbox containers to remove"
-        fi
-      args:
-        executable: /bin/bash
-      register: sandbox_container_removal
-      changed_when: sandbox_container_removal.stdout is search('Removing')
-      when: config_settings is changed or config_secrets is changed
-      notify: restart openclaw-gateway
-
-  always:
-    - name: Clean up secret temp files
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      changed_when: false
-      loop:
-        - /tmp/ansible-gateway-token
-        - /tmp/ansible-custom-models
-        - /tmp/ansible-model-fallbacks
+- name: Reload systemd after drop-in change
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+  when: (xai_dropin is defined and xai_dropin.changed) or (xai_dropin_absent is defined and xai_dropin_absent.changed)
+  notify: restart openclaw-gateway
 
 - name: Enforce agent auth-profiles — setup token present, api-key profile absent
   ansible.builtin.shell: |
@@ -504,20 +100,14 @@
             continue
 
         content = profiles_path.read_text().strip()
-        try:
-            data = json.loads(content) if content else {}
-        except json.JSONDecodeError:
-            data = {}
-
+        data = json.loads(content) if content else {}
         profiles = data.get("profiles", {})
         original_profiles = dict(profiles)
 
-        # Ensure setup token profile exists with current token
+        # Ensure setup token profile exists with the expected value.
         desired_default = {"type": "token", "provider": "anthropic", "token": token}
         if profiles.get("anthropic:default") != desired_default:
             profiles["anthropic:default"] = desired_default
-
-        # Remove legacy api-key profile
         profiles.pop("anthropic:api-key", None)
 
         if profiles != original_profiles or not content:
@@ -541,58 +131,6 @@
   no_log: true
   register: auth_profiles_result
   changed_when: "'CHANGED:' in auth_profiles_result.stdout"
-  notify: restart openclaw-gateway
-
-# agents.defaults.models holds aliases and the runtime mapping (agentRuntime.id=
-# claude-cli keeps turns on the claude CLI / Max subscription); since 2026.8.1 the
-# allowlist itself is agents.defaults.modelPolicy.allow, which we derive from the
-# same keys. Protected map path since 2026.4.22 — --replace declares our tree
-# authoritative, which also clears stale legacy entries.
-- name: Pin agent model allowlist with claude-cli runtime mapping
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    DESIRED='{{ openclaw_agent_models | to_json }}'
-    # The file, not `config get`: since 2026.9.8 that returns the effective map, with every
-    # model OpenClaw adds by default, so it never equals what we write.
-    CURRENT=$(jq -c '.agents.defaults.models // {}' /home/ubuntu/.openclaw/openclaw.json)
-    C_NORM=$(echo "$CURRENT" | jq -cS '.' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS '.')
-    UPDATED=""
-    if [ "$C_NORM" = "PARSE_FAIL" ] || [ "$C_NORM" != "$D_NORM" ]; then
-        openclaw config set agents.defaults.models --json "$DESIRED" --replace
-        UPDATED="$UPDATED agents.defaults.models"
-    fi
-    DESIRED_ALLOW='{{ openclaw_agent_models | list | to_json }}'
-    CURRENT_ALLOW=$(openclaw config get agents.defaults.modelPolicy.allow 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT_ALLOW="[]"
-    if [ "$(echo "$CURRENT_ALLOW" | jq -cS 'sort' 2>/dev/null || echo PARSE_FAIL)" != "$(echo "$DESIRED_ALLOW" | jq -cS 'sort')" ]; then
-        openclaw config set agents.defaults.modelPolicy.allow --json "$DESIRED_ALLOW"
-        UPDATED="$UPDATED agents.defaults.modelPolicy.allow"
-    fi
-    if [ -n "$UPDATED" ]; then echo "UPDATED:$UPDATED"; else echo "OK"; fi
-  args:
-    executable: /bin/bash
-  register: agent_models_result
-  changed_when: "'UPDATED' in agent_models_result.stdout"
-  notify: restart openclaw-gateway
-
-# The claude-cli backend ships as the bundled "anthropic" plugin (2026.6.1) and is
-# default-off — enable it explicitly or model turns fail with MissingAgentHarnessError.
-- name: Ensure anthropic plugin (claude-cli backend) is enabled
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    STATUS=$(openclaw plugins list --json 2>/dev/null | jq -r '.plugins[] | select(.id=="anthropic") | .enabled')
-    if [ "$STATUS" != "true" ]; then
-        openclaw plugins enable anthropic
-        echo "ENABLED"
-    else
-        echo "OK"
-    fi
-  args:
-    executable: /bin/bash
-  register: anthropic_plugin_enable
-  changed_when: "'ENABLED' in anthropic_plugin_enable.stdout"
   notify: restart openclaw-gateway
 
 - name: Migrate session model provider to match primary model
@@ -627,9 +165,8 @@
         print("OK")
         sys.exit(0)
 
-    # The gateway keeps the store in memory and rewrites it whole, so edits made
-    # while it runs can be lost or undone: stop it, replace each file atomically,
-    # and start it again even if a write fails.
+    # Session-file migration also needs the gateway stopped: it keeps these
+    # legacy stores in memory and rewrites them whole.
     systemctl = ["systemctl", "--user"]
     subprocess.run(systemctl + ["stop", "openclaw-gateway"], check=True)
     migrated = []

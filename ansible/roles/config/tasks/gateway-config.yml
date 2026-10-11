@@ -1,0 +1,246 @@
+---
+- name: Configure gateway with secret cleanup
+  block:
+    - name: Write managed gateway settings to a private file
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ item.dest }}"
+        mode: "0600"
+      no_log: true
+      changed_when: false
+      loop:
+        - content: "{{ lookup('template', 'gateway-config.json.j2') }}"
+          dest: /tmp/ansible-gateway-settings.json
+        - content: "{}"
+          dest: /tmp/ansible-gateway-patch.json
+        - content: ""
+          dest: /tmp/ansible-custom-models-hash
+
+    - name: Compare managed settings with the authored config
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 << 'PYEOF'
+        import hashlib, json, os
+        from pathlib import Path
+
+        os.umask(0o077)
+        state = Path('/home/ubuntu/.openclaw')
+        current = json.loads((state / 'openclaw.json').read_text())
+        desired = json.loads(Path('/tmp/ansible-gateway-settings.json').read_text())
+        missing = object()
+
+        def get(key):
+            node = current
+            for part in key.split('.'):
+                if not isinstance(node, dict) or part not in node:
+                    return missing
+                node = node[part]
+            return node
+
+        def canonical(value):
+            return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+
+        # The runtime enriches custom models. Keep the existing desired-hash
+        # contract, but only advance the hash after the CLI patch succeeds.
+        models = desired['set']['models']
+        model_hash = hashlib.sha256((canonical(models) + '\n').encode()).hexdigest()
+        hash_path = state / '.ansible-hashes/custom-models'
+        previous_hash = hash_path.read_text().strip() if hash_path.exists() else ''
+        mode = models.get('mode')
+        models_changed = previous_hash != model_hash or (mode is not None and get('models.mode') != mode)
+        patch, changed, replace_args = {}, [], []
+
+        def add(key, value):
+            node = patch
+            parts = key.split('.')
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = value
+            changed.append(key)
+            if key in ('models', 'agents.defaults.models'):
+                replace_args.extend(['--replace-path', key])
+
+        for key, value in desired['set'].items():
+            old = get(key)
+            if key == 'models':
+                if models_changed:
+                    add(key, value)
+            elif key == 'agents.defaults.modelPolicy.allow' and isinstance(old, list):
+                if sorted(old) != sorted(value):
+                    add(key, value)
+            elif old is missing or canonical(old) != canonical(value):
+                add(key, value)
+        for key in desired['unset']:
+            if get(key) is not missing:
+                add(key, None)
+
+        Path('/tmp/ansible-gateway-patch.json').write_text(json.dumps(patch))
+        Path('/tmp/ansible-custom-models-hash').write_text(model_hash + '\n')
+        print(json.dumps({'changed': changed, 'replace_args': replace_args}))
+        PYEOF
+      args:
+        executable: /bin/bash
+      register: gateway_config_plan
+      changed_when: false
+
+    # A successful read/startup probe does not admit the next SQLite write:
+    # config-triggered restarts can acquire bootstrap maintenance ownership.
+    - name: Apply changed settings while the gateway is stopped
+      when:
+        - not ansible_check_mode
+        - (gateway_config_plan.stdout | from_json).changed | length > 0
+      block:
+        - name: Stop the gateway before changing its configuration
+          ansible.builtin.command: systemctl --user stop openclaw-gateway
+          environment:
+            XDG_RUNTIME_DIR: /run/user/1000
+          register: gateway_config_stop
+          changed_when: true
+
+        - name: Configure gateway settings
+          ansible.builtin.command:
+            argv: "{{ ['openclaw', 'config', 'patch', '--file', '/tmp/ansible-gateway-patch.json'] + (gateway_config_plan.stdout | from_json).replace_args }}"
+          environment:
+            XDG_RUNTIME_DIR: /run/user/1000
+          register: config_settings
+          changed_when: true
+          no_log: true
+
+      rescue:
+        - name: Report SQLite ownership after configuration failure
+          ansible.builtin.shell: |
+            set -euo pipefail
+            python3 << 'PYEOF'
+            import json
+            from pathlib import Path
+            root = Path('/home/ubuntu/.openclaw/tmp')
+            owners = []
+            for path in sorted(root.glob('openclaw*/state.*.lock')):
+                try:
+                    data = json.loads(path.read_text())
+                except FileNotFoundError:
+                    continue
+                except json.JSONDecodeError:
+                    owners.append({'file': path.name, 'invalidJson': True})
+                    continue
+                if not isinstance(data, dict):
+                    owners.append({'file': path.name, 'invalidPayload': True})
+                    continue
+                owners.append({
+                    'pid': data.get('pid') if type(data.get('pid')) is int else None,
+                    'role': data.get('role') if data.get('role') in ('gateway', 'agent-embedded', 'skill-workshop-apply', 'sqlite-maintenance') else 'unknown',
+                    'stateOwnerKind': 'schema' if data.get('stateOwnerKind') == 'schema' else None,
+                    'startTime': data.get('startTime') if type(data.get('startTime')) is int else None,
+                })
+            print(json.dumps({'sqliteOwners': owners}))
+            PYEOF
+          args:
+            executable: /bin/bash
+          register: gateway_config_owners
+          changed_when: false
+
+        - name: Show configuration failure ownership
+          ansible.builtin.debug:
+            msg: "{{ gateway_config_owners.stdout }}"
+
+        - name: Fail the configuration transaction
+          ansible.builtin.fail:
+            msg: >-
+              {{ ansible_failed_task.name }} failed (exit {{ ansible_failed_result.rc | default('unknown') }}).
+              Configuration may already have been written; this is not a rollback.
+              The gateway start is attempted below, but provisioning remains failed.
+
+      always:
+        - name: Start the gateway after the configuration attempt
+          ansible.builtin.command: systemctl --user start openclaw-gateway
+          environment:
+            XDG_RUNTIME_DIR: /run/user/1000
+          changed_when: true
+
+        - name: Wait for gateway startup after the configuration attempt
+          ansible.builtin.uri:
+            url: http://127.0.0.1:18789/startupz
+            return_content: true
+            timeout: 5
+            use_proxy: false
+          register: gateway_config_startup
+          until:
+            - gateway_config_startup.status | default(0) == 200
+            - gateway_config_startup.json.ok | default(false) | bool
+            - gateway_config_startup.json.status | default('') == 'started'
+          retries: 30
+          delay: 5
+          changed_when: false
+
+    # Use OpenClaw's effective policy, not a second implementation of plugin-ID
+    # normalization. This assertion also runs when no authored settings changed.
+    - name: Verify the required Anthropic backend is enabled
+      ansible.builtin.shell: |
+        set -euo pipefail
+        openclaw plugins list --json | python3 -c '
+        import json, sys
+        data = json.load(sys.stdin)
+        plugins = data.get("plugins") if isinstance(data, dict) else None
+        if not isinstance(plugins, list):
+            raise SystemExit("Invalid plugin inventory; cannot verify the Anthropic backend")
+        matches = [p for p in plugins if isinstance(p, dict) and p.get("id") == "anthropic"]
+        if len(matches) != 1 or matches[0].get("enabled") is not True:
+            raise SystemExit("Anthropic backend is not enabled; inspect plugin policy. Provisioning failed; no rollback.")
+        print("Anthropic backend enabled")
+        '
+      args:
+        executable: /bin/bash
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Ensure config hash directory exists
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/.ansible-hashes
+        state: directory
+        mode: "0700"
+      when: config_settings is defined and config_settings is changed
+
+    - name: Record the successfully applied custom models
+      ansible.builtin.copy:
+        src: /tmp/ansible-custom-models-hash
+        dest: /home/ubuntu/.openclaw/.ansible-hashes/custom-models
+        remote_src: true
+        mode: "0600"
+      no_log: true
+      when: config_settings is defined and config_settings is changed
+
+    - name: Show which gateway settings were updated
+      ansible.builtin.debug:
+        msg: "UPDATED: {{ (gateway_config_plan.stdout | from_json).changed | join(' ') }}"
+      when: config_settings is defined and config_settings is changed
+
+    - name: Remove stale sandbox containers after config change
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -q --filter "name=openclaw-sbx-")
+        if [ -n "$containers" ]; then
+          count=$(echo "$containers" | wc -l)
+          echo "Removing $count sandbox container(s) to apply new Docker flags"
+          echo "$containers" | xargs docker rm -f
+        else
+          echo "No running sandbox containers to remove"
+        fi
+      args:
+        executable: /bin/bash
+      register: sandbox_container_removal
+      changed_when: sandbox_container_removal.stdout is search('Removing')
+      when: config_settings is defined and config_settings is changed
+      notify: restart openclaw-gateway
+
+  always:
+    - name: Clean up secret temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      changed_when: false
+      loop:
+        - /tmp/ansible-gateway-settings.json
+        - /tmp/ansible-gateway-patch.json
+        - /tmp/ansible-custom-models-hash

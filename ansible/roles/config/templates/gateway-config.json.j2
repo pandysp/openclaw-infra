@@ -1,0 +1,112 @@
+{# Managed values only. The CLI validates and writes the resulting patch. #}
+{% set settings = {
+  'gateway.auth.mode': 'token',
+  'gateway.auth.token': gateway_token,
+  'gateway.remote.token': gateway_token,
+  'gateway.tailscale.mode': 'serve',
+  'gateway.trustedProxies': ['127.0.0.1', '100.64.0.0/10'],
+  'gateway.controlUi.enabled': true,
+  'gateway.auth.allowTailscale': true,
+  'agents.defaults.model.primary': openclaw_model_primary,
+  'agents.defaults.model.fallbacks': openclaw_model_fallbacks,
+  'agents.defaults.thinkingDefault': openclaw_thinking_default,
+  'agents.defaults.models': openclaw_agent_models,
+  'agents.defaults.modelPolicy.allow': openclaw_agent_models | list,
+  'agents.defaults.elevatedDefault': openclaw_elevated_default,
+  'agents.defaults.userTimezone': openclaw_timezone,
+  'agents.defaults.timeoutSeconds': openclaw_agent_timeout_seconds | int,
+  'agents.defaults.maxConcurrent': openclaw_max_concurrent | int,
+  'agents.defaults.subagents.maxConcurrent': openclaw_subagents_max_concurrent | int,
+  'agents.defaults.contextPruning.mode': 'cache-ttl',
+  'agents.defaults.contextPruning.ttl': '15m',
+  'agents.defaults.skipBootstrap': true,
+  'agents.defaults.sandbox.mode': openclaw_sandbox_mode,
+  'agents.defaults.sandbox.workspaceAccess': openclaw_sandbox_workspace_access,
+  'agents.defaults.sandbox.docker.network': openclaw_sandbox_docker_network,
+  'agents.defaults.sandbox.docker.image': openclaw_sandbox_docker_image,
+  'agents.defaults.sandbox.docker.readOnlyRoot': openclaw_sandbox_read_only_root | bool,
+  'agents.defaults.sandbox.docker.binds': ['/home/ubuntu/.openclaw/media:/media:ro'],
+  'agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources': true,
+  'agents.defaults.sandbox.browser.allowHostControl': openclaw_browser_allow_host_control | bool,
+  'messages.queue.mode': 'collect',
+  'plugins.entries.anthropic.enabled': true,
+  'plugins.entries.memory-core.config.dreaming.enabled': false,
+  'skills.workshop.autonomous.mode': 'off',
+  'tools.elevated.enabled': false,
+  'tools.exec.host': openclaw_exec_host,
+  'tools.exec.mode': openclaw_exec_mode,
+  'channels.telegram.silentErrorReplies': openclaw_telegram_silent_error_replies | bool
+} %}
+{% set unset = ['tools.web.search.apiKey', 'tools.web.search.grok.apiKey'] %}
+{% set plugin_allow = ['device-pair', 'memory-core', 'talk-voice', 'telegram', 'anthropic'] %}
+{% set tool_allow = ['group:openclaw', 'group:runtime', 'group:fs', 'group:sessions', 'group:memory', 'group:web', 'group:ui', 'group:automation', 'group:messaging', 'group:nodes'] %}
+{% if exa_api_key | default('') | length > 0 %}
+{%   set _ = settings.update({'tools.web.search.provider': 'exa', 'tools.web.search.enabled': true, 'tools.web.search.timeoutSeconds': 60, 'plugins.entries.exa.enabled': true}) %}
+{%   set _ = plugin_allow.append('exa') %}
+{% else %}
+{%   set _ = settings.update({'tools.web.search.enabled': false, 'plugins.entries.exa.enabled': false}) %}
+{%   set _ = unset.extend(['tools.web.search.provider', 'tools.web.search.timeoutSeconds']) %}
+{% endif %}
+{% if openclaw_firecrawl_enabled | bool %}
+{%   set _ = settings.update({'tools.web.fetch.provider': 'firecrawl', 'tools.web.fetch.enabled': true, 'plugins.entries.firecrawl.enabled': true}) %}
+{%   set _ = plugin_allow.append('firecrawl') %}
+{% else %}
+{%   set _ = unset.append('tools.web.fetch.provider') %}
+{%   set _ = settings.update({'plugins.entries.firecrawl.enabled': false}) %}
+{% endif %}
+{% if xai_api_key | default('') | length > 0 %}
+{%   set _ = plugin_allow.append('xai') %}
+{% else %}
+{%   set _ = unset.append('plugins.entries.xai.config.webSearch.apiKey') %}
+{% endif %}
+{% set google = {} %}
+{% if gemini_api_key | default('') | length > 0 %}
+{%   set google = {'providers': {'google': {'baseUrl': 'https://generativelanguage.googleapis.com/v1beta', 'apiKey': gemini_api_key, 'models': []}}} %}
+{%   set _ = plugin_allow.append('google') %}
+{%   set _ = settings.update({'agents.defaults.mediaModels.image.primary': openclaw_image_generation_model, 'agents.defaults.mediaModels.image.fallbacks': openclaw_image_generation_fallbacks}) %}
+{% else %}
+{%   set _ = unset.extend(['agents.defaults.mediaModels.image.primary', 'agents.defaults.mediaModels.image.fallbacks']) %}
+{% endif %}
+{% set _ = settings.update({'models': openclaw_custom_models | combine(google, recursive=true)}) %}
+{% if elevenlabs_api_key | default('') | length > 0 %}
+{%   set _ = plugin_allow.append('elevenlabs') %}
+{%   set _ = settings.update({'tools.media.audio.enabled': true, 'tools.media.models': [{'provider': openclaw_audio_provider, 'model': openclaw_audio_model, 'capabilities': ['audio']}]}) %}
+{% else %}
+{%   set _ = unset.extend(['tools.media.audio.enabled', 'tools.media.models']) %}
+{% endif %}
+{% if openclaw_mcp_adapter is defined %}
+{%   set _ = tool_allow.extend(['group:plugins', 'openclaw-mcp-adapter']) %}
+{%   set _ = plugin_allow.append('openclaw-mcp-adapter') %}
+{% endif %}
+{% if openclaw_tools_allow is defined %}
+{%   set _ = unset.append('tools.alsoAllow') %}
+{%   set _ = settings.update({'tools.allow': openclaw_tools_allow}) %}
+{% elif openclaw_mcp_adapter is defined %}
+{%   set _ = settings.update({'tools.alsoAllow': ['group:plugins']}) %}
+{% endif %}
+{% if openclaw_whatsapp_used | bool %}
+{%   set _ = plugin_allow.append('whatsapp') %}
+{%   set _ = settings.update({'channels.whatsapp.healthMonitor.enabled': false}) %}
+{% else %}
+{%   set _ = unset.append('channels.whatsapp') %}
+{% endif %}
+{% if discord_bot_token | default('') | length > 0 %}
+{%   set _ = plugin_allow.append('discord') %}
+{% endif %}
+{% set _ = settings.update({'plugins.allow': plugin_allow, 'tools.sandbox.tools.allow': tool_allow}) %}
+{% if telegram_user_id | default('') | string | length > 0 %}
+{%   set _ = settings.update({'tools.elevated.allowFrom.telegram': [telegram_user_id | int]}) %}
+{% endif %}
+{% set whatsapp_elevated = [] %}
+{% for agent in openclaw_agents %}
+{%   if (agent.deliver_channel | default('telegram')) == 'whatsapp' and agent.deliver_to | default('') | length > 0 %}
+{%     set _ = whatsapp_elevated.append(agent.deliver_to) %}
+{%   endif %}
+{% endfor %}
+{% if whatsapp_elevated | length > 0 %}
+{%   set _ = settings.update({'tools.elevated.allowFrom.whatsapp': whatsapp_elevated}) %}
+{% endif %}
+{% if discord_user_id | default('') | length > 0 %}
+{%   set _ = settings.update({'tools.elevated.allowFrom.discord': [discord_user_id]}) %}
+{% endif %}
+{{ {'set': settings, 'unset': unset} | to_json }}

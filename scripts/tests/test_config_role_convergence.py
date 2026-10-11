@@ -8,6 +8,7 @@ model because its 'claude-cli' provider was treated as foreign. The migration
 also edited the session stores under a running gateway, which keeps them in
 memory and rewrites them whole; it now stops the gateway around its writes.
 """
+import http.server
 import json
 import os
 from pathlib import Path
@@ -15,51 +16,56 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 TASKS = ROOT / 'ansible/roles/config/tasks/main.yml'
-CONFIGURE = 'Configure gateway settings'
-TEMP_FILES = 'Write secrets and config to temp files'
+CONFIGURE = 'Configure gateway with secret cleanup'
+TEMP_FILES = 'Write managed gateway settings to a private file'
 REPORT = 'Show which gateway settings were updated'
 MIGRATE_REPORT = 'Show which sessions were moved to the primary model'
 MIGRATE = 'Migrate session model provider to match primary model'
 FAKE_OPENCLAW = '''#!/usr/bin/env python3
-# A stateful stand-in for the OpenClaw config CLI: get/set/unset on a JSON
-# store, recording every write, so a second pass can prove convergence.
-import json, os, sys
+# Boundary stand-in for one validated OpenClaw patch; no config get is allowed.
+import json, os, subprocess, sys
 args = sys.argv[1:]
 root = os.environ['FIXTURE_ROOT']
 store_path = os.path.join(root, 'store.json')
-store = json.load(open(store_path)) if os.path.exists(store_path) else {}
-def record():
-    with open(os.path.join(root, 'writes'), 'a') as f:
-        f.write(json.dumps(args) + '\\n')
-def walk(key, create=False):
-    node, parts = store, key.split('.')
-    for part in parts[:-1]:
-        if part not in node:
-            if not create: return None, None
-            node[part] = {}
-        node = node[part]
-    return node, parts[-1]
-if args[:2] == ['config', 'get']:
-    node, leaf = walk(args[2])
-    if node is None or leaf not in node:
-        sys.stderr.write('Config path is valid but unset: ' + args[2] + '\\n'); sys.exit(1)
-    value = node[leaf]
-    print(value if isinstance(value, str) else json.dumps(value))
-    sys.exit(0)
-if args[:2] == ['config', 'set']:
-    node, leaf = walk(args[2], create=True)
-    node[leaf] = json.loads(args[args.index('--json') + 1]) if '--json' in args else args[3]
-    record(); json.dump(store, open(store_path, 'w')); sys.exit(0)
-if args[:2] == ['config', 'unset']:
-    node, leaf = walk(args[2])
-    if node is None or leaf not in node:
-        print('Config path not found: ' + args[2]); sys.exit(1)
-    del node[leaf]; record(); json.dump(store, open(store_path, 'w')); sys.exit(0)
-sys.exit('unexpected openclaw call: ' + ' '.join(args))
+store = json.load(open(store_path))
+if args == ['plugins', 'list', '--json']:
+    if os.path.exists(os.path.join(root, 'inventory-fails')):
+        sys.exit('fixture inventory failure')
+    # JavaScript trim matches the boundary policy, including U+FEFF. Production
+    # asks OpenClaw; it must not maintain its own copied ID normalizer.
+    code = "const fs=require('node:fs'),p=JSON.parse(fs.readFileSync(0,'utf8')).plugins||{}; let e={}; for(const [k,v] of Object.entries(p.entries||{}))if(k.trim().toLowerCase()==='anthropic')e={...e,...v}; const enabled=p.enabled!==false && !(p.deny||[]).some(k=>k.trim().toLowerCase()==='anthropic') && (!(p.allow||[]).length || p.allow.some(k=>k.trim().toLowerCase()==='anthropic')) && e.enabled===true; console.log(JSON.stringify({plugins:[{id:'anthropic',enabled}]}));"
+    sys.exit(subprocess.run(['node', '-e', code], input=json.dumps(store), text=True).returncode)
+if args[:2] != ['config', 'patch']:
+    sys.exit('unexpected openclaw call: ' + ' '.join(args))
+if not os.path.exists(os.path.join(root, 'gateway-stopped')):
+    sys.exit('Gateway must be stopped before config writes')
+patch = json.load(open(args[args.index('--file') + 1]))
+replace = {args[i + 1] for i, value in enumerate(args) if value == '--replace-path'}
+def merge(target, value, path=''):
+    for key, child in value.items():
+        name = path + '.' + key if path else key
+        if child is None:
+            target.pop(key, None)
+        elif isinstance(child, dict) and name not in replace:
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            merge(target[key], child, name)
+        else:
+            target[key] = child
+if os.path.exists(os.path.join(root, 'patch-fails')):
+    sys.exit('fixture-private-key: rejected patch')
+merge(store, patch)
+with open(os.path.join(root, 'writes'), 'a') as f:
+    f.write(json.dumps({'args': args, 'patch': patch}) + '\\n')
+json.dump(store, open(store_path, 'w'))
+if os.path.exists(os.path.join(root, 'post-write-fails')):
+    sys.exit('Config health-state write failed: fixture-private-key')
+print('Applied config patch')
 '''
 
 
@@ -67,9 +73,10 @@ def find_task(tasks, name):
     for task in tasks:
         if task.get('name') == name:
             return task
-        found = find_task(task.get('block', []), name)
-        if found:
-            return found
+        for section in ('block', 'rescue', 'always'):
+            found = find_task(task.get(section, []), name)
+            if found:
+                return found
     return None
 
 
@@ -77,6 +84,14 @@ FAKE_SYSTEMCTL = '''#!/usr/bin/env python3
 # Records each gateway stop/start with the session store as it is at that moment.
 import json, os, sys
 root = os.environ['FIXTURE_ROOT']
+marker = os.path.join(root, 'gateway-stopped')
+for action in ('stop', 'start'):
+    if action in sys.argv and os.path.exists(os.path.join(root, action + '-fails')):
+        sys.exit('fixture ' + action + ' failure')
+if 'stop' in sys.argv:
+    open(marker, 'w').close()
+elif 'start' in sys.argv and os.path.exists(marker):
+    os.unlink(marker)
 store = os.path.join(root, 'state/agents/main/sessions/sessions.json')
 with open(os.path.join(root, 'systemctl'), 'a') as f:
     f.write(json.dumps([sys.argv[1:], open(store).read() if os.path.exists(store) else None]) + '\\n')
@@ -91,15 +106,16 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             raise RuntimeError("Install the project's Ansible development dependency first")
         python = shlex.split(Path(cls.ansible).read_text().splitlines()[0].removeprefix('#!'))
         code = 'import json,sys,yaml; print(json.dumps([yaml.safe_load(open(p)) for p in sys.argv[1:]]))'
-        tasks, cls.defaults, cls.skill_environment = json.loads(subprocess.run(
-            [*python, '-c', code, str(TASKS), str(ROOT / 'ansible/group_vars/all.yml'),
+        tasks, gateway_tasks, cls.defaults, cls.skill_environment = json.loads(subprocess.run(
+            [*python, '-c', code, str(TASKS), str(TASKS.with_name('gateway-config.yml')),
+             str(ROOT / 'ansible/group_vars/all.yml'),
              str(ROOT / 'ansible/roles/config/tasks/skill-environment.yml')],
             capture_output=True, text=True, check=True).stdout)
-        cls.temp_files = find_task(tasks, TEMP_FILES)
-        cls.configure = find_task(tasks, CONFIGURE)
-        cls.report = find_task(tasks, REPORT)
+        cls.temp_files = find_task(gateway_tasks, TEMP_FILES)
+        cls.configure = find_task(gateway_tasks, CONFIGURE)
+        cls.report = find_task(gateway_tasks, REPORT)
         cls.migrate = find_task(tasks, MIGRATE)
-        cls.pin_models = find_task(tasks, 'Pin agent model allowlist with claude-cli runtime mapping')
+        cls.auth_profiles = find_task(tasks, 'Enforce agent auth-profiles — setup token present, api-key profile absent')
         cls.migrate_report = find_task(tasks, MIGRATE_REPORT)
         assert cls.temp_files and cls.configure and cls.report and cls.migrate and cls.migrate_report, 'Config role tasks moved'
 
@@ -111,12 +127,39 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         systemctl = root / 'bin/systemctl'
         systemctl.write_text(FAKE_SYSTEMCTL)
         systemctl.chmod(0o700)
+        docker = root / 'bin/docker'
+        docker.write_text('#!/bin/sh\nexit 0\n')
+        docker.chmod(0o700)
+        (root / 'state').mkdir(exist_ok=True)
+        store = root / 'store.json'
+        if not store.exists():
+            store.write_text('{}')
+        config = root / 'state/openclaw.json'
+        if not config.exists():
+            config.symlink_to(store)
+        class Startup(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"ok":true,"status":"started"}')
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Startup)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         # Point the tasks' fixed server and temp paths at this fixture tree.
         tasks = json.loads(json.dumps(tasks).replace('/home/ubuntu/.openclaw', str(root / 'state'))
                            .replace('/home/ubuntu/.config', str(root / 'config'))
-                           .replace('/tmp/ansible-', str(root / 'tmp-ansible-')))
-        for task in tasks:
-            task.pop('notify', None)
+                           .replace('/tmp/ansible-', str(root / 'tmp-ansible-'))
+                           .replace('http://127.0.0.1:18789', f'http://127.0.0.1:{server.server_port}')
+                           .replace("'gateway-config.json.j2'", repr(str(ROOT / 'ansible/roles/config/templates/gateway-config.json.j2'))))
+        def remove_notifications(items):
+            for task in items:
+                task.pop('notify', None)
+                for section in ('block', 'rescue', 'always'):
+                    remove_notifications(task.get(section, []))
+        remove_notifications(tasks)
         variables = {**self.defaults, 'gateway_token': 'fixture-gateway', 'openclaw_agents': [{'id': 'main', 'is_default': True, 'deliver_channel': 'telegram',
                                          'deliver_to': '', 'deliver_type': 'dm'}],
                      **(extra_vars or {})}
@@ -126,16 +169,154 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         env = {'PATH': f"{root / 'bin'}:{os.environ['PATH']}", 'HOME': str(root),
                'FIXTURE_ROOT': str(root), 'ANSIBLE_NOCOLOR': '1',
                'ANSIBLE_LOCAL_TEMP': str(root / 'local'), 'ANSIBLE_REMOTE_TEMP': str(root / 'remote')}
-        return subprocess.run([self.ansible, '-i', 'localhost,', str(root / 'play.json')],
-                              env=env, capture_output=True, text=True, timeout=120)
+        try:
+            return subprocess.run([self.ansible, '-i', 'localhost,', str(root / 'play.json')],
+                                  env=env, capture_output=True, text=True, timeout=120)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def json_writes(self, root):
         writes = {}
+        def flatten(value, prefix=''):
+            for key, child in value.items():
+                name = prefix + '.' + key if prefix else key
+                if isinstance(child, dict) and name not in ('models', 'agents.defaults.models'):
+                    flatten(child, name)
+                else:
+                    writes[name] = child
         for line in (root / 'writes').read_text().splitlines():
-            parts = json.loads(line)
-            if parts[:2] == ['config', 'set'] and '--json' in parts:
-                writes[parts[2]] = json.loads(parts[parts.index('--json') + 1])
+            flatten(json.loads(line)['patch'])
         return writes
+
+    def test_config_writes_are_serialized_with_gateway_lifecycle(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            result = self.run_task([self.configure], root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / 'gateway-stopped').exists())
+            self.assertEqual(len((root / 'writes').read_text().splitlines()), 1)
+            calls = [json.loads(line)[0] for line in (root / 'systemctl').read_text().splitlines()]
+            self.assertEqual(calls, [['--user', 'stop', 'openclaw-gateway'], ['--user', 'start', 'openclaw-gateway']])
+            self.assertEqual(list(root.glob('tmp-ansible-*')), [])
+            write = json.loads((root / 'writes').read_text())
+            self.assertNotIn('fixture-gateway', json.dumps(write['args']))
+            self.assertNotIn('fixture-gateway', result.stdout + result.stderr)
+
+    def test_patch_failure_stays_failed_and_restores_gateway_without_advancing_hash(self):
+        for failure in ('patch-fails', 'post-write-fails'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                first = self.run_task([self.configure], root)
+                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                hash_path = root / 'state/.ansible-hashes/custom-models'
+                previous_hash = hash_path.read_text()
+                previous_store = (root / 'store.json').read_text()
+                (root / failure).touch()
+                (root / 'writes').unlink()
+                failed = self.run_task([self.configure], root,
+                    {'gateway_token': 'fixture-private-key', 'openclaw_custom_models': {'mode': 'replace'}})
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn('provisioning remains failed', failed.stdout)
+                self.assertNotIn('fixture-private-key', failed.stdout + failed.stderr)
+                self.assertEqual(hash_path.read_text(), previous_hash)
+                self.assertFalse((root / 'gateway-stopped').exists())
+                self.assertEqual(list(root.glob('tmp-ansible-*')), [])
+                if failure == 'patch-fails':
+                    self.assertEqual((root / 'store.json').read_text(), previous_store)
+                    self.assertFalse((root / 'writes').exists())
+                else:
+                    self.assertNotEqual((root / 'store.json').read_text(), previous_store)
+                    self.assertIn('not a rollback', failed.stdout)
+
+    def test_stop_and_start_failures_are_not_swallowed(self):
+        for failure in ('stop-fails', 'start-fails'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / failure).touch()
+                failed = self.run_task([self.configure], root)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(list(root.glob('tmp-ansible-*')), [])
+                self.assertFalse((root / 'state/.ansible-hashes/custom-models').exists())
+                if failure == 'stop-fails':
+                    self.assertFalse((root / 'writes').exists())
+                    self.assertIn('Start the gateway after', failed.stdout)
+                else:
+                    self.assertTrue((root / 'gateway-stopped').exists())
+
+    def test_unreadable_authored_config_fails_without_touching_gateway(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            (root / 'store.json').write_text('{truncated')
+            failed = self.run_task([self.configure], root)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertFalse((root / 'systemctl').exists())
+            self.assertFalse((root / 'writes').exists())
+            self.assertEqual(list(root.glob('tmp-ansible-*')), [])
+
+    def test_custom_models_replacement_and_credentials_preserve_unmanaged_settings(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            (root / 'store.json').write_text(json.dumps({'env': {'vars': {'KEEP': 'fixture-keep'}},
+                'tools': {'web': {'search': {'apiKey': 'fixture-old', 'grok': {'apiKey': 'fixture-old'}}}}}))
+            first = self.run_task([self.configure], root, {'gemini_api_key': 'fixture-google'})
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            self.assertEqual(store['env']['vars']['KEEP'], 'fixture-keep')
+            self.assertEqual(store['models']['providers']['google']['apiKey'], 'fixture-google')
+            self.assertNotIn('apiKey', store['tools']['web']['search'])
+            self.assertNotIn('apiKey', store['tools']['web']['search']['grok'])
+            self.assertNotIn('fixture-google', first.stdout + first.stderr)
+            for line in (root / 'writes').read_text().splitlines():
+                self.assertNotIn('fixture-google', json.dumps(json.loads(line)['args']))
+            removed = self.run_task([self.configure], root, {'gemini_api_key': ''})
+            self.assertEqual(removed.returncode, 0, removed.stdout + removed.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            self.assertNotIn('google', store['models'].get('providers', {}))
+            self.assertEqual(store['env']['vars']['KEEP'], 'fixture-keep')
+
+    def test_effective_anthropic_backend_is_required_without_overriding_policy(self):
+        for policy in ({'enabled': False}, {'deny': ['anthropic']}, {'deny': [' ANTHROPIC ']},
+                {'deny': ['\ufeffanthropic']},
+                {'entries': {'anthropic': {'enabled': False}, ' Anthropic ': {'enabled': False}}},
+                {'entries': {'anthropic': {'enabled': False}, '\ufeffanthropic': {'enabled': False}}}):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / 'store.json').write_text(json.dumps({'plugins': policy}))
+                failed = self.run_task([self.configure], root)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn('Anthropic backend is not enabled', failed.stdout + failed.stderr)
+                stored = json.loads((root / 'store.json').read_text())['plugins']
+                for key in ('enabled', 'deny'):
+                    if key in policy:
+                        self.assertEqual(stored[key], policy[key])
+                for key, entry in policy.get('entries', {}).items():
+                    if key != 'anthropic':
+                        self.assertEqual(stored['entries'][key], entry)
+                self.assertFalse((root / 'gateway-stopped').exists())
+                self.assertFalse((root / 'state/.ansible-hashes/custom-models').exists())
+                self.assertEqual(list(root.glob('tmp-ansible-*')), [])
+
+    def test_backend_assertion_runs_on_noop_and_inventory_errors_fail(self):
+        for failure in ('disabled', 'inventory-fails'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                first = self.run_task([self.configure], root)
+                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                (root / 'writes').unlink()
+                (root / 'systemctl').unlink()
+                if failure == 'disabled':
+                    store = json.loads((root / 'store.json').read_text())
+                    store['plugins']['enabled'] = False
+                    (root / 'store.json').write_text(json.dumps(store))
+                else:
+                    (root / failure).touch()
+                failed = self.run_task([self.configure], root)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertFalse((root / 'writes').exists())
+                self.assertFalse((root / 'systemctl').exists())
+                self.assertEqual(list(root.glob('tmp-ansible-*')), [])
 
     def test_a_declared_adapter_is_allowed_before_and_after_installation(self):
         # Nothing is installed in this fixture: the policy must not depend on an
@@ -165,28 +346,28 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 first = self.run_task(tasks, root, extra)
                 self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
                 (root / 'writes').unlink()
+                (root / 'systemctl').unlink()
                 second = self.run_task(tasks, root, extra)
                 self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
                 self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
+                self.assertFalse((root / 'systemctl').exists(), 'Converged config stopped or started the gateway')
                 self.assertNotIn('UPDATED:', second.stdout)
 
     def test_model_map_is_compared_with_the_written_config(self):
-        # Since 2026.9.8 `config get agents.defaults.models` returns the effective map,
-        # with every model OpenClaw adds by default; only the file holds what we wrote.
-        pin = self.pin_models
-        assert pin, 'Config role tasks moved'
+        # The fixture refuses config get: comparisons must use the authored map,
+        # not the effective map enriched with OpenClaw's default models.
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
             root = Path(tmp)
-            desired = {model: {'agentRuntime': {'id': 'claude-cli'}, **({'alias': alias} if alias else {})}
-                       for model, alias in ((m, (v or {}).get('alias')) for m, v in self.defaults['openclaw_agent_models'].items())}
-            (root / 'state').mkdir()
-            (root / 'state/openclaw.json').write_text(json.dumps({'agents': {'defaults': {'models': desired}}}))
-            effective = {**desired, 'anthropic/claude-added-by-default': {'agentRuntime': {'id': 'claude-cli'}}}
-            (root / 'store.json').write_text(json.dumps({'agents': {'defaults': {
-                'models': effective, 'modelPolicy': {'allow': list(self.defaults['openclaw_agent_models'])}}}}))
-            result = self.run_task([pin], root)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertFalse((root / 'writes').exists(), (root / 'writes').read_text() if (root / 'writes').exists() else '')
+            first = self.run_task([self.configure], root)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            self.assertEqual(store['agents']['defaults']['models'], self.defaults['openclaw_agent_models'])
+            store['agents']['defaults']['modelPolicy']['allow'].reverse()
+            (root / 'store.json').write_text(json.dumps(store))
+            (root / 'writes').unlink()
+            second = self.run_task([self.configure], root)
+            self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+            self.assertFalse((root / 'writes').exists())
 
     def test_no_adapter_is_allowed_when_none_is_declared(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
@@ -385,6 +566,18 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             result = self.run_task([self.migrate, self.migrate_report], root)
             self.assertRegex(result.stdout, r'localhost\s+: ok=1\s+changed=0 ')
             self.assertFalse((root / 'systemctl').exists(), 'gateway touched with nothing to migrate')
+
+    def test_unreadable_auth_profiles_are_not_replaced_with_empty_data(self):
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            profiles = root / '.openclaw/agents/main/agent/auth-profiles.json'
+            profiles.parent.mkdir(parents=True)
+            original = '{"profiles": {"valuable": "truncated'
+            profiles.write_text(original)
+            failed = self.run_task([self.auth_profiles], root, {'claude_setup_token': 'fixture-private-key'})
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual(profiles.read_text(), original)
+            self.assertNotIn('fixture-private-key', failed.stdout + failed.stderr)
 
     def test_an_unreadable_session_store_fails_before_the_gateway_stops(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
