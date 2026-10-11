@@ -200,20 +200,29 @@ fi
 # 10. Channel status — one SSH call, parse once per channel
 echo ""
 echo "10. Checking configured channels..."
+# Production WhatsApp is intentionally outside the default health check.
+# Do not change the channel, staging checks, or explicit REQUIRED_CHANNELS.
+CHECK_WHATSAPP=true
+if [[ "$EXPECTED_HOSTNAME" == "openclaw-vps" && -z "${STAGING_HOST:-}" ]]; then
+    CHECK_WHATSAPP=false
+    echo "   Production WhatsApp health is excluded unless explicitly required"
+fi
 if CHANNELS_STATUS=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "timeout 60 openclaw channels status --json" 2>/dev/null) &&
-    printf '%s' "$CHANNELS_STATUS" | jq -es --arg required "${REQUIRED_CHANNELS:-}" '
+    printf '%s' "$CHANNELS_STATUS" | jq -es --arg required "${REQUIRED_CHANNELS:-}" \
+        --argjson check_whatsapp "$CHECK_WHATSAPP" '
         def healthy: .enabled == true and .configured == true and .running == true and
                      .lastError == null and .connected == true;
         length == 1 and (.[0].channelAccounts |
             type == "object" and all(.[]; type == "array") and
-            all(.[][] | select(.enabled == true and .configured == true); healthy) and
+            all(to_entries[] | select(.key != "whatsapp" or $check_whatsapp) |
+                .value[] | select(.enabled == true and .configured == true); healthy) and
             (. as $accounts | all($required | split(",")[] | select(length > 0);
                 $accounts[.] | type == "array" and length > 0 and all(.[]; healthy))))
     ' >/dev/null 2>&1; then
-    check_pass "Configured and explicitly required channels are healthy"
+    check_pass "Checked channels are healthy"
 else
-    check_fail "Channel query failed, a required channel is missing, or an account is unhealthy"
+    check_fail "Channel query failed, a required channel is missing, or a checked account is unhealthy"
 fi
 
 # 11. Check scheduled automation policy
