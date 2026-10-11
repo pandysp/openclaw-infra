@@ -269,104 +269,104 @@ def main(args, runtime_path=RUNTIME):
     owner = str(os.getpid()) + ':' + started
     # Ownership exists in the name from mkdir onward, even before Docker create.
     artifacts = tempfile.TemporaryDirectory(dir='/tmp', prefix=f"openclaw-claude-cli-{runtime['guard_table']}-{os.getuid()}-{os.getpid()}-{started}-")
-    # Compaction and /btw carry no MCP configuration by design; when one is passed it must be OpenClaw's.
-    for index, arg in enumerate(args):
-        flag, separator, inline = arg.partition('=')
-        if flag not in {'--mcp-config', '--append-system-prompt-file', '--plugin-dir'}:
-            continue
-        if not separator and index + 1 >= len(args):
-            raise SystemExit('ERROR: Missing CLI artifact argument')
-        source = Path(inline if separator else args[index + 1])
-        if not source.is_absolute() or not str(source).startswith('/tmp/openclaw') or source.resolve() != source:
-            raise SystemExit('ERROR: Unexpected CLI artifact path')
-        if flag == '--mcp-config':
-            data = json.loads(source.read_text())
-            server = data['mcpServers']['openclaw']
-            origin = urlsplit(server['url'])
-            if server['type'] != 'http' or origin.scheme != 'http' or origin.hostname != '127.0.0.1' or origin.path != '/mcp' or not origin.port or origin.query or origin.fragment:
-                raise SystemExit('ERROR: Expected the generated OpenClaw loopback MCP configuration')
-            if urlsplit(runtime['mcp_url']).path != '/openclaw/mcp':
-                raise SystemExit('ERROR: CLI MCP relay must use the fixed /openclaw/mcp path')
-            proxy_address(runtime['mcp_url'])
-            atomic_json(Path(runtime['mcp_target']), {'port': origin.port})
-            server['url'] = runtime['mcp_url']
-            rewritten = Path(artifacts.name) / 'mcp.json'
-            atomic_json(rewritten, data)
-            mount(rewritten, source)
-        else:
-            mount(source)
-        if flag == '--plugin-dir':
-            for skill in (source / 'skills').iterdir():
-                if skill.is_symlink():
-                    target = skill.resolve(strict=True)
-                    if not target.is_relative_to(workspace):
-                        # Since 2026.7.1, channel plugins' skills live in their installed packages.
-                        # The OpenClaw package root covers its skills/ and bundled extension skills.
-                        roots = [HOME / '.openclaw/skills', HOME / '.npm-global/lib/node_modules/openclaw', HOME / '.openclaw/npm/projects']
-                        if not any(target.is_relative_to(root) for root in roots):
-                            raise SystemExit(f'ERROR: CLI skill source is outside expected skill roots: {target}')
-                        mount(target)
-
-    network = json.loads(output(['docker', 'network', 'inspect', runtime['network']]))[0]
-    if network['Driver'] != 'bridge' or not network['EnableIPv6']:
-        raise SystemExit('ERROR: CLI requires its provisioned dual-stack bridge network')
-    interface = network.get('Options', {}).get('com.docker.network.bridge.name', 'br-' + network['Id'][:12])
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,15}', interface) or not re.fullmatch(r'[A-Za-z0-9_]+', runtime['guard_table']):
-        raise SystemExit('ERROR: Invalid CLI network guard configuration')
-    if not re.fullmatch(r'[A-Za-z0-9_.@-]+[.]service', runtime['guard_service']):
-        raise SystemExit('ERROR: Invalid CLI network guard service name')
-    service = subprocess.run(['systemctl', 'is-active', runtime['guard_service']], capture_output=True, text=True, timeout=5)
-    if service.returncode != 0 or service.stdout.strip() != 'active':
-        raise SystemExit('ERROR: CLI network guard service is not ready; restore it before launching')
-    guard = {'nftables': []}
-    for family in ['inet', 'bridge']:
-        guard['nftables'] += json.loads(output(['sudo', '-n', 'nft', '-j', 'list', 'table', family, runtime['guard_table']]))['nftables']
-    validate_guard(guard, interface, proxy_address(runtime['mcp_url']))
-    git_proxy = workspace / '.git-proxy-config'
-    has_pat = (HOME / '.openclaw/github-tokens' / agent).is_file()
-    if has_pat != git_proxy.is_file():
-        raise SystemExit('ERROR: Workspace Git proxy configuration does not match its provisioned token')
-    if has_pat:
-        endpoint = urlsplit(runtime['mcp_url'])
-        base = f'http://{endpoint.hostname}:{endpoint.port}'
-        original = git_proxy.read_text()
-        content, changed = re.subn(r'(?<=url ")http://[^/"\n]+', base, original)
-        if changed != 1:
-            raise SystemExit('ERROR: Expected one managed workspace Git proxy URL')
-        # The provisioned shared endpoint needs no overlay: the workspace's
-        # directory bind then sees atomic alias updates during warm sessions.
-        if content != original:
-            rewritten_git = Path(artifacts.name) / 'git-proxy-config'
-            rewritten_git.write_text(content)
-            mount(rewritten_git, git_proxy)
-    name = 'openclaw-claude-' + uuid.uuid4().hex[:12]
-    command = ['docker', 'create', '--rm', '-i', '--name', name, '--network', runtime['network'],
-               '--label', 'openclaw.claude-owner=' + owner,
-               '--label', 'openclaw.claude-session=' + (session or 'none'), '--label', 'openclaw.claude-agent=' + agent,
-               '--label', 'openclaw.claude-guard=' + runtime['guard_table'],
-               '--user', '1000:1000', '--read-only', '--cap-drop', 'ALL',
-               '--security-opt', 'no-new-privileges', '--stop-timeout', '10',
-               '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=256m', '--tmpfs', '/run:rw,noexec,nosuid,size=1m',
-               *mac_options,
-               '-e', 'HOME=/home/ubuntu', '-e', 'CLAUDE_SECURESTORAGE_CONFIG_DIR=' + str(SECURE_STORAGE),
-               '-e', 'GIT_TERMINAL_PROMPT=0',
-               '-e', f'GIT_CONFIG_COUNT={3 if has_pat else 2}', '-e', 'GIT_CONFIG_KEY_0=user.name', '-e', 'GIT_CONFIG_VALUE_0=OpenClaw Agent',
-               '-e', 'GIT_CONFIG_KEY_1=user.email', '-e', 'GIT_CONFIG_VALUE_1=openclaw@localhost']
-    if has_pat:
-        command += ['-e', 'GIT_CONFIG_KEY_2=include.path', '-e', f'GIT_CONFIG_VALUE_2={git_proxy}']
-    for variable in runtime['env_names']:
-        if not re.fullmatch(r'[A-Z][A-Z0-9_]*_(?:API_KEY|API_TOKEN)', variable):
-            raise SystemExit('ERROR: Unsafe CLI skill environment name in runtime configuration')
-    for variable in sorted(os.environ):
-        if variable.startswith('OPENCLAW_MCP_') or variable in runtime['env_names']:
-            command += ['-e', variable]
-    for binding in mounts.values():
-        command += ['--mount', binding]
-    command += ['-w', str(workspace), runtime['image'], *args, *extra]
-    with Path(runtime['invocations']).open('a') as stream:
-        stream.write(json.dumps({'agent': agent, 'session': session, 'name': name, 'resuming': '--resume' in args}) + '\n')
-
     try:
+        # Compaction and /btw carry no MCP configuration by design; when one is passed it must be OpenClaw's.
+        for index, arg in enumerate(args):
+            flag, separator, inline = arg.partition('=')
+            if flag not in {'--mcp-config', '--append-system-prompt-file', '--plugin-dir'}:
+                continue
+            if not separator and index + 1 >= len(args):
+                raise SystemExit('ERROR: Missing CLI artifact argument')
+            source = Path(inline if separator else args[index + 1])
+            if not source.is_absolute() or not str(source).startswith('/tmp/openclaw') or source.resolve() != source:
+                raise SystemExit('ERROR: Unexpected CLI artifact path')
+            if flag == '--mcp-config':
+                data = json.loads(source.read_text())
+                server = data['mcpServers']['openclaw']
+                origin = urlsplit(server['url'])
+                if server['type'] != 'http' or origin.scheme != 'http' or origin.hostname != '127.0.0.1' or origin.path != '/mcp' or not origin.port or origin.query or origin.fragment:
+                    raise SystemExit('ERROR: Expected the generated OpenClaw loopback MCP configuration')
+                if urlsplit(runtime['mcp_url']).path != '/openclaw/mcp':
+                    raise SystemExit('ERROR: CLI MCP relay must use the fixed /openclaw/mcp path')
+                proxy_address(runtime['mcp_url'])
+                atomic_json(Path(runtime['mcp_target']), {'port': origin.port})
+                server['url'] = runtime['mcp_url']
+                rewritten = Path(artifacts.name) / 'mcp.json'
+                atomic_json(rewritten, data)
+                mount(rewritten, source)
+            else:
+                mount(source)
+            if flag == '--plugin-dir':
+                for skill in (source / 'skills').iterdir():
+                    if skill.is_symlink():
+                        target = skill.resolve(strict=True)
+                        if not target.is_relative_to(workspace):
+                            # Since 2026.7.1, channel plugins' skills live in their installed packages.
+                            # The OpenClaw package root covers its skills/ and bundled extension skills.
+                            roots = [HOME / '.openclaw/skills', HOME / '.npm-global/lib/node_modules/openclaw', HOME / '.openclaw/npm/projects']
+                            if not any(target.is_relative_to(root) for root in roots):
+                                raise SystemExit(f'ERROR: CLI skill source is outside expected skill roots: {target}')
+                            mount(target)
+
+        network = json.loads(output(['docker', 'network', 'inspect', runtime['network']]))[0]
+        if network['Driver'] != 'bridge' or not network['EnableIPv6']:
+            raise SystemExit('ERROR: CLI requires its provisioned dual-stack bridge network')
+        interface = network.get('Options', {}).get('com.docker.network.bridge.name', 'br-' + network['Id'][:12])
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,15}', interface) or not re.fullmatch(r'[A-Za-z0-9_]+', runtime['guard_table']):
+            raise SystemExit('ERROR: Invalid CLI network guard configuration')
+        if not re.fullmatch(r'[A-Za-z0-9_.@-]+[.]service', runtime['guard_service']):
+            raise SystemExit('ERROR: Invalid CLI network guard service name')
+        service = subprocess.run(['systemctl', 'is-active', runtime['guard_service']], capture_output=True, text=True, timeout=5)
+        if service.returncode != 0 or service.stdout.strip() != 'active':
+            raise SystemExit('ERROR: CLI network guard service is not ready; restore it before launching')
+        guard = {'nftables': []}
+        for family in ['inet', 'bridge']:
+            guard['nftables'] += json.loads(output(['sudo', '-n', 'nft', '-j', 'list', 'table', family, runtime['guard_table']]))['nftables']
+        validate_guard(guard, interface, proxy_address(runtime['mcp_url']))
+        git_proxy = workspace / '.git-proxy-config'
+        has_pat = (HOME / '.openclaw/github-tokens' / agent).is_file()
+        if has_pat != git_proxy.is_file():
+            raise SystemExit('ERROR: Workspace Git proxy configuration does not match its provisioned token')
+        if has_pat:
+            endpoint = urlsplit(runtime['mcp_url'])
+            base = f'http://{endpoint.hostname}:{endpoint.port}'
+            original = git_proxy.read_text()
+            content, changed = re.subn(r'(?<=url ")http://[^/"\n]+', base, original)
+            if changed != 1:
+                raise SystemExit('ERROR: Expected one managed workspace Git proxy URL')
+            # The provisioned shared endpoint needs no overlay: the workspace's
+            # directory bind then sees atomic alias updates during warm sessions.
+            if content != original:
+                rewritten_git = Path(artifacts.name) / 'git-proxy-config'
+                rewritten_git.write_text(content)
+                mount(rewritten_git, git_proxy)
+        name = 'openclaw-claude-' + uuid.uuid4().hex[:12]
+        command = ['docker', 'create', '--rm', '-i', '--name', name, '--network', runtime['network'],
+                   '--label', 'openclaw.claude-owner=' + owner,
+                   '--label', 'openclaw.claude-session=' + (session or 'none'), '--label', 'openclaw.claude-agent=' + agent,
+                   '--label', 'openclaw.claude-guard=' + runtime['guard_table'],
+                   '--user', '1000:1000', '--read-only', '--cap-drop', 'ALL',
+                   '--security-opt', 'no-new-privileges', '--stop-timeout', '10',
+                   '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=256m', '--tmpfs', '/run:rw,noexec,nosuid,size=1m',
+                   *mac_options,
+                   '-e', 'HOME=/home/ubuntu', '-e', 'CLAUDE_SECURESTORAGE_CONFIG_DIR=' + str(SECURE_STORAGE),
+                   '-e', 'GIT_TERMINAL_PROMPT=0',
+                   '-e', f'GIT_CONFIG_COUNT={3 if has_pat else 2}', '-e', 'GIT_CONFIG_KEY_0=user.name', '-e', 'GIT_CONFIG_VALUE_0=OpenClaw Agent',
+                   '-e', 'GIT_CONFIG_KEY_1=user.email', '-e', 'GIT_CONFIG_VALUE_1=openclaw@localhost']
+        if has_pat:
+            command += ['-e', 'GIT_CONFIG_KEY_2=include.path', '-e', f'GIT_CONFIG_VALUE_2={git_proxy}']
+        for variable in runtime['env_names']:
+            if not re.fullmatch(r'[A-Z][A-Z0-9_]*_(?:API_KEY|API_TOKEN)', variable):
+                raise SystemExit('ERROR: Unsafe CLI skill environment name in runtime configuration')
+        for variable in sorted(os.environ):
+            if variable.startswith('OPENCLAW_MCP_') or variable in runtime['env_names']:
+                command += ['-e', variable]
+        for binding in mounts.values():
+            command += ['--mount', binding]
+        command += ['-w', str(workspace), runtime['image'], *args, *extra]
+        with Path(runtime['invocations']).open('a') as stream:
+            stream.write(json.dumps({'agent': agent, 'session': session, 'name': name, 'resuming': '--resume' in args}) + '\n')
+
         return run_container(['docker', 'start', '--attach', '--interactive', name], name,
             prepare=lambda: create_guarded(command, runtime['guard_table'], runtime['guard_service']))
     finally:

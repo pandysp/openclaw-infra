@@ -9,6 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import warnings
 from unittest.mock import Mock, patch
 
 SOURCE = Path(__file__).resolve().parents[2] / 'ansible/roles/claude-cli/files/claude-cli-container.py'
@@ -317,7 +318,10 @@ class LauncherMacScopeTest(unittest.TestCase):
         self.launch('main', 'mac-air', '.npm-global/lib/node_modules/openclaw/dist/extensions/custodian-skills')
 
     def test_skill_outside_known_roots_is_refused(self):
-        self.launch('main', 'mac-air', 'elsewhere', refusal='outside expected skill roots')
+        with warnings.catch_warnings(record=True) as emitted:
+            warnings.simplefilter('always', ResourceWarning)
+            self.launch('main', 'mac-air', 'elsewhere', refusal='outside expected skill roots')
+        self.assertEqual([str(w.message) for w in emitted if issubclass(w.category, ResourceWarning)], [])
 
     def refused(self, entries, cwd, args, message):
         with tempfile.TemporaryDirectory(prefix='launcher-scope-') as directory:
