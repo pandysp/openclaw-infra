@@ -10,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT / 'scripts/check-task-syntax.sh'
-CONFIG = ROOT / 'ansible/roles/config/tasks/main.yml'
+CONFIG = ROOT / 'ansible/roles/config/tasks/gateway-config.yml'
 
 
 class TaskSyntaxTest(unittest.TestCase):
@@ -23,7 +23,7 @@ class TaskSyntaxTest(unittest.TestCase):
         tasks = json.loads(subprocess.check_output([*python, '-c',
             'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', str(CONFIG)], text=True))
         cls.configure = next(task for block in tasks for task in block.get('block', [])
-                             if task.get('name') == 'Configure gateway settings')
+                             if task.get('name') == 'Compare managed settings with the authored config')
 
     def run_check(self, task):
         with tempfile.TemporaryDirectory(prefix='task-syntax-') as directory:
@@ -45,9 +45,9 @@ class TaskSyntaxTest(unittest.TestCase):
     def test_unbalanced_comment_in_real_shell_task_fails(self):
         task = dict(self.configure)
         original = task['ansible.builtin.shell']
-        self.assertEqual(original.count('Exec tool policy for OpenClaw itself'), 1)
+        self.assertEqual(original.count('The runtime enriches custom models.'), 1)
         task['ansible.builtin.shell'] = original.replace(
-            'Exec tool policy for OpenClaw itself', "OpenClaw's own exec tool")
+            'The runtime enriches custom models.', "The runtime's enriched custom models.")
         result = self.run_check({'block': [task], 'always': [{'ansible.builtin.debug': {'msg': 'cleanup'}}]})
         self.assertNotEqual(result.returncode, 0, 'Gate accepted the exact comment that broke provisioning')
         self.assertIn('failed at splitting arguments', result.stdout + result.stderr)

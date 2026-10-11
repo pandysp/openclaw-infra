@@ -11,7 +11,8 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'verify.sh'
 
 
 class SecurityAuditGateTests(unittest.TestCase):
-    def run_gate(self, payload, ssh_status=0, section='audit', socket_error=None):
+    def run_gate(self, payload, ssh_status=0, section='audit', socket_error=None,
+                 expected_hostname='fixture', staging_host='', required_channels='telegram'):
         source = SCRIPT.read_text()
         functions = source[source.index('check_pass() {'):source.index('# 1. Check Tailscale')]
         markers = {'audit': ('# 9. OpenClaw security audit', '# 10. Channel status'),
@@ -41,7 +42,8 @@ class SecurityAuditGateTests(unittest.TestCase):
             env = {'PATH': str(root) + ':' + os.environ['PATH'], 'HOME': tmp,
                    'PYTHONPATH': tmp,
                    'AUDIT_PAYLOAD': payload if isinstance(payload, str) else json.dumps(payload),
-                   'AUDIT_STATUS': str(ssh_status), 'REQUIRED_CHANNELS': 'telegram'}
+                   'AUDIT_STATUS': str(ssh_status), 'REQUIRED_CHANNELS': required_channels,
+                   'EXPECTED_HOSTNAME': expected_hostname, 'STAGING_HOST': staging_host}
             return subprocess.run(['bash', '-euo', 'pipefail'],
                                   input='RED= GREEN= YELLOW= NC=\nFAILURES=0\nFULL_HOSTNAME=fixture.invalid\n' + functions + audit + final,
                                   env=env, text=True, capture_output=True, timeout=10)
@@ -102,6 +104,67 @@ class SecurityAuditGateTests(unittest.TestCase):
                 result = self.run_gate(payload, status, 'channels')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn('fixture-private', result.stdout + result.stderr)
+
+    def test_production_excludes_only_whatsapp_health(self):
+        account = {'enabled': True, 'configured': True, 'running': True,
+                   'connected': True, 'lastError': None}
+        accounts = {'telegram': [account], 'discord': [account],
+                    'whatsapp': [account | {'running': False, 'connected': False}]}
+        result = self.run_gate({'channelAccounts': accounts}, section='channels',
+                               expected_hostname='openclaw-vps')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Production WhatsApp health is excluded unless explicitly required', result.stdout)
+        for channel in ('telegram', 'discord'):
+            with self.subTest(channel=channel):
+                unhealthy = accounts | {channel: [account | {'connected': False}]}
+                result = self.run_gate({'channelAccounts': unhealthy}, section='channels',
+                                       expected_hostname='openclaw-vps')
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_whatsapp_exclusion_does_not_apply_to_staging_or_other_hosts(self):
+        account = {'enabled': True, 'configured': True, 'running': True,
+                   'connected': True, 'lastError': None}
+        payload = {'channelAccounts': {'telegram': [account],
+                   'whatsapp': [account | {'connected': False}]}}
+        for hostname, staging_host in (('fixture', ''), ('openclaw-vps-2', ''),
+                ('openclaw-staging-123-1', ''),
+                ('openclaw-staging-123-1', 'openclaw-staging-123-1.example.ts.net'),
+                ('openclaw-vps', 'openclaw-vps.example.ts.net')):
+            with self.subTest(hostname=hostname, staging_host=staging_host):
+                result = self.run_gate(payload, section='channels', expected_hostname=hostname,
+                                       staging_host=staging_host)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('Production WhatsApp health is excluded', result.stdout)
+
+    def test_explicit_whatsapp_requirement_overrides_production_exclusion(self):
+        account = {'enabled': True, 'configured': True, 'running': True,
+                   'connected': True, 'lastError': None}
+        for hostname in ('openclaw-vps', 'openclaw-staging-123-1'):
+            for whatsapp in (None, [], [account | {'connected': False}],
+                             [account | {'enabled': False}]):
+                with self.subTest(hostname=hostname, whatsapp=whatsapp):
+                    accounts = {'telegram': [account]}
+                    if whatsapp is not None:
+                        accounts['whatsapp'] = whatsapp
+                    result = self.run_gate({'channelAccounts': accounts}, section='channels',
+                                           expected_hostname=hostname,
+                                           required_channels='telegram,whatsapp')
+                    self.assertNotEqual(result.returncode, 0)
+            result = self.run_gate({'channelAccounts': {'telegram': [account], 'whatsapp': [account]}},
+                                   section='channels', expected_hostname=hostname,
+                                   required_channels='telegram,whatsapp')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_production_channel_exclusion_does_not_hide_invalid_or_partial_results(self):
+        account = {'enabled': True, 'configured': True, 'running': True,
+                   'connected': True, 'lastError': None}
+        good = {'channelAccounts': {'telegram': [account]}}
+        for payload, status in ((good, 1), ('not JSON', 0), ({'channelAccounts': []}, 0),
+                ({'channelAccounts': {'telegram': [account], 'whatsapp': {}}}, 0),
+                (json.dumps(good) + '\n' + json.dumps(good), 0)):
+            with self.subTest(payload=payload, status=status):
+                self.assertNotEqual(self.run_gate(payload, status, 'channels',
+                    expected_hostname='openclaw-vps').returncode, 0)
 
     def test_success_requires_a_completed_zero_critical_audit(self):
         result = self.run_gate({'summary': {'critical': 0, 'warn': 3, 'info': 2}})
