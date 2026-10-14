@@ -80,7 +80,7 @@ The `notes/` directory is your and your human's shared second brain — you both
 
 ### Creating Notes
 
-- **Search before creating** — check for duplicates via QMD (see TOOLS.md).
+- **Search before creating** — check for duplicates with `memory_search`.
 - **Naming:** `kebab-case.md`. Daily notes: `YYYY-MM-DD.md`.
 - **Templates:** Use `templates/new-note-template.md` (includes standard YAML frontmatter).
 - **Frontmatter:** Tags, aliases, dates (`YYYY-MM-DD`), booleans. Notes are queryable database entries.

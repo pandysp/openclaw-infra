@@ -1,8 +1,39 @@
 ---
 # Install and configure the mcp-adapter plugin with per-agent MCP servers
-# (GitHub, qmd). Mac execution uses the approved native Bash/SSH route.
+# (GitHub). Mac execution uses the approved native Bash/SSH route.
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
+
+# qmd was replaced by OpenClaw's built-in memory search (2026-10). Remove its
+# per-agent services, watcher scripts, binary and models from older hosts.
+# Workspace .qmd/ indexes and extract caches are workspace data and stay.
+- name: Remove decommissioned qmd services, binary and models
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    cd /home/ubuntu
+    changed=false
+    for unit in .config/systemd/user/qmd-*.service; do
+        [ -e "$unit" ] || continue
+        systemctl --user disable --now "$(basename "$unit")"
+        rm -f "$unit"
+        changed=true
+    done
+    [ "$changed" = false ] || systemctl --user daemon-reload
+    for path in .local/bin/qmd-watch-*.sh .bun .cache/qmd; do
+        [ -e "$path" ] || continue
+        rm -rf "$path"
+        changed=true
+    done
+    if systemctl --user list-units --all --plain --no-legend 'qmd-*' | grep -q .; then
+        echo "ERROR: qmd units still loaded" >&2
+        exit 1
+    fi
+    if [ "$changed" = true ]; then echo "REMOVED"; else echo "OK"; fi
+  args:
+    executable: /bin/bash
+  register: qmd_decommission
+  changed_when: "'REMOVED' in qmd_decommission.stdout"
 
 - name: Ensure npm global prefix is configured
   ansible.builtin.shell: |
@@ -48,22 +79,6 @@
     executable: /bin/bash
   register: github_mcp_binary
   changed_when: false
-
-- name: Resolve qmd binary path
-  ansible.builtin.shell: PATH="$HOME/.bun/bin:$PATH" which qmd
-  args:
-    executable: /bin/bash
-  register: qmd_mcp_binary
-  changed_when: false
-  failed_when: false
-
-- name: Assert qmd binary exists when qmd servers are configured
-  ansible.builtin.assert:
-    that: qmd_mcp_binary.rc == 0
-    fail_msg: >-
-      qmd binary not found but qmd servers are configured in group_vars.
-      Run the qmd role first: ./scripts/provision.sh --tags qmd,plugins
-  when: _openclaw_mcp_servers | selectattr('type', 'equalto', 'qmd') | list | length > 0
 
 - name: Set npm prefix bin path fact
   ansible.builtin.set_fact:
@@ -186,21 +201,6 @@
              . + [{name: $name, transport: "stdio", command: $cmd, env: {GITHUB_PERSONAL_ACCESS_TOKEN: $token}}] end')
         {% endfor %}
 
-        {% if qmd_workspaces | length > 0 %}
-        # qmd servers — HTTP daemon mode (decoupled from gateway lifecycle)
-        # Port assignment positional over qmd_workspaces list, must match qmd role.
-        QMD_BINARY="{{ (qmd_mcp_binary.stdout | default('')) | trim }}"
-        if [ -n "$QMD_BINARY" ] && [ -x "$QMD_BINARY" ]; then
-        {% for ws in qmd_workspaces %}
-            SERVERS=$(echo "$SERVERS" | jq --arg name "{{ ws.server_name }}" \
-                --arg url "http://localhost:{{ ws.port }}/mcp" \
-                '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 300000}]')
-        {% endfor %}
-        else
-            echo "NOTE: qmd binary not found, skipping qmd MCP servers"
-        fi
-        {% endif %}
-
         # Build final config
         test ! -L /tmp/ansible-plugin-config
         install -m 600 /dev/null /tmp/ansible-plugin-config
@@ -248,7 +248,7 @@
       no_log: true
 
     # The tool cache holds what the servers report, so maintenance (stopping the gateway)
-    # runs only when the adapter, its config, the server packages or qmd changed.
+    # runs only when the adapter, its config or the server packages changed.
     - name: Compare desired MCP adapter config with the live config
       ansible.builtin.command:
         argv:
@@ -271,7 +271,6 @@
         or force_plugin_reinstall | default(false) | bool
         or mcp_config_compare.stdout == 'differs'
         or (mcp_server_packages is defined and mcp_server_packages is changed)
-        or (qmd_install is defined and qmd_install is changed)
       block:
         # Installation auto-enables its entry. The global switch keeps native CLI
         # loads from registering the new adapter before preparation has completed.
@@ -433,8 +432,8 @@
   until: gateway_active_check.rc == 0
   changed_when: false
 
-# The gateway's journal is no signal: a healthy long-running gateway logs
-# "[mcp-adapter] qmd transport error" when an idle session closes, and qmd tools keep working.
+# The gateway's journal is no signal: a healthy long-running gateway can log
+# "[mcp-adapter] ... transport error" when an idle session closes, and the tools keep working.
 # This reads OpenClaw's plugin registry; the final health check covers the running gateway.
 - name: Verify the MCP adapter is enabled and loaded
   ansible.builtin.shell: |
@@ -450,10 +449,10 @@
 
 # --- Per-agent MCP tool scoping ---
 # Each agent denies all MCP server tool prefixes except its own.
-# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
+# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*").
 # Safe because toolPrefix uses "_" while server names use "-" as separator,
 # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
+# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", ...]
 
 - name: Set per-agent tool deny rules for MCP tools
   ansible.builtin.shell: |
@@ -487,44 +486,4 @@
     label: "{{ item.id }}"
   register: deny_result
   changed_when: "'UPDATED' in deny_result.stdout"
-  notify: restart openclaw-gateway
-
-# --- Disable built-in memory search (memory.search) when qmd servers are registered ---
-# Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are
-# confirmed in the plugin config. If provisioning fails between qmd and plugins,
-# agents still have built-in memory search as fallback.
-
-- name: Check if qmd servers are in plugin config
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    QMD_COUNT=$(jq '[.plugins.entries["openclaw-mcp-adapter"].config.servers[]? | select(.name | startswith("qmd"))] | length' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "0")
-    echo "$QMD_COUNT"
-  args:
-    executable: /bin/bash
-  register: qmd_server_count
-  changed_when: false
-
-- name: Check current built-in memory search state
-  ansible.builtin.shell: |
-    export XDG_RUNTIME_DIR=/run/user/1000
-    # The jq // operator treats false as "missing" and returns the RHS, so we
-    # use an explicit null check to distinguish false from an absent key.
-    RESULT=$(jq -r '.memory.search.enabled | if . == null then "unset" else tostring end' /home/ubuntu/.openclaw/openclaw.json 2>/dev/null || echo "unset")
-    echo "$RESULT"
-  args:
-    executable: /bin/bash
-  register: memory_search_state
-  changed_when: false
-  when: (qmd_server_count.stdout | int) > 0
-
-- name: Disable built-in memory search (replaced by qmd)
-  ansible.builtin.shell: |
-    export XDG_RUNTIME_DIR=/run/user/1000
-    openclaw config set memory.search.enabled false
-  args:
-    executable: /bin/bash
-  when:
-    - (qmd_server_count.stdout | int) > 0
-    - memory_search_state.stdout != "false"
   notify: restart openclaw-gateway

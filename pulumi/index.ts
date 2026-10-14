@@ -42,6 +42,7 @@ const discordBotToken = config.getSecret("discordBotToken");
 const xaiApiKey = config.getSecret("xaiApiKey");
 const exaApiKey = config.getSecret("exaApiKey");
 const firecrawlApiKey = config.getSecret("firecrawlApiKey");
+const deepinfraApiKey = config.getSecret("deepinfraApiKey");
 const groqApiKey = config.getSecret("groqApiKey");
 const elevenlabsApiKey = config.getSecret("elevenlabsApiKey");
 const geminiApiKey = config.getSecret("geminiApiKey");
@@ -167,6 +168,7 @@ const provisionEnv: Record<string, pulumi.Input<string>> = {
     PROVISION_XAI_API_KEY: xaiApiKey || "",
     PROVISION_EXA_API_KEY: exaApiKey || "",
     PROVISION_FIRECRAWL_API_KEY: firecrawlApiKey || "",
+    PROVISION_DEEPINFRA_API_KEY: deepinfraApiKey || "",
     PROVISION_GROQ_API_KEY: groqApiKey || "",
     PROVISION_ELEVENLABS_API_KEY: elevenlabsApiKey || "",
     PROVISION_GEMINI_API_KEY: geminiApiKey || "",

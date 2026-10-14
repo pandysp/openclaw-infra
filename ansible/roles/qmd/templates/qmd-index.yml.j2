@@ -1,6 +1,0 @@
-collections:
-{% for col in qmd_collections %}
-  {{ col.name }}:
-    path: {{ item.workspace_dir }}/{{ col.path }}
-    pattern: "{{ col.pattern }}"
-{% endfor %}

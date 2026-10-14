@@ -37,12 +37,7 @@
       - ffmpeg              # OpenClaw checks skill requirements on the host (video-frames needs it)
       - python3
       - git
-      - unzip               # Required by bun installer
-      - poppler-utils       # pdftotext for qmd text extraction
-      - tesseract-ocr       # OCR for images (replaces macOS Vision API)
-      - tesseract-ocr-deu   # German language data for tesseract
       - build-essential      # make/gcc for npm native modules (e.g., @discordjs/opus)
-      - inotify-tools       # inotifywait for qmd recursive file watching
     state: present
 
 # Provisioning no longer upgrades Tailscale (held above), so its own updater must stay on.
@@ -106,7 +101,8 @@
     scope: global
   become: false
 
-- name: Increase inotify watch limit for qmd watchers
+# Each Obsidian Sync daemon (one per agent) holds inotify watches on its workspace.
+- name: Increase inotify watch limit for workspace file watchers
   ansible.posix.sysctl:
     name: fs.inotify.max_user_watches
     value: "524288"
