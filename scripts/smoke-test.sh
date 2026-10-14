@@ -55,13 +55,24 @@ try {
   const runtime = JSON.parse(fs.readFileSync(path.join(state, 'claude-cli-runtime.json'), 'utf8'));
   assert.deepEqual(runtime.extra_args, ['--tools', '']);
   const port = config.gateway.port || 18789;
-  const run = args => JSON.parse(execFileSync('openclaw', args, {
+  const runText = args => execFileSync('openclaw', args, {
     encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       HOME: os.homedir(), PATH: process.env.PATH, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`,
       OPENCLAW_CONFIG_PATH: path.join(state, 'openclaw.json'), OPENCLAW_STATE_DIR: state,
     },
-  }));
+  });
+  const run = args => JSON.parse(runText(args));
+
+  // A live embedding probe proves the DeepInfra key, plugin and model, not just config.
+  step = 'memory search embeds through DeepInfra';
+  const memoryText = runText(['memory', 'status', '--agent', 'main', '--deep', '--json']);
+  // The CLI can print log lines such as "[memory] ..." before its JSON array.
+  const [memory] = JSON.parse(memoryText.slice(memoryText.search(/^\[\s*[{\]]/m)));
+  assert.equal(memory.status.provider, 'deepinfra');
+  assert.equal(memory.status.model, 'google/embeddinggemma-2');
+  assert.equal(memory.embeddingProbe?.ok, true);
+  pass('memory search embeds through DeepInfra');
 
   const [owner, repoName] = repository.split('/');
   const mainRead = {tool: 'github_get_file_contents', args: {owner, repo: repoName, path: ''}, sessionKey: 'agent:main:main'};

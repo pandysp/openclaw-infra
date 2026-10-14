@@ -52,7 +52,7 @@ openclaw_custom_models:
           maxTokens: 128000
 # OpenClaw 2026.9.3+ supports Node >=24.16 <25 or >=26.1 (Node 26 recommended).
 nodejs_major_version: 26
-openclaw_version: "2026.9.9"
+openclaw_version: "2026.10.3"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
 claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
@@ -86,7 +86,7 @@ openclaw_claude_cli_skill_env:
   - NOTION_API_TOKEN
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in scripts/check-openclaw-contract.sh. Provisioning refuses scheduler changes on a mismatch.
-openclaw_docs_reviewed_version: "2026.9.9"
+openclaw_docs_reviewed_version: "2026.10.3"
 # Agent existence never opts into autonomous work. Deployments must explicitly
 # enable scheduled automation per agent in group_vars/openclaw.yml.
 openclaw_scheduled_automation_default: false
@@ -139,28 +139,6 @@ force_sandbox_rebuild: false
 # Force plugin reinstall (override with -e force_plugin_reinstall=true)
 force_plugin_reinstall: false
 
-# Force qmd reindex (override with -e force_qmd_reindex=true)
-force_qmd_reindex: false
-
-# qmd semantic search settings
-# @tobilu/qmd published on npm — pin with semver
-qmd_version: "2.0.1"
-# Base port for qmd HTTP daemons (one per agent, assigned by position in qmd_workspaces).
-# Port N+0 = first agent, N+1 = second, etc. Re-run --tags qmd,plugins if agents change.
-qmd_http_base_port: 8191
-# qmd collections for search. Paths are relative to the workspace root.
-# qmd silently skips missing paths. Override in openclaw.yml for deployment-specific collections.
-qmd_collections:
-  - name: notes
-    path: "notes"
-    pattern: "**/*.{md,txt,csv}"
-  - name: logs
-    path: "logs"
-    pattern: "**/*.md"
-  - name: extracted-content
-    path: ".scripts/extract-cache"
-    pattern: "*.json"
-
 # Agent definitions — single-agent default for new deployments.
 # Override in openclaw.yml for multi-agent setups (see openclaw.yml.example).
 openclaw_agents:
@@ -208,8 +186,6 @@ openclaw_mcp_adapter:
 openclaw_mcp_server_types:
   - type: "github"
     name_prefix: "github"
-  - type: "qmd"
-    name_prefix: "qmd"
 
 # Obsidian Headless Sync (obsidian-headless npm package)
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.

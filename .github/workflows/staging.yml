@@ -145,8 +145,6 @@ jobs:
           openclaw_mcp_server_types:
             - type: "github"
               name_prefix: "github"
-            - type: "qmd"
-              name_prefix: "qmd"
 
           # Never attach public staging Git backups to the owner's live cloud vault.
           obsidian_headless_enabled: false
@@ -172,13 +170,14 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           GITHUB_TOKEN_PAT: ${{ secrets.STAGING_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           [[ "$PHOENIX_RESOURCE_NAME" =~ ^openclaw-staging-[0-9]+-[0-9]+$ ]]
           for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY PULUMI_BACKEND_URL \
             PULUMI_CONFIG_PASSPHRASE HCLOUD_TOKEN GH_TOKEN TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET \
-            CLAUDE_SETUP_TOKEN TELEGRAM_BOT_TOKEN TELEGRAM_USER_ID XAI_API_KEY EXA_API_KEY FIRECRAWL_API_KEY GITHUB_TOKEN_PAT \
+            CLAUDE_SETUP_TOKEN TELEGRAM_BOT_TOKEN TELEGRAM_USER_ID XAI_API_KEY EXA_API_KEY FIRECRAWL_API_KEY DEEPINFRA_API_KEY GITHUB_TOKEN_PAT \
             STAGING_PRIVATE_REPOSITORY; do
             if [[ -z "${!key:-}" ]]; then
               echo "::error::Required Phoenix input $key is missing or empty"
@@ -270,6 +269,9 @@ jobs:
           printf '%s' "$EXA_API_KEY" | pulumi config set exaApiKey --secret --stack staging --non-interactive
           printf '%s' "$FIRECRAWL_API_KEY" | pulumi config set firecrawlApiKey --secret --stack staging --non-interactive
           printf '%s' "$XAI_API_KEY" | pulumi config set xaiApiKey --secret --stack staging --non-interactive
+
+          # Memory search embeddings (DeepInfra)
+          printf '%s' "$DEEPINFRA_API_KEY" | pulumi config set deepinfraApiKey --secret --stack staging --non-interactive
 
           # GitHub MCP (same PAT for all agents)
           printf '%s' "$GITHUB_TOKEN_PAT" | pulumi config set githubToken --secret --stack staging --non-interactive

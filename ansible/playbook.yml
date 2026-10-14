@@ -179,7 +179,7 @@
       ansible.builtin.assert:
         that:
           - (_openclaw_mcp_servers | type_debug) == 'list'
-          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github', 'qmd']) | list | length) == (_openclaw_mcp_servers | length)
+          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github']) | list | length) == (_openclaw_mcp_servers | length)
           - (_openclaw_mcp_servers | selectattr('name', 'defined') | list | length) == (_openclaw_mcp_servers | length)
           - (_openclaw_mcp_servers | selectattr('agent_id', 'defined') | selectattr('agent_id', 'in', openclaw_agents | map(attribute='id') | list) | list | length) == (_openclaw_mcp_servers | length)
           - >-
@@ -188,7 +188,7 @@
              | select('string') | reject('equalto', '') | list | length)
             == (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | list | length)
         fail_msg: >-
-          MCP servers must use type github or qmd, have a name, and have an
+          MCP servers must use type github, have a name, and have an
           agent_id from openclaw_agents. GitHub definitions also need a nonempty
           string token_var. Remove unsupported server types and
           update manual openclaw_mcp_servers overrides before provisioning.
@@ -264,24 +264,6 @@
              | list }}
       tags: [always]
 
-    - name: Initialize qmd_workspaces list
-      ansible.builtin.set_fact:
-        qmd_workspaces: []
-      tags: [always]
-
-    - name: Derive qmd_workspaces (agents with workspace repos + assigned HTTP port + server name)
-      ansible.builtin.set_fact:
-        qmd_workspaces: >-
-          {{ qmd_workspaces + [item | combine({
-               'port': qmd_http_base_port | int + _idx,
-               'server_name': 'qmd' if item.agent_id == 'main' else 'qmd-' ~ item.agent_id
-             })] }}
-      loop: "{{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}"
-      loop_control:
-        index_var: _idx
-        label: "{{ item.agent_id }}"
-      tags: [always]
-
     # Tailscale WSS URL: used by telegram and post_tasks to route CLI commands through
     # Tailscale Serve instead of local loopback (broken in OpenClaw 2026.3.13).
     # See: https://github.com/openclaw/openclaw/issues/48167
@@ -329,9 +311,7 @@
     - role: obsidian-headless
       tags: [obsidian-headless]
       when: obsidian_headless_enabled | default(false) | bool
-    # qmd after obsidian-headless — needs workspace dirs from agents role, before plugins registers MCP servers.
-    - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
-    # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
+    # plugins after agents — deny rules need agents.
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
     - role: claude-cli
@@ -438,11 +418,11 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
     - name: Apply pending gateway restarts before verification
       ansible.builtin.meta: flush_handlers
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
     - name: Verify restarted gateway health
       ansible.builtin.command: openclaw health --json
@@ -457,7 +437,7 @@
       delay: 5
       # Not hidden: the health report carries no secrets, and a failure must show which part is unhealthy.
       when: not ansible_check_mode
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
     # Since 2026.9.8 a job's delivery channel must already be loaded, so declared jobs are
     # reconciled only after every channel role, the sensitive-key injection (Discord token)

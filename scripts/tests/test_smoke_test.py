@@ -116,6 +116,8 @@ assert 'OPENCLAW_PROFILE' not in os.environ
 assert 'fixture-secret' not in ' '.join(args), 'Secret reached command arguments'
 if args[:1]==['devices']:
  raise SystemExit('A local token-authenticated CLI needs no pairing')
+elif args==['memory','status','--agent','main','--deep','--json']:
+ print('[memory] status log line before JSON');print(json.dumps([{'agentId':'main','status':{'provider':'deepinfra','model':'google/embeddinggemma-2'},'embeddingProbe':{'ok':True}}]))
 elif args[:3]==['gateway','call','agent']:
  config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'Inference still has tools'

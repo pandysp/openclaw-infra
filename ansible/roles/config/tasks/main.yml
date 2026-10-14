@@ -2,13 +2,15 @@
 - name: Provide configured credentials to native skill scripts
   ansible.builtin.include_tasks: skill-environment.yml
 
-- name: Install the configured web provider plugins
+- name: Install the configured provider plugins
   ansible.builtin.include_tasks: web-plugin.yml
   loop: >-
-    {{ (['exa'] if exa_api_key | default('') | length > 0 else []) +
-       (['firecrawl'] if openclaw_firecrawl_enabled | bool else []) }}
+    {{ ([{'id': 'exa', 'package': '@openclaw/exa-plugin'}] if exa_api_key | default('') | length > 0 else []) +
+       ([{'id': 'firecrawl', 'package': '@openclaw/firecrawl-plugin'}] if openclaw_firecrawl_enabled | bool else []) +
+       ([{'id': 'deepinfra', 'package': '@openclaw/deepinfra-provider'}] if deepinfra_api_key | default('') | length > 0 else []) }}
   loop_control:
     loop_var: web_plugin
+    label: "{{ web_plugin.id }}"
 
 - name: Apply managed gateway configuration
   ansible.builtin.include_tasks: gateway-config.yml

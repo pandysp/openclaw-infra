@@ -185,7 +185,7 @@ See [AGENTS.md — Key Rotation](../AGENTS.md#key-rotation) for rotation procedu
 
 Plugins run in-process — they have the same access as the gateway itself (config, credentials, sessions, network, sudo). npm lifecycle scripts execute during installation before code review.
 
-**Current status**: Two non-bundled plugins run in-process: `openclaw-mcp-adapter` (per-agent GitHub and qmd MCP servers, run as host processes, not containers) and the official `@openclaw/whatsapp` channel plugin. Both are pinned and allowlisted.
+**Current status**: Non-bundled plugins run in-process: `openclaw-mcp-adapter` (per-agent GitHub MCP servers, run as host processes, not containers) and the official `@openclaw` WhatsApp, Exa, Firecrawl and DeepInfra plugins. All are pinned and allowlisted.
 
 **When adding plugins**:
 - Review source code before installing

@@ -196,7 +196,6 @@ p.write_text(json.dumps(cfg))
             variables.update({
                 "github_mcp_binary": {"stdout": "/usr/bin/false"},
                 "github_token": "fixture-main\n\n", "github_token_test": "fixture-test\n",
-                "qmd_workspaces": [],
                 "_tailscale_wss_url": "wss://openclaw-test.example",
                 "_openclaw_mcp_servers": [
                     {"type": "github", "name": "github", "token_var": "github_token"},
@@ -267,12 +266,6 @@ p.write_text(json.dumps(cfg))
                 if case != "force_reinstall":  # forcing reinstalls on every run, by design
                     self.assertNotIn(["config", "set", "plugins.enabled", "false"], repeated, "Unchanged rerun disabled plugin loading")
                     self.assertFalse((root / "systemctl-calls").exists(), "Unchanged rerun stopped the gateway")
-                # A rebuilt qmd reports its tools from a new binary, so the cache is prepared again.
-                rebuilt = subprocess.run([*command, "-e", json.dumps({"qmd_install": {"changed": True}})], cwd=root, env=env,
-                                         capture_output=True, text=True, timeout=60, umask=0o022)
-                self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
-                self.assertIn(["stop", "openclaw-gateway"],
-                              [json.loads(line) for line in (root / "systemctl-calls").read_text().splitlines()])
                 if case != "force_reinstall":
                     # A failure after skipped maintenance must not switch the working adapter off.
                     failed = subprocess.run(command, cwd=root, env={**env, "TEST_CASE": "verify_failure"},

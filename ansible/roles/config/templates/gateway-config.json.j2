@@ -54,6 +54,28 @@
 {%   set _ = unset.append('tools.web.fetch.provider') %}
 {%   set _ = settings.update({'plugins.entries.firecrawl.enabled': false}) %}
 {% endif %}
+{# Built-in memory search over notes, logs and private chats, embedded by DeepInfra.
+   The key sits in memory.search.remote so the gateway and on-host CLI commands
+   (memory status/index) both see it; it reaches no chat model. Active Memory
+   recalls earlier private chats; groups and channels never recall. #}
+{% if deepinfra_api_key | default('') | length > 0 %}
+{%   set _ = settings.update({
+       'memory.search.enabled': true,
+       'memory.search.provider': 'deepinfra',
+       'memory.search.model': 'google/embeddinggemma-2',
+       'memory.search.fallback': 'none',
+       'memory.search.remote.apiKey': deepinfra_api_key,
+       'memory.search.extraPaths': ['notes', 'logs'],
+       'memory.search.rememberAcrossConversations': true,
+       'plugins.entries.deepinfra.enabled': true,
+       'plugins.entries.active-memory.enabled': true}) %}
+{%   set _ = plugin_allow.extend(['deepinfra', 'active-memory']) %}
+{% else %}
+{%   set _ = settings.update({'memory.search.enabled': false, 'plugins.entries.active-memory.enabled': false}) %}
+{%   set _ = unset.extend(['memory.search.provider', 'memory.search.model', 'memory.search.fallback', 'memory.search.extraPaths', 'memory.search.rememberAcrossConversations', 'memory.search.remote']) %}
+{% endif %}
+{# Deleted chats stay restorable for two weeks, then their archives are removed. #}
+{% set _ = settings.update({'session.maintenance.resetArchiveRetention': '14d'}) %}
 {% if xai_api_key | default('') | length > 0 %}
 {%   set _ = plugin_allow.append('xai') %}
 {% else %}
