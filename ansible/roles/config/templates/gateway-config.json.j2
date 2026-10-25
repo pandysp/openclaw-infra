@@ -48,10 +48,12 @@
 {%   set _ = unset.extend(['tools.web.search.provider', 'tools.web.search.timeoutSeconds']) %}
 {% endif %}
 {% if openclaw_firecrawl_enabled | bool %}
-{%   set _ = settings.update({'tools.web.fetch.provider': 'firecrawl', 'tools.web.fetch.enabled': true, 'plugins.entries.firecrawl.enabled': true}) %}
+{#   Firecrawl is only the web_fetch fallback. Its direct tools would let agents
+     bypass Exa search and spend the small Firecrawl allowance. #}
+{%   set _ = settings.update({'tools.web.fetch.provider': 'firecrawl', 'tools.web.fetch.enabled': true, 'plugins.entries.firecrawl.enabled': true, 'tools.deny': ['firecrawl_search', 'firecrawl_scrape']}) %}
 {%   set _ = plugin_allow.append('firecrawl') %}
 {% else %}
-{%   set _ = unset.append('tools.web.fetch.provider') %}
+{%   set _ = unset.extend(['tools.web.fetch.provider', 'tools.deny']) %}
 {%   set _ = settings.update({'plugins.entries.firecrawl.enabled': false}) %}
 {% endif %}
 {% if xai_api_key | default('') | length > 0 %}

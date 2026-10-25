@@ -499,6 +499,8 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertIn('firecrawl', store['plugins']['allow'])
             self.assertEqual(str(store['plugins']['entries']['firecrawl']['enabled']).lower(), 'true')
             self.assertNotIn('apiKey', store['plugins']['entries']['firecrawl'].get('config', {}).get('webFetch', {}))
+            # Firecrawl stays the fetch fallback only; agents cannot call it directly.
+            self.assertEqual(store['tools']['deny'], ['firecrawl_search', 'firecrawl_scrape'])
             (root / 'writes').unlink()
             second = self.run_task(tasks, root, extra)
             self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
@@ -510,6 +512,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertNotIn('provider', store['tools']['web']['search'])
             self.assertEqual(str(store['tools']['web']['search']['enabled']).lower(), 'false')
             self.assertNotIn('provider', store['tools']['web']['fetch'])
+            self.assertNotIn('deny', store['tools'])
             # Disabling the hosted fallback must not disable ordinary page reads.
             self.assertEqual(str(store['tools']['web']['fetch']['enabled']).lower(), 'true')
             for plugin in ('exa', 'firecrawl'):

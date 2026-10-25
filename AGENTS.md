@@ -359,7 +359,9 @@ leaving OpenClaw's search tool available through its MCP bridge. The optional
 
 The config role installs the official Exa and Firecrawl plugins pinned to
 `openclaw_version`. Firecrawl is an explicitly selected `web_fetch` fallback:
-local Readability first, Firecrawl if needed, then basic HTML cleanup. Set the
+local Readability first, Firecrawl if needed, then basic HTML cleanup. The
+plugin's own `firecrawl_search` and `firecrawl_scrape` tools are denied, so agents
+search through Exa and the small Firecrawl allowance is kept for the fallback. Set the
 Pulumi secret `firecrawlApiKey` to supply `FIRECRAWL_API_KEY` through the gateway's
 private environment file. Without a key, Firecrawl offers limited access but
 may reject the host's IP with HTTP 403; do not assume keyless access works.
