@@ -282,8 +282,15 @@ json.dump(state, open(state_file, 'w'))
 '''
 
 
+def reconcile_entry(agent_id, subnet):
+    """<id>=<server>=<subnet>=<browser ip>, as the role passes it; the browser is .2 of the /29."""
+    network, low = subnet.split('/')[0].rsplit('.', 1)
+    server = 'playwright' if agent_id == 'main' else f'playwright-{agent_id}'
+    return f'{agent_id}={server}={subnet}={network}.{int(low) + 2}'
+
+
 class ReconcileTest(unittest.TestCase):
-    def run_reconcile(self, units, networks, *wanted, expect_failure=False):
+    def run_reconcile(self, units, networks, *wanted, expect_failure=False, routes=None):
         with tempfile.TemporaryDirectory(prefix='playwright-reconcile-') as directory:
             root = Path(directory)
             unit_dir, bin_dir = root / 'units', root / 'bin'
@@ -291,12 +298,18 @@ class ReconcileTest(unittest.TestCase):
             for unit in units:
                 (unit_dir / unit).write_text('[Unit]\n')
             (root / 'docker.json').write_text(json.dumps({'networks': networks}))
+            config = root / 'openclaw.json'
+            if routes is not None:
+                config.write_text(json.dumps({'plugins': {'entries': {'openclaw-mcp-adapter': {'config': {'servers': [
+                    {'name': 'github', 'transport': 'stdio'}] + [
+                    {'name': name, 'transport': 'http', 'url': url} for name, url in routes.items()]}}}}}))
             (bin_dir / 'docker').write_text(FAKE_DOCKER)
             (bin_dir / 'systemctl').write_text('#!/bin/sh\necho "systemctl $*" >> "$FAKE_STATE/calls"\n')
             for tool in ('docker', 'systemctl'):
                 (bin_dir / tool).chmod(0o755)
             env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'FAKE_STATE': str(root)}
-            result = subprocess.run(['bash', str(RECONCILE), str(unit_dir), 'openclaw-playwright-egress', *wanted],
+            wanted = [reconcile_entry(*w.split('=')) for w in wanted]
+            result = subprocess.run(['bash', str(RECONCILE), str(unit_dir), 'openclaw-playwright-egress', str(config), *wanted],
                                     env=env, capture_output=True, text=True, timeout=30)
             calls = (root / 'calls').read_text() if (root / 'calls').exists() else ''
             if expect_failure:
@@ -335,6 +348,22 @@ class ReconcileTest(unittest.TestCase):
                                     expect_failure=True)
         self.assertIn('172.31.240.0/29 still belongs to agent main', result.stderr)
         self.assertNotIn('network rm', result.calls)
+
+    def test_an_address_the_gateway_still_routes_for_another_agent_is_refused(self):
+        # A failed run moved cama away but never re-registered it: the gateway still
+        # sends cama's browser tools to .10. A new agent must not get that address.
+        result = self.run_reconcile(self.UNITS, {'openclaw-playwright-egress': '172.20.0.0/16'},
+                                    'main=172.31.240.0/29', 'nici=172.31.240.8/29', expect_failure=True,
+                                    routes={'playwright': 'http://172.31.240.2:8931/mcp',
+                                            'playwright-cama': 'http://172.31.240.10:8931/mcp'})
+        self.assertIn("172.31.240.10 is still the gateway's route for playwright-cama", result.stderr)
+        self.assertNotIn('network rm', result.calls)
+
+    def test_routes_of_the_same_agent_pass(self):
+        out, units, networks, calls = self.run_reconcile(
+            self.UNITS, self.NETWORKS, 'main=172.31.240.0/29', 'cama=172.31.240.8/29',
+            routes={'playwright': 'http://172.31.240.2:8931/mcp', 'playwright-cama': 'http://172.31.240.10:8931/mcp'})
+        self.assertEqual(out, '')
 
     def test_a_moved_slot_frees_the_old_subnet_but_keeps_the_unit(self):
         out, units, networks, calls = self.run_reconcile(

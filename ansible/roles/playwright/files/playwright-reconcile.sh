@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# First refuse to hand an agent a subnet that another agent's network still holds:
-# the gateway keeps routing that other agent there until the plugins role runs.
-# Then remove Playwright resources the configuration no longer wants, before the
+# First refuse to hand an agent an address that belongs to another agent: either
+# its network still holds the subnet, or the gateway still routes that agent's
+# browser tools there (the plugins role updates routes later, and a failed run
+# may never get there). Then remove Playwright resources the configuration no longer wants, before the
 # role creates the wanted ones:
 #   - browsers of agents that are gone (unit, container, network),
 #   - networks whose subnet changed (agent order changed), so they can be recreated
@@ -9,14 +10,36 @@
 #   - with no agents at all (feature off): the relay and its network out too.
 # Prints CHANGED when it removed anything.
 #
-# Usage: playwright-reconcile.sh <units-dir> <egress-network> [<agent-id>=<subnet> ...]
+# Usage: playwright-reconcile.sh <units-dir> <egress-network> <gateway-config>
+#            [<agent-id>=<server-name>=<subnet>=<browser-ip> ...]
 set -euo pipefail
 
-units=$1 egress=$2
-shift 2
-declare -A want=()
-for pair in "$@"; do want[${pair%%=*}]=${pair#*=}; done
+units=$1 egress=$2 config=$3
+shift 3
+declare -A want=() server=() address=()
+for entry in "$@"; do
+    IFS='=' read -r id name subnet ip <<< "$entry"
+    want[$id]=$subnet server[$id]=$name address[$id]=$ip
+done
 changed=""
+
+# Browser routes the gateway has now. No config yet (fresh host) means none.
+registered=""
+if [ -e "$config" ]; then
+    registered=$(jq -r '.plugins.entries["openclaw-mcp-adapter"].config.servers[]?
+        | select(.name | test("^playwright(-|$)")) | "\(.name) \(.url)"' "$config")
+fi
+while read -r name url; do
+    [ -n "$name" ] || continue
+    host=${url#*://}
+    host=${host%%[:/]*}
+    for id in "${!want[@]}"; do
+        if [ "${server[$id]}" != "$name" ] && [ "${address[$id]}" = "$host" ]; then
+            echo "ERROR: $host is still the gateway's route for $name; give agent $id another playwright_slot" >&2
+            exit 1
+        fi
+    done
+done <<< "$registered"
 
 networks=$(docker network ls --format '{{.Name}}' | grep '^openclaw-playwright-net-' || true)
 for network in $networks; do

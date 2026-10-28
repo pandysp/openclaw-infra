@@ -10,7 +10,8 @@
   ansible.builtin.script:
     cmd: >-
       playwright-reconcile.sh /home/ubuntu/.config/systemd/user {{ openclaw_playwright_egress_network }}
-      {% for b in _openclaw_playwright %}{{ b.agent_id }}={{ b.subnet }} {% endfor %}
+      /home/ubuntu/.openclaw/openclaw.json
+      {% for b in _openclaw_playwright %}{{ b.agent_id }}={{ b.server_name }}={{ b.subnet }}={{ b.browser_ip }} {% endfor %}
     executable: /bin/bash
   environment:
     XDG_RUNTIME_DIR: /run/user/1000
