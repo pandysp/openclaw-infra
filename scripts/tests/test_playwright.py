@@ -18,13 +18,16 @@ ALL_VARS = ROOT / 'ansible/group_vars/all.yml'
 PROXY_SCRIPT = ROOT / 'scripts/deploy-mac-browser-proxy.sh'
 CHECK = ROOT / 'ansible/roles/playwright/files/playwright-check.py'
 DERIVATION = [
+    'Use manually defined MCP servers (override)',
     'Initialize auto-generated MCP server list',
     'Auto-generate MCP servers from server types × agents',
     'Validate supported MCP server definitions before provisioning',
     'Validate Playwright browser settings',
     'Initialize Playwright browser list',
     'Derive Playwright browser networks and addresses',
+    'Require the browser servers to match the per-agent deny rules',
 ]
+RECONCILE = ROOT / 'ansible/roles/playwright/files/playwright-reconcile.sh'
 PROXY = {'host': '100.100.1.1', 'port': 3128, 'client': '100.100.2.2'}
 
 
@@ -62,10 +65,10 @@ class DerivationTest(unittest.TestCase):
         result, facts = self.derive()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(facts['browsers'], [
-            {'agent_id': 'main', 'server_name': 'playwright', 'network': 'openclaw-playwright-main',
+            {'agent_id': 'main', 'server_name': 'playwright', 'network': 'openclaw-playwright-net-main',
              'subnet': '172.31.240.0/29', 'browser_ip': '172.31.240.2', 'relay_ip': '172.31.240.3',
              'url': 'http://172.31.240.2:8931/mcp'},
-            {'agent_id': 'cama', 'server_name': 'playwright-cama', 'network': 'openclaw-playwright-cama',
+            {'agent_id': 'cama', 'server_name': 'playwright-cama', 'network': 'openclaw-playwright-net-cama',
              'subnet': '172.31.240.8/29', 'browser_ip': '172.31.240.10', 'relay_ip': '172.31.240.11',
              'url': 'http://172.31.240.10:8931/mcp'},
         ])
@@ -88,6 +91,16 @@ class DerivationTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIsNone(facts)
                 self.assertIn('openclaw_playwright_proxy.host', result.stdout)
+
+    def test_manual_server_names_must_match_the_registered_browsers(self):
+        # Registration uses the derived names, deny rules the manual ones: a mismatch
+        # would let one agent use another agent's browser.
+        servers = [{'name': 'browser-main', 'type': 'playwright', 'agent_id': 'main'},
+                   {'name': 'browser-cama', 'type': 'playwright', 'agent_id': 'cama'}]
+        result, facts = self.derive(openclaw_mcp_servers=servers)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(facts)
+        self.assertIn('exactly one', result.stdout)
 
     def test_subnet_base_must_be_a_whole_24(self):
         result, facts = self.derive(openclaw_playwright_subnet_base='172.31.240.1')
@@ -197,9 +210,105 @@ class DeployCheckTest(unittest.TestCase):
         self.assertEqual(FakeBrowser.calls[-1], 'browser_close')
 
     def test_fails_when_the_proxy_does_not_refuse_private_addresses(self):
-        with self.assertRaises(SystemExit) as failure:
-            self.run_check('- generic [ref=e1]: 92.0.2.1', '- Page Title: Router login')
-        self.assertIn('did not refuse', str(failure.exception))
+        for private in ('- Page Title: Router login',
+                        # Page text mentioning 403 is not a refusal.
+                        '- HTTP status: 200 OK\n- Page Title: Router login / Firmware 403'):
+            with self.subTest(private=private), self.assertRaises(SystemExit) as failure:
+                self.run_check('- generic [ref=e1]: 92.0.2.1', private)
+            self.assertIn('did not refuse', str(failure.exception))
+
+
+FAKE_DOCKER = r'''#!/usr/bin/env python3
+import json, os, sys
+state_file = os.path.join(os.environ['FAKE_STATE'], 'docker.json')
+state = json.load(open(state_file))
+args = sys.argv[1:]
+log = open(os.path.join(os.environ['FAKE_STATE'], 'calls'), 'a')
+log.write('docker ' + ' '.join(args) + '\n')
+if args[:2] == ['network', 'ls']:
+    print('\n'.join(state['networks']))
+elif args[:2] == ['network', 'inspect']:
+    name = args[-1]
+    if name not in state['networks']:
+        sys.exit(1)
+    print(state['networks'][name])
+elif args[:2] == ['network', 'rm']:
+    del state['networks'][args[2]]
+elif args[:2] == ['network', 'disconnect'] or args[:2] == ['rm', '-f']:
+    pass
+else:
+    sys.exit('unexpected docker call: %s' % args)
+json.dump(state, open(state_file, 'w'))
+'''
+
+
+class ReconcileTest(unittest.TestCase):
+    def run_reconcile(self, units, networks, *wanted):
+        with tempfile.TemporaryDirectory(prefix='playwright-reconcile-') as directory:
+            root = Path(directory)
+            unit_dir, bin_dir = root / 'units', root / 'bin'
+            unit_dir.mkdir(); bin_dir.mkdir()
+            for unit in units:
+                (unit_dir / unit).write_text('[Unit]\n')
+            (root / 'docker.json').write_text(json.dumps({'networks': networks}))
+            (bin_dir / 'docker').write_text(FAKE_DOCKER)
+            (bin_dir / 'systemctl').write_text('#!/bin/sh\necho "systemctl $*" >> "$FAKE_STATE/calls"\n')
+            for tool in ('docker', 'systemctl'):
+                (bin_dir / tool).chmod(0o755)
+            env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'FAKE_STATE': str(root)}
+            result = subprocess.run(['bash', str(RECONCILE), str(unit_dir), 'openclaw-playwright-egress', *wanted],
+                                    env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (root / 'calls').read_text() if (root / 'calls').exists() else ''
+            return (result.stdout, sorted(p.name for p in unit_dir.iterdir()),
+                    json.loads((root / 'docker.json').read_text())['networks'], calls)
+
+    UNITS = ['openclaw-playwright-relay.service', 'openclaw-playwright-browser-main.service',
+             'openclaw-playwright-browser-cama.service']
+    NETWORKS = {'openclaw-playwright-egress': '172.20.0.0/16', 'openclaw-playwright-net-main': '172.31.240.0/29',
+                'openclaw-playwright-net-cama': '172.31.240.8/29', 'other-network': '10.9.0.0/16'}
+
+    def test_unchanged_config_touches_nothing(self):
+        out, units, networks, calls = self.run_reconcile(
+            self.UNITS, self.NETWORKS, 'main=172.31.240.0/29', 'cama=172.31.240.8/29')
+        self.assertEqual(out, '')
+        self.assertEqual(units, sorted(self.UNITS))
+        self.assertEqual(networks, self.NETWORKS)
+        self.assertNotIn('systemctl', calls)
+
+    def test_removed_agent_loses_unit_container_and_network(self):
+        out, units, networks, calls = self.run_reconcile(self.UNITS, self.NETWORKS, 'main=172.31.240.0/29')
+        self.assertIn('CHANGED', out)
+        self.assertNotIn('openclaw-playwright-browser-cama.service', units)
+        self.assertNotIn('openclaw-playwright-net-cama', networks)
+        self.assertIn('docker rm -f openclaw-playwright-browser-cama', calls)
+        self.assertIn('other-network', networks)
+
+    def test_reordered_agents_free_their_old_subnets_but_keep_units(self):
+        # Swapping the order swaps the subnets: both old networks must go before
+        # the role creates the new ones, or Docker rejects the overlap.
+        out, units, networks, calls = self.run_reconcile(
+            self.UNITS, self.NETWORKS, 'cama=172.31.240.0/29', 'main=172.31.240.8/29')
+        self.assertIn('CHANGED', out)
+        self.assertEqual(units, sorted(self.UNITS))
+        self.assertNotIn('openclaw-playwright-net-main', networks)
+        self.assertNotIn('openclaw-playwright-net-cama', networks)
+        self.assertIn('openclaw-playwright-egress', networks)
+
+    def test_disabled_removes_everything_including_the_relay(self):
+        out, units, networks, calls = self.run_reconcile(self.UNITS, self.NETWORKS)
+        self.assertIn('CHANGED', out)
+        self.assertEqual(units, [])
+        self.assertEqual(networks, {'other-network': '10.9.0.0/16'})
+
+    def test_an_agent_named_like_infrastructure_cannot_collide(self):
+        # Browsers, networks and the relay live in separate name spaces.
+        units = ['openclaw-playwright-relay.service', 'openclaw-playwright-browser-relay.service']
+        out, kept, networks, calls = self.run_reconcile(
+            units, {'openclaw-playwright-egress': '172.20.0.0/16', 'openclaw-playwright-net-relay': '172.31.240.0/29'},
+            'relay=172.31.240.0/29')
+        self.assertEqual(out, '')
+        self.assertEqual(kept, sorted(units))
 
 
 if __name__ == '__main__':

@@ -293,11 +293,9 @@
           - openclaw_playwright_subnet_base is match('^([0-9]{1,3}\\.){3}0$')
           - (openclaw_playwright_proxy.port | int) > 0
           - openclaw_agents | length <= 32
-          - (_openclaw_mcp_servers | selectattr('type', 'equalto', 'playwright') | list | length) == (openclaw_agents | length)
         fail_msg: >-
           openclaw_playwright_enabled needs openclaw_playwright_proxy.host (the Mac's
-          tailnet IPv4), .port and .client (this server's tailnet IPv4), at most 32
-          agents, and, with manual openclaw_mcp_servers, one playwright server per agent.
+          tailnet IPv4), .port and .client (this server's tailnet IPv4), and at most 32 agents.
           openclaw_playwright_subnet_base must end in .0 (a /24 split into /29s).
       vars:
         _ipv4: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$'
@@ -315,7 +313,7 @@
           {{ _openclaw_playwright + [{
                'agent_id': item.id,
                'server_name': 'playwright' if item.id == 'main' else 'playwright-' ~ item.id,
-               'network': 'openclaw-playwright-' ~ item.id,
+               'network': 'openclaw-playwright-net-' ~ item.id,
                'subnet': _prefix ~ '.' ~ (_idx * 8) ~ '/29',
                'browser_ip': _prefix ~ '.' ~ (_idx * 8 + 2),
                'relay_ip': _prefix ~ '.' ~ (_idx * 8 + 3),
@@ -327,6 +325,23 @@
       loop_control:
         index_var: _idx
         label: "{{ item.id }}"
+      tags: [always]
+
+    # The plugins role registers _openclaw_playwright; the deny rules come from
+    # _openclaw_mcp_servers. Both must name the same servers, or an agent could
+    # reach another agent's browser (e.g. a manual openclaw_mcp_servers override).
+    - name: Require the browser servers to match the per-agent deny rules
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_openclaw_mcp_servers | selectattr('type', 'equalto', 'playwright')
+             | map(attribute='name') | zip(_openclaw_mcp_servers | selectattr('type', 'equalto', 'playwright')
+             | map(attribute='agent_id')) | map('join', '@') | sort)
+            == (_openclaw_playwright | map(attribute='server_name')
+             | zip(_openclaw_playwright | map(attribute='agent_id')) | map('join', '@') | sort)
+        fail_msg: >-
+          With openclaw_playwright_enabled, openclaw_mcp_servers must hold exactly one
+          type playwright server per agent, named playwright (main) or playwright-<id>.
       tags: [always]
 
     # Tailscale WSS URL: used by telegram and post_tasks to route CLI commands through

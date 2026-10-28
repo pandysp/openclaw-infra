@@ -17,6 +17,8 @@ import urllib.request
 ECHO = 'https://api.ipify.org'
 PRIVATE = 'http://192.168.0.1/'
 IPV4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+# Playwright MCP reports the navigation's response status in its page summary.
+STATUS = re.compile(r'^- HTTP status: (\d{3})\b', re.MULTILINE)
 
 
 class Client:
@@ -65,9 +67,10 @@ def main(url):
             sys.exit(f'ERROR: {ECHO} showed no IPv4 address through the browser')
         if found[0] == server_ip:
             sys.exit(f'ERROR: the browser left from this server ({server_ip}), not through the home proxy')
-        refused = client.tool('browser_navigate', {'url': PRIVATE})
-        if '403' not in refused:
-            sys.exit(f'ERROR: the home proxy did not refuse {PRIVATE}; check its policy on the Mac')
+        status = STATUS.search(client.tool('browser_navigate', {'url': PRIVATE}))
+        if not status or status.group(1) != '403':
+            sys.exit(f'ERROR: the home proxy did not refuse {PRIVATE} (HTTP status: '
+                     f'{status.group(1) if status else "none"}); check its policy on the Mac')
     finally:
         client.tool('browser_close')
     print(json.dumps({'server_ip': server_ip, 'browser_ip': found[0], 'private_refused': True}))

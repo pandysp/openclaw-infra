@@ -6,44 +6,16 @@
 # connection to the home proxy, which refuses private and tailnet addresses.
 # The plugins role registers the servers with the MCP adapter.
 
-- name: Reconcile Playwright services that are no longer configured
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    UNITS=/home/ubuntu/.config/systemd/user
-    DESIRED=" {{ _openclaw_playwright | map(attribute='agent_id') | join(' ') }} "
-    CHANGED=""
-    for unit in "$UNITS"/openclaw-playwright-*.service; do
-        [ -e "$unit" ] || continue
-        name=$(basename "$unit" .service)
-        id=${name#openclaw-playwright-}
-        if [ "$id" = relay ]; then
-            [ "$DESIRED" != "  " ] && continue
-        elif [[ "$DESIRED" == *" $id "* ]]; then
-            continue
-        fi
-        systemctl --user disable --now "$name.service"
-        rm -f "$unit"
-        docker rm -f "$name" >/dev/null 2>&1 || true
-        CHANGED=yes
-    done
-    for network in $(docker network ls --format '{% raw %}{{.Name}}{% endraw %}' | grep '^openclaw-playwright-' || true); do
-        id=${network#openclaw-playwright-}
-        if [ "$network" = "{{ openclaw_playwright_egress_network }}" ]; then
-            [ "$DESIRED" != "  " ] && continue
-        elif [[ "$DESIRED" == *" $id "* ]]; then
-            continue
-        fi
-        # The relay is attached to every browser network.
-        docker network disconnect -f "$network" openclaw-playwright-relay >/dev/null 2>&1 || true
-        docker network rm "$network" >/dev/null
-        CHANGED=yes
-    done
-    if [ -n "$CHANGED" ]; then systemctl --user daemon-reload; echo REMOVED; fi
-  args:
+- name: Remove Playwright resources the configuration no longer wants
+  ansible.builtin.script:
+    cmd: >-
+      playwright-reconcile.sh /home/ubuntu/.config/systemd/user {{ openclaw_playwright_egress_network }}
+      {% for b in _openclaw_playwright %}{{ b.agent_id }}={{ b.subnet }} {% endfor %}
     executable: /bin/bash
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
   register: playwright_reconcile
-  changed_when: "'REMOVED' in playwright_reconcile.stdout"
+  changed_when: "'CHANGED' in playwright_reconcile.stdout"
 
 - name: Provision Playwright browsers
   when: openclaw_playwright_enabled | bool
@@ -53,6 +25,7 @@
       ansible.builtin.command: tailscale ip -4
       register: playwright_tailnet_ip
       changed_when: false
+      check_mode: false
 
     - name: Require the home proxy to admit this server
       ansible.builtin.assert:
@@ -70,6 +43,7 @@
       register: playwright_image_before
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Pull the pinned Playwright image
       ansible.builtin.command:
@@ -95,6 +69,7 @@
         argv: [docker, image, inspect, openclaw-playwright-relay:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
       register: playwright_relay_before
       changed_when: false
+      check_mode: false
       failed_when: >-
         playwright_relay_before.rc != 0 and not (playwright_relay_before.rc == 1
         and 'No such image: openclaw-playwright-relay:latest' in playwright_relay_before.stderr)
@@ -116,6 +91,9 @@
         argv: [docker, image, inspect, openclaw-playwright-relay:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
       register: playwright_relay_after
       changed_when: playwright_relay_before.rc != 0 or playwright_relay_before.stdout != playwright_relay_after.stdout
+      # A dry run skips the build, so a first deployment has no image yet.
+      failed_when: playwright_relay_after.rc != 0 and not ansible_check_mode
+      check_mode: false
       notify: restart playwright relay
 
     - name: Create the relay's network out
@@ -145,8 +123,8 @@
 
     - name: Install one browser service per agent
       ansible.builtin.template:
-        src: openclaw-playwright.service.j2
-        dest: "/home/ubuntu/.config/systemd/user/openclaw-playwright-{{ item.agent_id }}.service"
+        src: openclaw-playwright-browser.service.j2
+        dest: "/home/ubuntu/.config/systemd/user/openclaw-playwright-browser-{{ item.agent_id }}.service"
         mode: "0644"
       loop: "{{ _openclaw_playwright }}"
       loop_control:
@@ -159,7 +137,7 @@
 
     - name: Restart browsers whose service changed
       ansible.builtin.systemd:
-        name: "openclaw-playwright-{{ item.item.agent_id }}.service"
+        name: "openclaw-playwright-browser-{{ item.item.agent_id }}.service"
         state: restarted
         scope: user
       environment:
@@ -176,7 +154,7 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: /run/user/1000
-      loop: "{{ ['openclaw-playwright-relay.service'] + (_openclaw_playwright | map(attribute='agent_id') | map('regex_replace', '^(.*)$', 'openclaw-playwright-\\1.service') | list) }}"
+      loop: "{{ ['openclaw-playwright-relay.service'] + (_openclaw_playwright | map(attribute='agent_id') | map('regex_replace', '^(.*)$', 'openclaw-playwright-browser-\\1.service') | list) }}"
 
     - name: Wait for every browser's MCP endpoint
       ansible.builtin.uri:
@@ -199,6 +177,7 @@
       retries: 12
       delay: 5
       until: playwright_ready is succeeded
+      when: not ansible_check_mode
 
     # End to end through the relay and the Mac: a broken proxy, a stale proxy
     # policy or a browser leaving from this server fails provisioning here.
@@ -210,3 +189,4 @@
       loop_control:
         label: "{{ item.agent_id }}"
       changed_when: false
+      when: not ansible_check_mode
