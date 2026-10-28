@@ -90,6 +90,24 @@
   register: claude_cli_image_after
   changed_when: claude_cli_image_before.rc != 0 or claude_cli_image_before.stdout != claude_cli_image_after.stdout
 
+# A run that rebuilt the image but failed before its handlers ran leaves warm sessions
+# on the old build with nothing left to restart them; the gateway restart ends them.
+- name: Find container CLI sessions on an older image build
+  ansible.builtin.shell: |
+    set -euo pipefail
+    current=$(docker image inspect --format '{% raw %}{{.Id}}{% endraw %}' openclaw-claude-cli:latest)
+    for id in $(docker ps -q --no-trunc --filter label=openclaw.claude-agent); do
+      if [ "$(docker inspect --format '{% raw %}{{.Image}}{% endraw %}' "$id")" != "$current" ]; then
+        echo "$id"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: claude_cli_stale_sessions
+  changed_when: false
+  # A dry run may not have built the image this inspects.
+  when: not ansible_check_mode
+
 # Built from openclaw-sandbox-custom:latest, which the sandbox role keeps at the floor.
 - name: Verify the container CLI image meets the CA floor
   ansible.builtin.include_role:
@@ -230,5 +248,6 @@
   changed_when: >-
     claude_cli_launcher.changed or claude_cli_manifest.changed
     or claude_cli_image_after.changed or claude_cli_ssh_configs.changed
+    or (claude_cli_stale_sessions.stdout | default('') | length > 0)
     or (claude_cli_mac_pin.changed | default(false)) or (claude_cli_mac_key.changed | default(false))
   notify: restart openclaw-gateway
