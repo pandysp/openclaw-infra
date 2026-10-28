@@ -46,9 +46,16 @@ elif args[0] == 'run':
 elif args[:3] == ['ps', '-q', '--no-trunc']:
     print('\n'.join(c['id'] for c in state['containers']))
 elif args[0] == 'inspect':
+    gone = []
     for c in state['containers']:
         if c['id'] in args:
-            print(f"/{c['name']} {c['config_image']} {c['image_id']}")
+            if c.get('gone'):
+                gone.append(c['id'])
+            else:
+                print(f"/{c['name']} {c['config_image']} {c['image_id']}")
+    for container in gone:
+        print(f'Error: No such object: {container}', file=sys.stderr)
+    sys.exit(1 if gone else 0)
 else:
     sys.exit(f'unexpected docker call: {args}')
 '''
@@ -116,6 +123,21 @@ class TlsTrustCheckTest(unittest.TestCase):
         result = self.check(accepted={'openclaw-claude-cli:latest': ['dv-g3b-emudhra.we-have-a-problem.com']})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('SKIP image openclaw-claude-cli:latest: its feature is off on this server', result.stdout)
+
+    def test_an_image_of_a_disabled_feature_stays_under_test_while_containers_run_from_it(self):
+        result = self.check(accepted={'openclaw-claude-cli:latest': ['dv-g3b-emudhra.we-have-a-problem.com']},
+                            containers=[{'id': 'c1', 'name': 'openclaw-claude-1a2b', 'config_image': 'openclaw-claude-cli:latest',
+                                         'image_id': 'sha256:claude'}])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('FAIL image openclaw-claude-cli:latest node: unsafe rejected 11/12', result.stdout)
+
+    def test_a_container_that_exits_during_the_check_is_skipped(self):
+        result = self.check(features=True, containers=[
+            {'id': 'c1', 'name': 'openclaw-sbx-main', 'config_image': 'openclaw-sandbox-custom:latest', 'image_id': 'sha256:custom'},
+            {'id': 'c2', 'name': 'openclaw-claude-gone', 'config_image': 'openclaw-claude-cli:latest', 'image_id': 'sha256:old',
+             'gone': True}])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS running containers: 1 from OpenClaw images', result.stdout)
 
     def test_a_missing_image_of_a_feature_that_is_on_fails(self):
         images = {k: v for k, v in IMAGES.items() if k.startswith('openclaw-sandbox')}

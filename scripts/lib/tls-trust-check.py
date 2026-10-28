@@ -207,11 +207,30 @@ def check_host(node_min, probe_dir):
         fail('host: no running provisioned Node service found (is the gateway running?)')
 
 
+def running_containers():
+    """(name, created-from image, image ID) of every running container.
+
+    By .Config.Image: `docker ps` shows a bare image ID instead of the name once the
+    tag has moved to a newer build. A container that exits meanwhile is skipped.
+    """
+    ids = run(['docker', 'ps', '-q', '--no-trunc'])
+    if ids.returncode:
+        raise SystemExit(f'ERROR: docker ps failed: {ids.stderr.strip()}')
+    if not ids.stdout.split():
+        return []
+    inspect = run(['docker', 'inspect', '--format', '{{.Name}} {{.Config.Image}} {{.Image}}', *ids.stdout.split()])
+    if inspect.returncode and not all('No such object' in line for line in inspect.stderr.strip().splitlines()):
+        raise SystemExit(f'ERROR: docker inspect failed: {inspect.stderr.strip()}')
+    return [(name.lstrip('/'), image, image_id) for name, image, image_id in (line.split() for line in inspect.stdout.splitlines())]
+
+
 def check_images(probe_dir):
+    containers = running_containers()
+    in_use = {image for _, image, _ in containers}
     for image, runtimes in IMAGES.items():
-        # Provisioning stops maintaining an image once its feature is off; no new
-        # container starts from it (running ones are still checked below).
-        if image in FEATURE_MARKERS and not FEATURE_MARKERS[image]():
+        # Provisioning stops maintaining an image once its feature is off. Skipped only
+        # while nothing runs from it; a running container keeps it under test.
+        if image in FEATURE_MARKERS and not FEATURE_MARKERS[image]() and image not in in_use:
             print(f'SKIP image {image}: its feature is off on this server', flush=True)
             continue
         inspect = run(['docker', 'image', 'inspect', '--format', '{{.Id}} {{.Created}}', image])
@@ -227,26 +246,13 @@ def check_images(probe_dir):
             completed = run(['docker', 'run', '--rm', '--network', 'bridge', '-v', f'{probe_dir}:/probe:ro',
                              '--entrypoint', command[0], image, *command[1:], *UNSAFE, *HEALTHY])
             report(f'image {image} {runtime}', completed)
-    # By the image each container was created from (.Config.Image): `docker ps` shows a
-    # bare image ID instead of the name once the tag has moved to a newer build.
-    ids = run(['docker', 'ps', '-q', '--no-trunc'])
-    if ids.returncode:
-        return fail(f'containers: {ids.stderr.strip()}')
     current = {image: run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image]).stdout.strip() for image in IMAGES}
-    ours, stale = 0, []
-    if ids.stdout.split():
-        inspect = run(['docker', 'inspect', '--format', '{{.Name}} {{.Config.Image}} {{.Image}}', *ids.stdout.split()])
-        if inspect.returncode:
-            return fail(f'containers: {inspect.stderr.strip()}')
-        for name, image, image_id in (line.split() for line in inspect.stdout.splitlines()):
-            if image in IMAGES:
-                ours += 1
-                if image_id != current[image]:
-                    stale.append(f'{name.lstrip("/")} ({image})')
+    ours = [(name, image, image_id) for name, image, image_id in containers if image in IMAGES]
+    stale = [f'{name} ({image})' for name, image, image_id in ours if image_id != current[image]]
     if stale:
         fail(f'containers on an older image build (restart the gateway to recreate them): {", ".join(stale)}')
     else:
-        print(f'PASS running containers: {ours} from OpenClaw images, all on the current builds', flush=True)
+        print(f'PASS running containers: {len(ours)} from OpenClaw images, all on the current builds', flush=True)
 
 
 def main(args):
