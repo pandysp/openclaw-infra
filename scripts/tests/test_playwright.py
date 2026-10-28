@@ -103,6 +103,17 @@ class DerivationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(facts['browsers'][1], expected_browser('cama', slot=7))
 
+    def test_deny_rules_are_written_before_any_server_is_registered(self):
+        # Otherwise the restart after registration briefly offers a new agent's or new
+        # server type's tools to every agent (round-3 review).
+        python = shlex.split(Path(self.ansible).read_text().splitlines()[0].removeprefix('#!'))
+        tasks = json.loads(subprocess.check_output([*python, '-c',
+            'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))',
+            str(ROOT / 'ansible/roles/plugins/tasks/main.yml')], text=True))
+        names = [task.get('name') for task in tasks]
+        self.assertLess(names.index('Set per-agent tool deny rules for MCP tools'),
+                        names.index('Configure mcp-adapter plugin'))
+
     def test_disabled_registers_nothing(self):
         result, facts = self.derive(openclaw_playwright_enabled=False, openclaw_playwright_proxy={'host': '', 'port': 3128, 'client': ''})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -272,7 +283,7 @@ json.dump(state, open(state_file, 'w'))
 
 
 class ReconcileTest(unittest.TestCase):
-    def run_reconcile(self, units, networks, *wanted):
+    def run_reconcile(self, units, networks, *wanted, expect_failure=False):
         with tempfile.TemporaryDirectory(prefix='playwright-reconcile-') as directory:
             root = Path(directory)
             unit_dir, bin_dir = root / 'units', root / 'bin'
@@ -287,8 +298,12 @@ class ReconcileTest(unittest.TestCase):
             env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'FAKE_STATE': str(root)}
             result = subprocess.run(['bash', str(RECONCILE), str(unit_dir), 'openclaw-playwright-egress', *wanted],
                                     env=env, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stderr)
             calls = (root / 'calls').read_text() if (root / 'calls').exists() else ''
+            if expect_failure:
+                self.assertNotEqual(result.returncode, 0)
+                result.calls = calls
+                return result
+            self.assertEqual(result.returncode, 0, result.stderr)
             return (result.stdout, sorted(p.name for p in unit_dir.iterdir()),
                     json.loads((root / 'docker.json').read_text())['networks'], calls)
 
@@ -313,16 +328,22 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn('docker rm -f openclaw-playwright-browser-cama', calls)
         self.assertIn('other-network', networks)
 
-    def test_reordered_agents_free_their_old_subnets_but_keep_units(self):
-        # Swapping the order swaps the subnets: both old networks must go before
-        # the role creates the new ones, or Docker rejects the overlap.
+    def test_a_subnet_another_agent_still_holds_is_refused(self):
+        # The gateway routes main to its old address until the plugins role runs, so
+        # cama must not get it: main could download into cama's container.
+        result = self.run_reconcile(self.UNITS, self.NETWORKS, 'cama=172.31.240.0/29', 'main=172.31.240.8/29',
+                                    expect_failure=True)
+        self.assertIn('172.31.240.0/29 still belongs to agent main', result.stderr)
+        self.assertNotIn('network rm', result.calls)
+
+    def test_a_moved_slot_frees_the_old_subnet_but_keeps_the_unit(self):
         out, units, networks, calls = self.run_reconcile(
-            self.UNITS, self.NETWORKS, 'cama=172.31.240.0/29', 'main=172.31.240.8/29')
+            self.UNITS, self.NETWORKS, 'main=172.31.240.0/29', 'cama=172.31.9.0/29')
         self.assertIn('CHANGED', out)
         self.assertEqual(units, sorted(self.UNITS))
-        self.assertNotIn('openclaw-playwright-net-main', networks)
         self.assertNotIn('openclaw-playwright-net-cama', networks)
-        self.assertIn('openclaw-playwright-egress', networks)
+        self.assertIn('openclaw-playwright-net-main', networks)
+        self.assertIn('docker rm -f openclaw-playwright-browser-cama', calls)
 
     def test_disabled_removes_everything_including_the_relay(self):
         out, units, networks, calls = self.run_reconcile(self.UNITS, self.NETWORKS)

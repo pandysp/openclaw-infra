@@ -334,7 +334,8 @@
         fail_msg: >-
           Two agents hash to the same Playwright subnet: {{ _openclaw_playwright | map(attribute='agent_id')
           | zip(_openclaw_playwright | map(attribute='subnet')) | map('join', ' ') | join(', ') }}.
-          Set playwright_slot (0-8191, unused) on one of them in openclaw_agents.
+          Set playwright_slot (0-8191, unused) on the agent you are adding, not on one
+          that already runs, in openclaw_agents.
       tags: [always]
 
     # The plugins role registers _openclaw_playwright; the deny rules come from

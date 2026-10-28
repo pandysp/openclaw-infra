@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Remove Playwright resources the configuration no longer wants, before the role
-# creates the wanted ones:
+# First refuse to hand an agent a subnet that another agent's network still holds:
+# the gateway keeps routing that other agent there until the plugins role runs.
+# Then remove Playwright resources the configuration no longer wants, before the
+# role creates the wanted ones:
 #   - browsers of agents that are gone (unit, container, network),
 #   - networks whose subnet changed (agent order changed), so they can be recreated
 #     without overlapping; that browser's unit stays and the role starts it again,
@@ -15,6 +17,18 @@ shift 2
 declare -A want=()
 for pair in "$@"; do want[${pair%%=*}]=${pair#*=}; done
 changed=""
+
+networks=$(docker network ls --format '{{.Name}}' | grep '^openclaw-playwright-net-' || true)
+for network in $networks; do
+    owner=${network#openclaw-playwright-net-}
+    subnet=$(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$network")
+    for id in "${!want[@]}"; do
+        if [ "$id" != "$owner" ] && [ "${want[$id]}" = "$subnet" ]; then
+            echo "ERROR: $subnet still belongs to agent $owner; give agent $id another playwright_slot" >&2
+            exit 1
+        fi
+    done
+done
 
 stop_browser() {  # $1 = agent id
     local name="openclaw-playwright-browser-$1"
@@ -32,7 +46,7 @@ for unit in "$units"/openclaw-playwright-browser-*.service; do
     changed=yes
 done
 
-for network in $(docker network ls --format '{{.Name}}' | grep '^openclaw-playwright-net-' || true); do
+for network in $networks; do
     id=${network#openclaw-playwright-net-}
     if [ -n "${want[$id]+set}" ]; then
         subnet=$(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$network")

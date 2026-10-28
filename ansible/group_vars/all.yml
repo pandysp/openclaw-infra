@@ -146,7 +146,8 @@ openclaw_playwright_memory: "1g"
 # A /16 split into /29s (.1 Docker, .2 browser, .3 relay). Each agent's /29 comes
 # from a hash of its ID, so reordering, adding or removing agents never hands one
 # agent's address to another. On the rare clash provisioning stops; then set
-# `playwright_slot: <0-8191>` on one of the two agents in openclaw_agents.
+# `playwright_slot: <0-8191>` on the agent you are adding, never on one that runs:
+# provisioning refuses to move a subnet another agent's network still holds.
 openclaw_playwright_subnet_base: "172.31.0.0"
 openclaw_playwright_egress_network: openclaw-playwright-egress
 # The proxy listens on the Mac's tailnet address and serves only `client`,

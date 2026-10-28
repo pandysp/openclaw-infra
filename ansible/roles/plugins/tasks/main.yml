@@ -144,6 +144,50 @@
   loop_control:
     label: "{{ item.name }}"
 
+# --- Per-agent MCP tool scoping ---
+# Written before the adapter registers any server: when a server type or agent is
+# added, the gateway restart below must not briefly offer one agent's tools to
+# another. Denying a server that is not registered yet is harmless.
+# Each agent denies all MCP server tool prefixes except its own.
+# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
+# Safe because toolPrefix uses "_" while server names use "-" as separator,
+# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
+# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
+
+- name: Set per-agent tool deny rules for MCP tools
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    # A missing agent would run without its deny rules: stop instead.
+    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
+        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
+        exit 1
+    }
+    DESIRED='{{ deny_list | to_json }}'
+    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
+    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
+        echo "OK"
+    else
+        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
+        echo "UPDATED"
+    fi
+  args:
+    executable: /bin/bash
+  vars:
+    deny_list: >-
+      {{ _openclaw_mcp_servers
+         | rejectattr('agent_id', 'equalto', item.id)
+         | map(attribute='name')
+         | map('regex_replace', '$', '_*')
+         | list }}
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: deny_result
+  changed_when: "'UPDATED' in deny_result.stdout"
+  notify: restart openclaw-gateway
+
 - name: Configure mcp-adapter plugin
   vars:
     # One comparison for the maintenance decision and for the write after a reinstall.
@@ -453,47 +497,6 @@
   args:
     executable: /bin/bash
   changed_when: false
-
-# --- Per-agent MCP tool scoping ---
-# Each agent denies all MCP server tool prefixes except its own.
-# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
-# Safe because toolPrefix uses "_" while server names use "-" as separator,
-# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
-
-- name: Set per-agent tool deny rules for MCP tools
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    # A missing agent would run without its deny rules: stop instead.
-    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
-        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
-        exit 1
-    }
-    DESIRED='{{ deny_list | to_json }}'
-    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
-    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
-        echo "OK"
-    else
-        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
-        echo "UPDATED"
-    fi
-  args:
-    executable: /bin/bash
-  vars:
-    deny_list: >-
-      {{ _openclaw_mcp_servers
-         | rejectattr('agent_id', 'equalto', item.id)
-         | map(attribute='name')
-         | map('regex_replace', '$', '_*')
-         | list }}
-  loop: "{{ openclaw_agents }}"
-  loop_control:
-    label: "{{ item.id }}"
-  register: deny_result
-  changed_when: "'UPDATED' in deny_result.stdout"
-  notify: restart openclaw-gateway
 
 # --- Disable built-in memory search (memory.search) when qmd servers are registered ---
 # Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are
