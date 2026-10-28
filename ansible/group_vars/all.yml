@@ -143,8 +143,11 @@ openclaw_telegram_silent_error_replies: true
 openclaw_playwright_enabled: false
 openclaw_playwright_image: "mcr.microsoft.com/playwright/mcp:v0.0.83@sha256:690763cbb437ee7233f538a953bb5390bf03791eb5c965b471e59d17a6132fcb"
 openclaw_playwright_memory: "1g"
-# One /29 per agent, in openclaw_agents order: .1 Docker, .2 browser, .3 relay.
-openclaw_playwright_subnet_base: "172.31.240.0"
+# A /16 split into /29s (.1 Docker, .2 browser, .3 relay). Each agent's /29 comes
+# from a hash of its ID, so reordering, adding or removing agents never hands one
+# agent's address to another. On the rare clash provisioning stops; then set
+# `playwright_slot: <0-8191>` on one of the two agents in openclaw_agents.
+openclaw_playwright_subnet_base: "172.31.0.0"
 openclaw_playwright_egress_network: openclaw-playwright-egress
 # The proxy listens on the Mac's tailnet address and serves only `client`,
 # this server's tailnet address. Provisioning fails if `client` is stale.

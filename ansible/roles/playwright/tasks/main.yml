@@ -135,7 +135,9 @@
     - name: Apply service and image changes
       ansible.builtin.meta: flush_handlers
 
+    # A dry run installs no units, so there is nothing to restart or start.
     - name: Restart browsers whose service changed
+      when: not ansible_check_mode
       ansible.builtin.systemd:
         name: "openclaw-playwright-browser-{{ item.item.agent_id }}.service"
         state: restarted
@@ -147,6 +149,7 @@
         label: "{{ item.item.agent_id }}"
 
     - name: Enable and start the relay and every browser
+      when: not ansible_check_mode
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: started

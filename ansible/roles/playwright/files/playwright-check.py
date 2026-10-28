@@ -5,7 +5,8 @@ Usage: playwright-check.py <mcp-url>
 
 Speaks MCP (streamable HTTP) like the gateway's adapter does, then:
   1. loads an IP echo page: the address must differ from this server's own,
-  2. loads a private address: the home proxy must refuse it (HTTP 403),
+  2. loads a private address: the home proxy itself must refuse it (HTTP 403 and
+     squid's access-denied page, not a device's own 403),
   3. closes the browser so the check leaves no Chromium running.
 Exits non-zero with the reason on any failure.
 """
@@ -19,6 +20,8 @@ PRIVATE = 'http://192.168.0.1/'
 IPV4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
 # Playwright MCP reports the navigation's response status in its page summary.
 STATUS = re.compile(r'^- HTTP status: (\d{3})\b', re.MULTILINE)
+# squid's ERR_ACCESS_DENIED page; a device behind the proxy answering 403 lacks it.
+SQUID_DENIED = ('ERROR: The requested URL could not be retrieved', 'Access Denied')
 
 
 class Client:
@@ -68,7 +71,8 @@ def main(url):
         if found[0] == server_ip:
             sys.exit(f'ERROR: the browser left from this server ({server_ip}), not through the home proxy')
         status = STATUS.search(client.tool('browser_navigate', {'url': PRIVATE}))
-        if not status or status.group(1) != '403':
+        page = client.tool('browser_snapshot')
+        if not status or status.group(1) != '403' or not all(mark in page for mark in SQUID_DENIED):
             sys.exit(f'ERROR: the home proxy did not refuse {PRIVATE} (HTTP status: '
                      f'{status.group(1) if status else "none"}); check its policy on the Mac')
     finally:

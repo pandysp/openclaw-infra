@@ -283,20 +283,20 @@
         label: "{{ item.agent_id }}"
       tags: [always]
 
-    # Playwright browsers: one /29 per agent in openclaw_agents order. The playwright
-    # role creates the networks and containers, the plugins role registers the URLs.
+    # Playwright browsers: one /29 per agent, chosen by a hash of the agent ID so an
+    # address never moves to another agent. The playwright role creates the networks
+    # and containers, the plugins role registers the URLs.
     - name: Validate Playwright browser settings
       ansible.builtin.assert:
         that:
           - openclaw_playwright_proxy.host is match(_ipv4)
           - openclaw_playwright_proxy.client is match(_ipv4)
-          - openclaw_playwright_subnet_base is match('^([0-9]{1,3}\\.){3}0$')
+          - openclaw_playwright_subnet_base is match('^([0-9]{1,3}\\.){2}0\\.0$')
           - (openclaw_playwright_proxy.port | int) > 0
-          - openclaw_agents | length <= 32
         fail_msg: >-
           openclaw_playwright_enabled needs openclaw_playwright_proxy.host (the Mac's
-          tailnet IPv4), .port and .client (this server's tailnet IPv4), and at most 32 agents.
-          openclaw_playwright_subnet_base must end in .0 (a /24 split into /29s).
+          tailnet IPv4), .port and .client (this server's tailnet IPv4).
+          openclaw_playwright_subnet_base must end in .0.0 (a /16 split into /29s).
       vars:
         _ipv4: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$'
       when: openclaw_playwright_enabled | bool
@@ -314,17 +314,27 @@
                'agent_id': item.id,
                'server_name': 'playwright' if item.id == 'main' else 'playwright-' ~ item.id,
                'network': 'openclaw-playwright-net-' ~ item.id,
-               'subnet': _prefix ~ '.' ~ (_idx * 8) ~ '/29',
-               'browser_ip': _prefix ~ '.' ~ (_idx * 8 + 2),
-               'relay_ip': _prefix ~ '.' ~ (_idx * 8 + 3),
-               'url': 'http://' ~ _prefix ~ '.' ~ (_idx * 8 + 2) ~ ':8931/mcp'
+               'subnet': _net ~ '.' ~ _low ~ '/29',
+               'browser_ip': _net ~ '.' ~ (_low | int + 2),
+               'relay_ip': _net ~ '.' ~ (_low | int + 3),
+               'url': 'http://' ~ _net ~ '.' ~ (_low | int + 2) ~ ':8931/mcp'
              }] }}
       vars:
-        _prefix: "{{ openclaw_playwright_subnet_base | regex_replace('\\.0$', '') }}"
+        _slot: "{{ item.playwright_slot | default(((item.id | hash('sha256'))[:8] | int(base=16)) % 8192) | int }}"
+        _net: "{{ openclaw_playwright_subnet_base | regex_replace('\\.0\\.0$', '') }}.{{ (_slot | int * 8) // 256 }}"
+        _low: "{{ (_slot | int * 8) % 256 }}"
       loop: "{{ openclaw_agents if openclaw_playwright_enabled | bool else [] }}"
       loop_control:
-        index_var: _idx
         label: "{{ item.id }}"
+      tags: [always]
+
+    - name: Require one address range per Playwright browser
+      ansible.builtin.assert:
+        that: (_openclaw_playwright | map(attribute='subnet') | unique | length) == (_openclaw_playwright | length)
+        fail_msg: >-
+          Two agents hash to the same Playwright subnet: {{ _openclaw_playwright | map(attribute='agent_id')
+          | zip(_openclaw_playwright | map(attribute='subnet')) | map('join', ' ') | join(', ') }}.
+          Set playwright_slot (0-8191, unused) on one of them in openclaw_agents.
       tags: [always]
 
     # The plugins role registers _openclaw_playwright; the deny rules come from

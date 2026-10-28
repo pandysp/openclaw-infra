@@ -1,4 +1,5 @@
 """Playwright browsers: addresses, settings checks, the home proxy policy and the deploy check."""
+import hashlib
 import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -25,10 +26,21 @@ DERIVATION = [
     'Validate Playwright browser settings',
     'Initialize Playwright browser list',
     'Derive Playwright browser networks and addresses',
+    'Require one address range per Playwright browser',
     'Require the browser servers to match the per-agent deny rules',
 ]
 RECONCILE = ROOT / 'ansible/roles/playwright/files/playwright-reconcile.sh'
 PROXY = {'host': '100.100.1.1', 'port': 3128, 'client': '100.100.2.2'}
+
+
+def expected_browser(agent_id, slot=None):
+    # Independent re-implementation of the derivation: /29 picked by sha256(id) in 172.31.0.0/16.
+    slot = int(hashlib.sha256(agent_id.encode()).hexdigest()[:8], 16) % 8192 if slot is None else slot
+    offset = slot * 8
+    net, low = f'172.31.{offset // 256}', offset % 256
+    return {'agent_id': agent_id, 'server_name': 'playwright' if agent_id == 'main' else f'playwright-{agent_id}',
+            'network': f'openclaw-playwright-net-{agent_id}', 'subnet': f'{net}.{low}/29',
+            'browser_ip': f'{net}.{low + 2}', 'relay_ip': f'{net}.{low + 3}', 'url': f'http://{net}.{low + 2}:8931/mcp'}
 
 
 class DerivationTest(unittest.TestCase):
@@ -64,19 +76,32 @@ class DerivationTest(unittest.TestCase):
     def test_each_agent_gets_its_own_network_and_server(self):
         result, facts = self.derive()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(facts['browsers'], [
-            {'agent_id': 'main', 'server_name': 'playwright', 'network': 'openclaw-playwright-net-main',
-             'subnet': '172.31.240.0/29', 'browser_ip': '172.31.240.2', 'relay_ip': '172.31.240.3',
-             'url': 'http://172.31.240.2:8931/mcp'},
-            {'agent_id': 'cama', 'server_name': 'playwright-cama', 'network': 'openclaw-playwright-net-cama',
-             'subnet': '172.31.240.8/29', 'browser_ip': '172.31.240.10', 'relay_ip': '172.31.240.11',
-             'url': 'http://172.31.240.10:8931/mcp'},
-        ])
+        self.assertEqual(facts['browsers'], [expected_browser('main'), expected_browser('cama')])
         # Same naming as the other per-agent servers, so the deny rules scope them per agent.
         playwright = [s for s in facts['servers'] if s['type'] == 'playwright']
         self.assertEqual([(s['name'], s['agent_id']) for s in playwright],
                          [('playwright', 'main'), ('playwright-cama', 'cama')])
         self.assertTrue(all('_' not in s['name'] for s in facts['servers']))
+
+    def test_reordering_or_adding_agents_never_moves_an_address(self):
+        # Positional addresses would hand main's browser address to another agent
+        # while the gateway still routes main there.
+        _, before = self.derive()
+        result, after = self.derive(openclaw_agents=[{'id': 'nici'}, {'id': 'cama'}, {'id': 'main'}])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        by_id = lambda facts: {b['agent_id']: b for b in facts['browsers']}
+        self.assertEqual(by_id(after)['main'], by_id(before)['main'])
+        self.assertEqual(by_id(after)['cama'], by_id(before)['cama'])
+
+    def test_a_hash_clash_stops_provisioning_until_a_slot_is_set(self):
+        clash = expected_browser('main')['subnet']
+        slot = (int(clash.split('.')[2]) * 256 + int(clash.split('.')[3].split('/')[0])) // 8
+        result, facts = self.derive(openclaw_agents=[{'id': 'main'}, {'id': 'cama', 'playwright_slot': slot}])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Set playwright_slot', result.stdout)
+        result, facts = self.derive(openclaw_agents=[{'id': 'main'}, {'id': 'cama', 'playwright_slot': 7}])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(facts['browsers'][1], expected_browser('cama', slot=7))
 
     def test_disabled_registers_nothing(self):
         result, facts = self.derive(openclaw_playwright_enabled=False, openclaw_playwright_proxy={'host': '', 'port': 3128, 'client': ''})
@@ -102,8 +127,8 @@ class DerivationTest(unittest.TestCase):
         self.assertIsNone(facts)
         self.assertIn('exactly one', result.stdout)
 
-    def test_subnet_base_must_be_a_whole_24(self):
-        result, facts = self.derive(openclaw_playwright_subnet_base='172.31.240.1')
+    def test_subnet_base_must_be_a_whole_16(self):
+        result, facts = self.derive(openclaw_playwright_subnet_base='172.31.240.0')
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(facts)
 
@@ -125,14 +150,13 @@ class HomeProxyPolicyTest(unittest.TestCase):
         self.assertIn('acl openclaw_server src 100.100.2.2/32', config)
         blocked = ' '.join(line for line in config.splitlines() if line.startswith('acl blocked_dst'))
         for cidr in ('10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12',
-                     '192.168.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10', '"/conf/home-ipv6.acl"'):
+                     '192.168.0.0/16', '::1/128', '64:ff9b::/96', 'fc00::/7', 'fe80::/10', '"/conf/home-ipv6.acl"'):
             self.assertIn(cidr, blocked)
 
     def test_never_lists_ranges_squid_reads_as_all_of_ipv4(self):
         # Seen while building this: squid folds ::ffff:0:0/96 into 0.0.0.0/0, refusing every site.
         config = self.render()
         self.assertNotIn('::ffff:', config)
-        self.assertNotIn('64:ff9b:', config)
 
     def test_rejects_settings_that_are_not_ipv4(self):
         env = {**os.environ, 'BROWSER_PROXY_HOST': 'mac-studio', 'BROWSER_PROXY_PORT': '3128',
@@ -199,20 +223,25 @@ class DeployCheckTest(unittest.TestCase):
         with mock.patch.object(self.check, 'ECHO', self.base + '/echo'):
             self.check.main(self.base + '/mcp')
 
+    SQUID_REFUSAL = ('- HTTP status: 403 Forbidden\n- Page Title: ERROR: The requested URL could not be retrieved\n'
+                     '- heading "Access Denied." [level=2]')
+
     def test_passes_when_pages_leave_from_home_and_private_is_refused(self):
-        self.run_check('- generic [ref=e1]: 92.0.2.1', '- HTTP status: 403 Forbidden')
+        self.run_check('- generic [ref=e1]: 92.0.2.1', self.SQUID_REFUSAL)
         self.assertEqual(FakeBrowser.calls[-1], 'browser_close')
 
     def test_fails_when_the_browser_leaves_from_this_server(self):
         with self.assertRaises(SystemExit) as failure:
-            self.run_check('- generic [ref=e1]: 203.0.113.9', '- HTTP status: 403 Forbidden')
+            self.run_check('- generic [ref=e1]: 203.0.113.9', self.SQUID_REFUSAL)
         self.assertIn('not through the home proxy', str(failure.exception))
         self.assertEqual(FakeBrowser.calls[-1], 'browser_close')
 
     def test_fails_when_the_proxy_does_not_refuse_private_addresses(self):
         for private in ('- Page Title: Router login',
                         # Page text mentioning 403 is not a refusal.
-                        '- HTTP status: 200 OK\n- Page Title: Router login / Firmware 403'):
+                        '- HTTP status: 200 OK\n- Page Title: Router login / Firmware 403',
+                        # A device's own 403 means the proxy let the request through.
+                        '- HTTP status: 403 Forbidden\n- Page Title: Home router access denied'):
             with self.subTest(private=private), self.assertRaises(SystemExit) as failure:
                 self.run_check('- generic [ref=e1]: 92.0.2.1', private)
             self.assertIn('did not refuse', str(failure.exception))
