@@ -78,6 +78,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `memory-sources` | memory-sources | Markdown copies of text, PDF, image and Office files for memory search ([Memory Search](#memory-search)) |
 | `playwright` | playwright | Per-agent Playwright browsers and their relay to the home proxy; run as `--tags agents,playwright,plugins` (deny rules, browsers, registration) |
 | `plugins` | plugins | MCP adapter, GitHub and Playwright servers, GitHub token proxy for sandbox git, deny rules |
+| `sandbox` | sandbox | Rebuild custom Docker image, Mac access in sandboxes, recreate sandboxes after changes |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
 ## Local CLI

@@ -238,7 +238,7 @@ agent turn → MCP adapter → Playwright container (one per agent, internal net
                                  → tailnet → squid on the Mac (home connection) → website
 ```
 
-- **Browser:** Microsoft's [Playwright MCP server](https://github.com/microsoft/playwright-mcp), pinned in `openclaw_playwright_image`, one container per agent. Each agent sees only its own browser's tools (`playwright_*` for main, `playwright-<id>_*` for the others), through the same per-agent deny rules as GitHub and qmd.
+- **Browser:** Microsoft's [Playwright MCP server](https://github.com/microsoft/playwright-mcp), pinned in `openclaw_playwright_image`, one container per agent. Each agent sees only its own browser's tools (`playwright_*` for main, `playwright-<id>_*` for the others), through the same per-agent deny rules as GitHub.
 - **No way out except the proxy:** each browser sits on its own internal Docker network. Docker gives it no route to the internet, to this server's services or to the tailnet. The only other member of that network is the relay, which forwards every connection to the proxy and nowhere else.
 - **Proxy on the Mac** (`scripts/deploy-mac-browser-proxy.sh`): squid, listening only on the Mac's tailnet address, serving only the server's tailnet address, ports 80 and 443 only. It refuses private, loopback, link-local and tailnet addresses and the home network's own IPv6 ranges, so a page cannot reach devices at home.
 - **Nothing persists:** profiles are in memory (`--isolated`). Logins and cookies are gone after a container restart, and agents cannot use your accounts.

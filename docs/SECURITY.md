@@ -114,7 +114,7 @@ See [AGENTS.md — Key Rotation](../AGENTS.md#key-rotation) for rotation procedu
 - **`tools.sandbox.tools.allow`** — sandbox sessions have explicit access to all standard tool groups
 
 **Mitigations available but not enabled**:
-- `tools.elevated.enabled: false` — disables OpenClaw elevated execution, not Claude native Bash
+- `tools.elevated.enabled: false` — disables OpenClaw elevated execution (Claude has no native Bash since 2026.10)
 - `tools.elevated.allowFrom.<channel>` — restricts elevated tools to additional channels beyond Telegram
 - Hetzner firewall outbound rules — could restrict to known-good destinations
 
