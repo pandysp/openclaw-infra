@@ -38,8 +38,9 @@
   'channels.telegram.silentErrorReplies': openclaw_telegram_silent_error_replies | bool
 } %}
 {# Written by the withdrawn 2026.10.8 pin (#65). On 2026.9.35 Claude turns keep their own
-   tools, so neither is wanted; managedNativeTools is even invalid there (the version
-   change's doctor --fix drops it first, then this keeps both away). #}
+   tools, so neither is wanted. 9.35's schema rejects managedNativeTools: a host that still
+   has it must be restored from its pre-10.8 backup (see #75's runbook); otherwise doctor
+   quarantines the anthropic plugin config before this unset can run. #}
 {% set unset = ['tools.web.search.apiKey', 'tools.web.search.grok.apiKey',
                 'agents.defaults.sandbox.docker.env', 'plugins.entries.anthropic.config.managedNativeTools'] %}
 {% set plugin_allow = ['device-pair', 'memory-core', 'talk-voice', 'telegram', 'anthropic'] %}

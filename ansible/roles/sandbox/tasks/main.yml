@@ -126,6 +126,12 @@
   failed_when: sandbox_uv_version.rc != 0 or not sandbox_uv_version.stdout.startswith('uv ' ~ uv_version ~ ' ')
   when: not ansible_check_mode
 
+# The withdrawn 2026.10.8 pin (#65) copied the Mac private key here for OpenClaw sandboxes.
+- name: Remove the sandbox Mac key copies of the 2026.10 pin
+  ansible.builtin.file:
+    path: /home/ubuntu/.openclaw/sandbox-ssh
+    state: absent
+
 # Running sandboxes keep the image and settings they were created with. Remove them
 # when either changed; OpenClaw creates fresh ones from the current config on next use.
 - name: Fingerprint the sandbox image and settings

@@ -13,7 +13,7 @@
   ansible.builtin.copy:
     dest: /home/ubuntu/.config/openclaw/claude-skills.env
     # Every approved skill name is written (from the variable of the same name in lower
-    # case), so the sandbox's ${NAME} references always resolve to this file.
+    # case), so each name the containers inherit is defined, empty when unconfigured.
     content: |
       {% for name in (['ELEVENLABS_API_KEY', 'EXA_API_KEY', 'FIRECRAWL_API_KEY'] + openclaw_claude_cli_skill_env) | unique %}
       {{ name }}={{ lookup('vars', name | lower, default='') | to_json }}

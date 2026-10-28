@@ -35,6 +35,7 @@ class SmokeTests(unittest.TestCase):
                     {'name': 'github', 'env': {'GITHUB_PERSONAL_ACCESS_TOKEN': 'fixture-secret-pat'}}
                 ]}}}}
             }))
+            (root / 'workspace').mkdir()
             original_config = json.loads((state/'openclaw.json').read_text())
             # The real gateway pins the config it started with: tools.* file
             # edits are reload class "none" and never swap the runtime snapshot (OpenClaw at openclaw_docs_reviewed_version,
@@ -99,6 +100,11 @@ if sys.argv[1:]==['--user','start','openclaw-memory-sources.service']:
  for copy in copies.glob('*.md'):
   if not (notes/copy.name[:-3]).exists():copy.unlink()
  raise SystemExit(0)
+if sys.argv[1:3]==['--user','list-units']:
+ assert sys.argv[-1]=='workspace-git-sync-*.timer';print('workspace-git-sync-main.timer loaded active waiting Hourly');raise SystemExit(0)
+if sys.argv[1:3] in (['--user','stop'],['--user','start']) and sys.argv[3:]==['workspace-git-sync-main.timer']:
+ with (root/'sync-timers').open('a') as f: f.write(sys.argv[2]+'\\n')
+ raise SystemExit(0)
 assert sys.argv[1:]==['--user','restart','openclaw-gateway'], sys.argv
 shutil.copyfile(root/'.openclaw/openclaw.json', root/'gateway-snapshot.json')
 (root/'gateway-restarting').touch()
@@ -110,7 +116,8 @@ import re
 home=pathlib.Path(os.environ['HOME']);session=str(uuid.uuid4())
 workspace=json.loads((home/'.openclaw/openclaw.json').read_text())['agents']['defaults']['workspace']
 transcripts=home/'.claude/projects'/re.sub('[^A-Za-z0-9]','-',workspace);transcripts.mkdir(parents=True,exist_ok=True)
-(transcripts/(session+'.jsonl')).write_text(json.dumps({'message':sys.argv[-1]})+'\\n')
+events=[{'message':{'content':[{'type':'text','text':sys.argv[1]}]}}]+(json.loads(sys.argv[2]) if len(sys.argv)>2 else [])
+(transcripts/(session+'.jsonl')).write_text(''.join(json.dumps(event)+'\\n' for event in events))
 if (home/'fixture-case').read_text()!='no_container_launch':
  with (home/'.openclaw/claude-cli-invocations.jsonl').open('a') as f:
   f.write(json.dumps({'agent':'main','session':session,'name':'openclaw-claude-fixture','resuming':False})+'\\n')
@@ -139,18 +146,30 @@ elif args[:3]==['gateway','call','agent'] and 'phoenix-tool-' in args[args.index
  assert '*' not in config['tools'].get('deny',[]), 'Tool turn ran with tools disabled'
  params=json.loads(args[args.index('--params')+1]);assert params['deliver'] is False
  assert 'github_get_file_contents' in params['message'] and 'private-repo' in params['message']
+ calls=[] if mode=='tool_not_called' else [{'message':{'content':[{'type':'tool_use','id':'t1','name':'mcp__openclaw__github_get_file_contents','input':{}}]}},
+  {'message':{'content':[{'type':'tool_result','tool_use_id':'t1','content':[{'type':'text','text':'README.md'}]}]}}]
+ subprocess.run([str(root/'.openclaw/claude-cli-container'),params['message'],json.dumps(calls)],check=True,capture_output=True)
  print(json.dumps({'status':'ok','result':{'payloads':[{'text':'LICENSE' if mode=='tool_turn_wrong' else 'README.md'}]}}))
 elif args[:3]==['gateway','call','agent'] and 'phoenix-shell-' in args[args.index('--params')+1]:
  import hashlib,re
  config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'The shell turn must not reach OpenClaw tools'
  runtime=json.loads((root/'.openclaw/claude-cli-runtime.json').read_text())
- assert runtime['extra_args']==[], 'Claude still launched without its own tools'
+ assert runtime['extra_args']==['--tools','Bash'], 'Claude did not get exactly its Bash tool'
+ assert (root/'sync-timers').read_text().splitlines()[-1]=='stop', 'Backups ran during the shell window'
  params=json.loads(args[args.index('--params')+1]);assert params['deliver'] is False
  marker=re.search(r'PHOENIX_EXEC_[0-9a-f-]+',params['message']).group(0)
- canary=pathlib.Path(re.search(r'read the file (\S+)\.',params['message']).group(1)).read_text()
- lines=[] if mode=='shell_missing' else [hashlib.sha256(marker.encode()).hexdigest()]
- lines.append(canary if mode=='canary_leak' else 'MISSING')
+ canary_path=re.search(r'cat (\\S+)',params['message']).group(1);canary=pathlib.Path(canary_path).read_text()
+ digest=hashlib.sha256(marker.encode()).hexdigest()
+ def use(i,command):return {'message':{'content':[{'type':'tool_use','id':i,'name':'Bash','input':{'command':command}}]}}
+ def result(i,text,error=False):return {'message':{'content':[{'type':'tool_result','tool_use_id':i,'content':text,'is_error':error}]}}
+ calls=[use('s1','printf %s '+marker+' | sha256sum'),result('s1','' if mode=='shell_missing' else digest+'  -')]
+ if mode!='no_cat':calls+=[use('s2','cat '+canary_path),result('s2',canary if mode=='canary_leak' else 'cat: No such file or directory',mode!='canary_leak')]
+ subprocess.run([str(root/'.openclaw/claude-cli-container'),params['message'],json.dumps(calls)],check=True,capture_output=True)
+ if mode=='extra_launch':subprocess.run([str(root/'.openclaw/claude-cli-container'),'heartbeat'],check=True,capture_output=True)
+ if mode=='workspace_changed':(root/'workspace/written.txt').write_text('x')
+ lines=[] if mode=='shell_missing' else [digest]
+ lines.append('MISSING')
  print(json.dumps({'status':'ok','result':{'payloads':[{'text':'\\n'.join(lines)}]}}))
 elif args[:3]==['gateway','call','agent']:
  config=json.loads((root/'gateway-snapshot.json').read_text())
@@ -185,6 +204,7 @@ else:raise AssertionError('Unexpected command')
             self.assertEqual(json.loads((state / 'claude-cli-runtime.json').read_text())['extra_args'],
                              [] if case == 'native_tools_enabled' else ['--tools', ''])
             self.assertEqual(list(state.glob('phoenix-canary-*')), [])
+            result.timers = (root / 'sync-timers').read_text().splitlines() if (root / 'sync-timers').exists() else []
             # The test note and its copy never outlive the smoke test, even when it fails.
             self.assertEqual(list((root / 'workspace/notes').glob('phoenix-*')) if (root / 'workspace/notes').exists() else [], [])
             result.cli_called = (root / 'cli-called').exists()
@@ -203,6 +223,7 @@ else:raise AssertionError('Unexpected command')
                 self.assertIn('Private MCP directory read for test', result.stdout)
                 self.assertIn('Smoke test passed', result.stdout)
                 self.assertRegex(result.stdout, r'Inference run: [0-9a-f-]{36}')
+                self.assertEqual(result.timers, ['stop', 'start'], 'backups must resume after a clean shell window')
 
     def test_failures_never_pass_or_print_secret_output(self):
         for case in ('model_command_failed',
@@ -212,7 +233,8 @@ else:raise AssertionError('Unexpected command')
                      'anonymous_allowed', 'mcp_failure', 'mcp_error_result', 'invalid_mcp_json', 'tools_not_disabled',
                      'no_container_launch', 'policy_timeout_forever', 'policy_abort',
                      'memory_copy_missing', 'search_misses', 'tool_turn_wrong',
-                     'shell_missing', 'canary_leak'):
+                     'shell_missing', 'canary_leak', 'no_cat', 'extra_launch', 'workspace_changed',
+                     'tool_not_called'):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertNotEqual(result.returncode, 0)
@@ -224,6 +246,8 @@ else:raise AssertionError('Unexpected command')
                     self.assertRegex(result.stdout, r'Inference run: [0-9a-f-]{36}')
                 if case == 'mcp_failure':
                     self.assertIn('HTTP 500', result.stderr)
+                if case in ('extra_launch', 'workspace_changed'):
+                    self.assertEqual(result.timers, ['stop'], 'backups must stay paused after an uncontained shell window')
                 if case == 'policy_timeout_forever':
                     self.assertIn('120 s deadline exceeded', result.stderr)
 
