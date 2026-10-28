@@ -41,8 +41,12 @@ stale_services() {
         fi
         procs=$(find "$CGROUP_ROOT$cgroup" -name cgroup.procs -exec cat {} +)
         for pid in $procs; do
-            # A process can exit between listing and reading; that is not staleness.
-            exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+            if ! exe=$(readlink "/proc/$pid/exe" 2>/dev/null); then
+                # A process can exit between listing and reading; that is not staleness.
+                [[ ! -e /proc/$pid ]] && continue
+                echo "ERROR: cannot read the program of pid $pid in $unit" >&2
+                return 1
+            fi
             if [[ $exe == *" (deleted)" ]]; then
                 echo "$unit ${exe% (deleted)}"
                 break
