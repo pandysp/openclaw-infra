@@ -118,6 +118,31 @@ class WorkspaceSyncTests(unittest.TestCase):
         self.assertEqual(self.git(self.local,'show','HEAD:note.md').stdout,'local edit\n')
         self.assertFalse((self.local/'.git/MERGE_HEAD').exists())
 
+    def test_same_file_added_on_both_sides_with_different_modes_merges(self):
+        # Seen on production twice: the Mac commits a new script as executable, Obsidian
+        # Sync delivers it to the server without the bit, and the server commits it too.
+        seed=self.restored()
+        (seed/'tool.sh').write_text('#!/bin/sh\necho hi\n'); (seed/'tool.sh').chmod(0o755)
+        self.git(seed,'add','.');self.git(seed,'commit','-m','add tool');self.git(seed,'push','origin','main')
+        (self.local/'tool.sh').write_text('#!/bin/sh\necho hi\n'); (self.local/'tool.sh').chmod(0o644)
+        (self.local/'local.md').write_text('local note\n')
+        result=self.sync()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('100755',self.git(self.remote,'ls-tree','main','tool.sh').stdout)
+        self.assertEqual(self.git(self.remote,'show','main:local.md').stdout,'local note\n')
+        self.assertFalse((self.local/'.git/MERGE_HEAD').exists())
+
+    def test_same_path_added_with_different_content_still_stops(self):
+        seed=self.restored()
+        (seed/'tool.sh').write_text('remote\n')
+        self.git(seed,'add','.');self.git(seed,'commit','-m','add tool');self.git(seed,'push','origin','main')
+        (self.local/'tool.sh').write_text('local\n')
+        remote_head=self.git(self.remote,'rev-parse','main').stdout
+        self.assertNotEqual(self.sync().returncode,0)
+        self.assertEqual(self.git(self.remote,'rev-parse','main').stdout,remote_head)
+        self.assertEqual((self.local/'tool.sh').read_text(),'local\n')
+        self.assertFalse((self.local/'.git/MERGE_HEAD').exists())
+
     def test_bootstrap_filename_does_not_trigger_restoration(self):
         self.seed(); self.assertEqual(self.sync().returncode,0)
         (self.local/'BOOTSTRAP.md').write_text('ordinary content\n')

@@ -64,8 +64,30 @@ else
     if [ "$RC" -ne 1 ]; then exit "$RC"; fi
     git commit -m "Auto-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
+# Both sides added or changed a file to the same content, differing at most in
+# its mode: Obsidian Sync delivers the Mac's new scripts without the executable
+# bit before Git does, so the server commits them as plain files. Take the
+# remote's version. Any conflict with different content stops the sync.
+resolve_same_content_conflicts() {
+    local conflicted path ours theirs
+    conflicted=$(mktemp)
+    git diff --name-only --diff-filter=U -z > "$conflicted"
+    if [ ! -s "$conflicted" ]; then rm -f "$conflicted"; return 1; fi
+    while IFS= read -r -d '' path; do
+        ours=$(git rev-parse -q --verify ":2:$path") || { rm -f "$conflicted"; return 1; }
+        theirs=$(git rev-parse -q --verify ":3:$path") || { rm -f "$conflicted"; return 1; }
+        if [ "$ours" != "$theirs" ]; then rm -f "$conflicted"; return 1; fi
+    done < "$conflicted"
+    while IFS= read -r -d '' path; do
+        git checkout --theirs -- "$path"
+        git add -- "$path"
+    done < "$conflicted"
+    rm -f "$conflicted"
+    git commit --no-edit
+}
+
 if [ "$REMOTE_EXISTS" = true ]; then
-    if ! git merge --no-edit origin/main; then
+    if ! git merge --no-edit origin/main && ! resolve_same_content_conflicts; then
         if git rev-parse --verify MERGE_HEAD >/dev/null 2>&1; then git merge --abort; fi
         echo "ERROR: Workspace merge failed. Local commits are preserved; resolve before syncing." >&2
         exit 1
