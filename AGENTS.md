@@ -153,7 +153,7 @@ pulumi up    # Creates server + auto-triggers Ansible provisioning
 # Config only (model, sandbox, auth settings)
 ./scripts/provision.sh --tags config
 
-# Rebuild sandbox image
+# Rebuild sandbox images from scratch (fresh Debian base and packages, no cache)
 ./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true
 
 # Update cron prompts (edit ansible/group_vars/all.yml first)
@@ -201,6 +201,14 @@ openclaw security audit --deep
 ```
 
 **Expected output:** 0 critical. Run it **on the VPS via SSH** (running locally audits your Mac instead). Accepted warnings, all deliberate: `config.insecure_or_dangerous_flags` (`dangerouslyAllowExternalBindSources` for sandbox bind mounts), `tools.exec.security_full_configured` (OpenClaw's own exec runs in the sandbox with `elevated=false`), and `security.trust_model.multi_user_heuristic` (Telegram/Discord group allowlists — personal deployment, one trusted operator). `--deep` probes occasionally add a transient warning; rerun before acting on it.
+
+### Check TLS Trust
+
+```bash
+./scripts/verify-tls-trust.sh openclaw-vps.<tailnet>.ts.net
+```
+
+Connects from the installed Node, every running Node service (on the Node it actually runs), and Node, Python, curl and uv inside each OpenClaw image to the 12 unsafe test sites of the October 2026 eMudhra incident and 4 healthy controls. Every target must reject all 12 and reach all 4. Phoenix runs it on every staging server. Two floors in `group_vars/all.yml` keep it passing: provisioning refuses host Node below `nodejs_min_version` and restarts services still running a replaced program after any upgrade; images built with Debian `ca-certificates` below `debian_ca_certificates_min_version` are rebuilt from scratch on the next run. A failure that says "inconclusive" means a test site could not be reached, not that it was trusted.
 
 ### Destroy Infrastructure
 
@@ -521,7 +529,7 @@ Running sandboxes keep the image and settings they were created with. The sandbo
 
 **Network:** Bridge (outbound internet for web research/git push). Git to GitHub goes through `mcp-auth-proxy`, which injects the agent's GitHub token: each workspace's `.git-proxy-config` rewrites GitHub URLs to the proxy's `/github-<agent>/` route (gateway IP of `codex-proxy-net`, port `codex_proxy_port`), and ufw admits the sandbox bridge to that port. Risks: [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse).
 
-**Custom image:** Two layers built locally: base (`openclaw-sandbox:trixie`, Debian 13) + custom (`openclaw-sandbox-custom:latest`). Neither pulled from registry. Rebuild: `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`.
+**Custom image:** Two layers built locally: base (`openclaw-sandbox:trixie`, Debian 13) + custom (`openclaw-sandbox-custom:latest`). Neither pulled from registry. Rebuild: `./scripts/provision.sh --tags sandbox -e force_sandbox_rebuild=true`. A base image whose Debian `ca-certificates` predates `debian_ca_certificates_min_version` is rebuilt from scratch automatically; uv is pinned to `uv_version`.
 
 **Config:**
 ```

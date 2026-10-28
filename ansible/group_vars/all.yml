@@ -50,11 +50,18 @@ openclaw_custom_models:
           input: ["text", "image"]
           contextWindow: 200000
           maxTokens: 128000
-# OpenClaw 2026.9.35 and 2026.10.6+ require Node >=24.22.1 <25 or >=26.12.1 (patched TLS roots).
+# OpenClaw 2026.9.35 and 2026.10.6+ require Node >=24.22.1 <25 or >=26.12.1 (patched TLS roots:
+# 26.12.1 rejects the compromised eMudhra keys, nodejs/node#66871).
 # Provisioning's dist-upgrade installs the newest NodeSource build; the system role
 # then refuses a Node older than nodejs_min_version.
 nodejs_major_version: 26
 nodejs_min_version: "26.12.1"
+# Lowest Debian ca-certificates inside the sandbox, Claude CLI and workspace-sync
+# images: this release drops the eMudhra roots. An image built with an older one
+# is rebuilt from scratch on the next run (ansible/roles/docker/tasks/image-ca-floor.yml).
+debian_ca_certificates_min_version: "20250419+deb13u1"
+# uv copied into the sandbox image; 0.13.4 has uv's eMudhra trust fix.
+uv_version: "0.13.4"
 openclaw_version: "2026.10.8"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.

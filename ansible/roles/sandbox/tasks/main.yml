@@ -5,6 +5,19 @@
   changed_when: false
   failed_when: false
 
+- name: Check the base sandbox image's CA package
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: image-ca-floor.yml
+  vars:
+    image_ca_floor_image: openclaw-sandbox:trixie
+
+# A forced or stale rebuild starts from a freshly pulled Debian and fresh apt
+# packages, so no cached layer can carry old trust roots into the new images.
+- name: Decide whether the sandbox images are rebuilt from scratch
+  ansible.builtin.set_fact:
+    _sandbox_fresh_build: "{{ force_sandbox_rebuild | bool or image_ca_floor == 'stale' }}"
+
 - name: Create sandbox build directory
   ansible.builtin.file:
     path: /home/ubuntu/.openclaw/sandbox-build
@@ -20,14 +33,19 @@
 
 - name: Build base sandbox image
   ansible.builtin.shell: |
-    docker build -t openclaw-sandbox:trixie -f /home/ubuntu/.openclaw/sandbox-build/Dockerfile.base /home/ubuntu/.openclaw/sandbox-build/
+    docker build {{ '--pull --no-cache' if _sandbox_fresh_build | bool else '' }} -t openclaw-sandbox:trixie -f /home/ubuntu/.openclaw/sandbox-build/Dockerfile.base /home/ubuntu/.openclaw/sandbox-build/
   args:
     executable: /bin/bash
-  when: base_image_check.rc != 0 or base_dockerfile_changed.changed or (force_sandbox_rebuild | bool)
+  when: base_image_check.rc != 0 or base_dockerfile_changed.changed or _sandbox_fresh_build | bool
+  register: base_image_build
 
-- name: Verify base sandbox image was built
-  ansible.builtin.command: docker image inspect openclaw-sandbox:trixie
-  changed_when: false
+- name: Verify the base sandbox image meets the CA floor
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: image-ca-floor.yml
+  vars:
+    image_ca_floor_image: openclaw-sandbox:trixie
+    image_ca_floor_require: true
 
 - name: Template custom sandbox Dockerfile
   ansible.builtin.template:
@@ -42,17 +60,38 @@
   changed_when: false
   failed_when: false
 
+# `--pull` would look for the local base image in a registry, so the custom build
+# refreshes its one pinned external stage explicitly instead.
+- name: Pull the pinned uv image for a fresh build
+  ansible.builtin.command: docker pull --quiet ghcr.io/astral-sh/uv:{{ uv_version }}
+  when: _sandbox_fresh_build | bool
+  changed_when: false
+
 - name: Build custom sandbox Docker image
   ansible.builtin.shell: |
-    docker build -t openclaw-sandbox-custom:latest /home/ubuntu/.openclaw/sandbox-build/
+    docker build {{ '--no-cache' if _sandbox_fresh_build | bool else '' }} -t openclaw-sandbox-custom:latest /home/ubuntu/.openclaw/sandbox-build/
   args:
     executable: /bin/bash
-  when: force_sandbox_rebuild | bool or dockerfile_changed.changed or base_dockerfile_changed.changed or custom_image_check.rc != 0
+  when: >-
+    _sandbox_fresh_build | bool or dockerfile_changed.changed or base_image_build is changed
+    or custom_image_check.rc != 0
   register: custom_image_build
 
-- name: Verify custom sandbox image was built
-  ansible.builtin.command: docker image inspect openclaw-sandbox-custom:latest
+- name: Verify the custom sandbox image meets the CA floor
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: image-ca-floor.yml
+  vars:
+    image_ca_floor_image: openclaw-sandbox-custom:latest
+    image_ca_floor_require: true
+
+- name: Verify the custom sandbox image carries uv {{ uv_version }}
+  ansible.builtin.command:
+    argv: [docker, run, --rm, --network, none, --entrypoint, uv, openclaw-sandbox-custom:latest, --version]
+  register: sandbox_uv_version
   changed_when: false
+  failed_when: sandbox_uv_version.rc != 0 or not sandbox_uv_version.stdout.startswith('uv ' ~ uv_version ~ ' ')
+  when: not ansible_check_mode
 
 - name: Give agents with Mac access SSH in their sandbox
   ansible.builtin.include_tasks: mac-access.yml

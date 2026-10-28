@@ -75,19 +75,21 @@ else
     exit 1
 fi
 
-# 3. Check Node.js version (must be >= v22)
+# 3. Check Node.js version against the provisioning floor (older Node trusts the eMudhra keys)
 echo ""
 echo "3. Checking Node.js version..."
+NODE_MIN=$(sed -nE 's/^nodejs_min_version: "([^"]+)"$/\1/p' "$(dirname "$0")/../ansible/group_vars/all.yml")
 NODE_VERSION=$(tailscale ssh "ubuntu@$FULL_HOSTNAME" \
     "node --version" 2>/dev/null || echo "")
 
-NODE_MAJOR=$(echo "$NODE_VERSION" | grep -oE '[0-9]+' | head -1)
 if [[ -z "$NODE_VERSION" ]]; then
     check_fail "Node.js not found or not accessible"
-elif [[ "${NODE_MAJOR:-0}" -ge 22 ]]; then
-    check_pass "Node.js version: $NODE_VERSION"
+elif [[ -z "$NODE_MIN" ]]; then
+    check_fail "nodejs_min_version not found in ansible/group_vars/all.yml"
+elif [[ "$(printf '%s\n%s\n' "$NODE_MIN" "${NODE_VERSION#v}" | sort -V | head -1)" == "$NODE_MIN" ]]; then
+    check_pass "Node.js version: $NODE_VERSION (floor $NODE_MIN)"
 else
-    check_warn "Node.js version $NODE_VERSION (expected v22+)"
+    check_fail "Node.js version $NODE_VERSION is below the floor $NODE_MIN; run ./scripts/provision.sh --tags system"
 fi
 
 # 4. Check OpenClaw systemd user service

@@ -90,6 +90,15 @@
   register: claude_cli_image_after
   changed_when: claude_cli_image_before.rc != 0 or claude_cli_image_before.stdout != claude_cli_image_after.stdout
 
+# Built from openclaw-sandbox-custom:latest, which the sandbox role keeps at the floor.
+- name: Verify the container CLI image meets the CA floor
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: image-ca-floor.yml
+  vars:
+    image_ca_floor_image: openclaw-claude-cli:latest
+    image_ca_floor_require: true
+
 - name: Create dedicated dual-stack container CLI network
   community.docker.docker_network:
     name: "{{ openclaw_claude_cli_network }}"

@@ -2,6 +2,8 @@ FROM debian:trixie
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# The version check fails the build if Debian's CA package predates
+# debian_ca_certificates_min_version (older ones trust the eMudhra roots).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
  bash \
@@ -11,6 +13,7 @@ RUN apt-get update \
  jq \
  python3 \
  ripgrep \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge "{{ debian_ca_certificates_min_version }}" \
  && rm -rf /var/lib/apt/lists/*
 
 CMD ["sleep", "infinity"]

@@ -5,6 +5,7 @@ Native host-service and systemd checks additionally run on the Phoenix VPS.
 """
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -77,7 +78,11 @@ print(json.dumps({'uid':os.getuid(),'capabilities':'none','peer_blocked':True,'g
 class WorkspaceContainerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        result = subprocess.run(['docker','build','-t',IMAGE,str(ROOT/'ansible/roles/workspace/files')],
+        # Same build argument provisioning passes (workspace role), from its one source.
+        floor, = re.findall(r'(?m)^debian_ca_certificates_min_version: "([^"]+)"$',
+                            (ROOT/'ansible/group_vars/all.yml').read_text())
+        result = subprocess.run(['docker','build','--build-arg','CA_CERTIFICATES_MIN_VERSION='+floor,
+                                 '-t',IMAGE,str(ROOT/'ansible/roles/workspace/files')],
                                 capture_output=True,text=True,timeout=300)
         if result.returncode:
             raise RuntimeError(result.stdout[-3000:]+result.stderr[-3000:])
