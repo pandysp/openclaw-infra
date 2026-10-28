@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     # Step deadlines leave teardown time before the job deadline (fixture checked).
     # Cancellation or runner loss can still interrupt cleanup; this is not a teardown guarantee.
-    timeout-minutes: 167
+    timeout-minutes: 173
 
     steps:
       # ── Setup ────────────────────────────────────────────────────
@@ -443,6 +443,12 @@ jobs:
       - name: Run deployment verification
         timeout-minutes: 6
         run: REQUIRED_CHANNELS=telegram OPENCLAW_HOSTNAME="$PHOENIX_RESOURCE_NAME" ./scripts/verify.sh
+
+      # The gateway, every Node service and every OpenClaw image against the
+      # eMudhra incident's 12 unsafe test sites and 4 healthy controls.
+      - name: Verify TLS trust
+        timeout-minutes: 6
+        run: ./scripts/verify-tls-trust.sh "${STAGING_HOST:?Run host resolution first}"
 
       - name: Verify scheduled automation and idempotence
         timeout-minutes: 12

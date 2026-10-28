@@ -148,21 +148,30 @@
         - gitignore-workspace
       register: workspace_image_sources
 
-    - name: Check workspace sync image
-      ansible.builtin.command: docker image inspect openclaw-workspace-sync:latest
-      register: workspace_image
-      changed_when: false
-      failed_when: false
+    - name: Check the workspace sync image's CA package
+      ansible.builtin.include_role:
+        name: docker
+        tasks_from: image-ca-floor.yml
+      vars:
+        image_ca_floor_image: openclaw-workspace-sync:latest
 
+    # A stale image is rebuilt from a fresh base and fresh packages, never from cached layers.
     - name: Build workspace sync image
       ansible.builtin.command:
-        argv:
-          - docker
-          - build
-          - --tag
-          - openclaw-workspace-sync:latest
-          - /home/ubuntu/.local/share/workspace-sync-build
-      when: workspace_image.rc != 0 or workspace_image_sources.changed
+        argv: >-
+          {{ ['docker', 'build']
+             + (['--pull', '--no-cache'] if image_ca_floor == 'stale' else [])
+             + ['--build-arg', 'CA_CERTIFICATES_MIN_VERSION=' ~ debian_ca_certificates_min_version,
+                '--tag', 'openclaw-workspace-sync:latest', '/home/ubuntu/.local/share/workspace-sync-build'] }}
+      when: image_ca_floor != 'current' or workspace_image_sources.changed
+
+    - name: Verify the workspace sync image meets the CA floor
+      ansible.builtin.include_role:
+        name: docker
+        tasks_from: image-ca-floor.yml
+      vars:
+        image_ca_floor_image: openclaw-workspace-sync:latest
+        image_ca_floor_require: true
 
     - name: Install and synchronize each workspace
       ansible.builtin.include_tasks: sync.yml

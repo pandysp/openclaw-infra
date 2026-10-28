@@ -539,6 +539,17 @@
       ansible.builtin.meta: flush_handlers
       tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
+    # The system role upgrades Node under running services; nothing else restarts
+    # them. After the flush above, so a gateway the handlers just restarted is not
+    # restarted twice. Every tag: any run must leave no service on an old program.
+    - name: Restart services still running a replaced program
+      ansible.builtin.include_role:
+        name: system
+        tasks_from: restart-replaced.yml
+        apply:
+          tags: [always]
+      tags: [always]
+
     - name: Verify restarted gateway health
       ansible.builtin.command: openclaw health --json
       environment:
