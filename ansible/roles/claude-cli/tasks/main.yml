@@ -95,9 +95,13 @@
 - name: Find container CLI sessions on an older image build
   ansible.builtin.shell: |
     set -euo pipefail
+    # Each Docker call on its own line, so a failure stops the task instead of
+    # reading as "no sessions" or "older build".
     current=$(docker image inspect --format '{% raw %}{{.Id}}{% endraw %}' openclaw-claude-cli:latest)
-    for id in $(docker ps -q --no-trunc --filter label=openclaw.claude-agent); do
-      if [ "$(docker inspect --format '{% raw %}{{.Image}}{% endraw %}' "$id")" != "$current" ]; then
+    sessions=$(docker ps -q --no-trunc --filter label=openclaw.claude-agent)
+    for id in $sessions; do
+      used=$(docker inspect --format '{% raw %}{{.Image}}{% endraw %}' "$id")
+      if [ "$used" != "$current" ]; then
         echo "$id"
       fi
     done

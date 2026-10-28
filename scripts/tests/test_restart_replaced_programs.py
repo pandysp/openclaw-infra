@@ -142,6 +142,16 @@ class RestartReplacedProgramsTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(restarts, [])
 
+    def test_a_live_process_that_cannot_be_inspected_fails(self):
+        from test_tls_trust_check import NONDUMPABLE, hidden_ready
+        hidden = subprocess.Popen([sys.executable, '-c', NONDUMPABLE])
+        self.processes.append(hidden)
+        hidden_ready(hidden.pid)
+        result, restarts = self.run_script({'gateway.service': self.unit({'.': [hidden.pid]})})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f'ERROR: cannot read the program of pid {hidden.pid} in gateway.service', result.stderr)
+        self.assertEqual(restarts, [])
+
     def test_a_running_service_without_its_control_group_fails(self):
         unit = self.unit({'.': [self.process(True)]})
         unit['cgroup'] = '/user.slice/missing.service'

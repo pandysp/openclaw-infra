@@ -84,7 +84,7 @@ class TlsTrustCheckTest(unittest.TestCase):
         self.assertIn('All TLS trust checks passed', result.stdout)
 
     def test_an_accepted_unsafe_chain_fails(self):
-        result = self.check(accepted={'openclaw-workspace-sync:latest': ['dv-g3b-emudhra.we-have-a-problem.com']})
+        result = self.check(features=True, accepted={'openclaw-workspace-sync:latest': ['dv-g3b-emudhra.we-have-a-problem.com']})
         self.assertEqual(result.returncode, 1)
         self.assertIn('FAIL image openclaw-workspace-sync:latest python: unsafe rejected 11/12, healthy 4/4; '
                       'ACCEPTED compromised chains: dv-g3b-emudhra.we-have-a-problem.com', result.stdout)
@@ -112,6 +112,11 @@ class TlsTrustCheckTest(unittest.TestCase):
         self.assertIn('SKIP image openclaw-workspace-sync:latest: its feature is off on this server', result.stdout)
         self.assertIn('FAIL image openclaw-sandbox:trixie: Error response from daemon: No such image', result.stdout)
 
+    def test_a_left_over_image_of_a_feature_that_is_off_is_not_probed(self):
+        result = self.check(accepted={'openclaw-claude-cli:latest': ['dv-g3b-emudhra.we-have-a-problem.com']})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('SKIP image openclaw-claude-cli:latest: its feature is off on this server', result.stdout)
+
     def test_a_missing_image_of_a_feature_that_is_on_fails(self):
         images = {k: v for k, v in IMAGES.items() if k.startswith('openclaw-sandbox')}
         result = self.check(images=images, features=True)
@@ -124,6 +129,19 @@ class TlsTrustCheckTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('unknown section(s) imagse', result.stderr)
         self.assertNotIn('passed', result.stdout)
+
+
+# A live process whose /proc entries its own user cannot read (not dumpable).
+NONDUMPABLE = 'import ctypes, time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); time.sleep(300)'
+
+
+def hidden_ready(pid):
+    """Wait until the process has made itself unreadable."""
+    while True:
+        try:
+            os.readlink(f'/proc/{pid}/exe')
+        except PermissionError:
+            return
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Needs Linux /proc/<pid>/exe')
@@ -182,6 +200,14 @@ class NodeProcessDiscoveryTest(unittest.TestCase):
         self.assertEqual(found, [('gateway.service', parent, 'node', {}),
                                  ('gateway.service', child, 'node', {'NODE_TLS_REJECT_UNAUTHORIZED': '0'}),
                                  ('gateway.service', other, 'node-other', {})])
+
+    def test_a_live_process_that_cannot_be_inspected_stops_the_check(self):
+        hidden = subprocess.Popen([sys.executable, '-c', NONDUMPABLE])
+        self.processes.append(hidden)
+        hidden_ready(hidden.pid)
+        units = {'gateway.service': self.unit({'.': [self.node('node'), hidden.pid]})}
+        with self.assertRaisesRegex(SystemExit, f'cannot inspect pid {hidden.pid} in gateway.service'):
+            self.discover(units)
 
     def test_a_service_that_cannot_be_inspected_stops_the_check(self):
         units = {'gateway.service': self.unit({'.': [self.node('node')]}, broken=['FragmentPath'])}

@@ -170,8 +170,10 @@ def node_processes():
                 exe = os.readlink(f'/proc/{pid}/exe')
                 identity = os.stat(f'/proc/{pid}/exe')
                 raw = Path(f'/proc/{pid}/environ').read_bytes()
-            except OSError:
-                continue  # exited meanwhile
+            except OSError as error:
+                if not Path(f'/proc/{pid}').exists():
+                    continue  # exited meanwhile
+                raise SystemExit(f'ERROR: cannot inspect pid {pid} in {unit}: {error.strerror}')
             if not Path(exe.removesuffix(' (deleted)')).name.startswith('node'):
                 continue
             environ = dict(item.split('=', 1) for item in raw.decode(errors='replace').split('\0') if '=' in item)
@@ -207,12 +209,14 @@ def check_host(node_min, probe_dir):
 
 def check_images(probe_dir):
     for image, runtimes in IMAGES.items():
+        # Provisioning stops maintaining an image once its feature is off; no new
+        # container starts from it (running ones are still checked below).
+        if image in FEATURE_MARKERS and not FEATURE_MARKERS[image]():
+            print(f'SKIP image {image}: its feature is off on this server', flush=True)
+            continue
         inspect = run(['docker', 'image', 'inspect', '--format', '{{.Id}} {{.Created}}', image])
         if inspect.returncode:
-            if image in FEATURE_MARKERS and not FEATURE_MARKERS[image]() and 'No such image' in inspect.stderr:
-                print(f'SKIP image {image}: its feature is off on this server', flush=True)
-            else:
-                fail(f'image {image}: {inspect.stderr.strip()}')
+            fail(f'image {image}: {inspect.stderr.strip()}')
             continue
         image_id, created = inspect.stdout.split()
         print(f'  image {image} {image_id[7:19]} built {created}', flush=True)
