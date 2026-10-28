@@ -32,6 +32,8 @@ if args[1] == 'list-units':
 elif args[1] == 'show':
     assert args[2] == '-P', args
     unit = units[args[4]]
+    if args[3] in unit.get('broken', []):
+        raise SystemExit('Failed to get properties: fixture failure')
     print({'FragmentPath': unit['fragment'], 'Type': unit['type'], 'ControlGroup': unit['cgroup']}[args[3]])
 elif args[1] == 'restart':
     with (state/'restarts').open('a') as log:
@@ -129,6 +131,24 @@ class RestartReplacedProgramsTest(unittest.TestCase):
         self.assertEqual(restarts, ['gateway.service'])
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('ERROR: still running a replaced program after restart', result.stderr)
+
+    def test_a_service_that_cannot_be_inspected_fails_instead_of_counting_as_current(self):
+        for broken in (['FragmentPath'], ['Type'], ['ControlGroup']):
+            with self.subTest(broken=broken):
+                (self.tmp/'restarts').unlink(missing_ok=True)
+                units = {'current.service': self.unit({'.': [self.process(False)]}),
+                         'gateway.service': self.unit({'.': [self.process(True)]}, broken=broken)}
+                result, restarts = self.run_script(units)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(restarts, [])
+
+    def test_a_running_service_without_its_control_group_fails(self):
+        unit = self.unit({'.': [self.process(True)]})
+        unit['cgroup'] = '/user.slice/missing.service'
+        unit['procs'] = {}
+        result, restarts = self.run_script({'gateway.service': unit})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('ERROR: cannot find the control group of running gateway.service', result.stderr)
 
 
 if __name__ == '__main__':

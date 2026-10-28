@@ -33,16 +33,24 @@ HEALTHY = ['emudhra.we-have-a-problem.com', 'registry.npmjs.org', 'pypi.org', 'g
 TRUST_ENV = ['NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'NODE_USE_SYSTEM_CA', 'NODE_TLS_REJECT_UNAUTHORIZED',
              'SSL_CERT_FILE', 'SSL_CERT_DIR']
 UNIT_DIR = Path.home()/'.config/systemd/user'
+# Test-only overrides, like restart-replaced-programs.sh's.
+CGROUP_ROOT = os.environ.get('CGROUP_ROOT', '/sys/fs/cgroup')
+CLAUDE_LAUNCHER = Path(os.environ.get('CLAUDE_LAUNCHER', '/usr/local/lib/openclaw/claude-cli-bin/claude'))
 # Runtimes each image must contain; a missing runtime fails instead of being skipped.
-# The sandbox images always exist; the other two only where their feature is on
-# (openclaw_claude_cli_enabled, workspace backup repositories).
+# The sandbox images always exist; the other two only where their feature is on.
 IMAGES = {
     'openclaw-sandbox:trixie': ['python', 'curl'],
     'openclaw-sandbox-custom:latest': ['node', 'python', 'curl', 'uv'],
     'openclaw-claude-cli:latest': ['node', 'python', 'curl', 'uv'],
     'openclaw-workspace-sync:latest': ['python'],
 }
-OPTIONAL_IMAGES = {'openclaw-claude-cli:latest', 'openclaw-workspace-sync:latest'}
+# Each optional image is required where provisioning left its feature's marker:
+# the gateway's container launcher (removed when containers are off) and the
+# workspace backup timers.
+FEATURE_MARKERS = {
+    'openclaw-claude-cli:latest': CLAUDE_LAUNCHER.exists,
+    'openclaw-workspace-sync:latest': lambda: any(UNIT_DIR.glob('workspace-git-sync-*.timer')),
+}
 
 # Each probe prints one JSON object per host: {"host", "outcome": accept|reject|error, "detail"}.
 NODE_PROBE = r'''
@@ -135,27 +143,43 @@ def version_tuple(text):
     return tuple(int(part) for part in text.lstrip('v').split('.'))
 
 
-def node_services():
-    """(service, pid) of the first Node process in each running provisioned user service."""
-    units = run(['systemctl', '--user', 'list-units', '--type=service', '--state=running', '--no-legend', '--plain'])
-    if units.returncode:
-        raise SystemExit(f'ERROR: cannot list user services: {units.stderr.strip()}')
-    found = []
-    for unit in (line.split()[0] for line in units.stdout.splitlines() if line.strip()):
-        show = run(['systemctl', '--user', 'show', '-P', 'FragmentPath', unit]).stdout.strip()
-        if not show.startswith(f'{UNIT_DIR}/'):
+def systemctl(*args):
+    result = run(['systemctl', '--user', *args])
+    if result.returncode:
+        raise SystemExit(f'ERROR: systemctl --user {" ".join(args)} failed: {result.stderr.strip()}')
+    return result.stdout
+
+
+def node_processes():
+    """Distinct Node runtimes in running provisioned user services.
+
+    Every Node process counts, children included; processes sharing an executable
+    and trust environment within one service are probed once.
+    Yields (unit, pid, exe, trust environment).
+    """
+    units = systemctl('list-units', '--type=service', '--state=running', '--no-legend', '--plain')
+    for unit in (line.split()[0] for line in units.splitlines() if line.strip()):
+        if not systemctl('show', '-P', 'FragmentPath', unit).strip().startswith(f'{UNIT_DIR}/'):
             continue
-        cgroup = Path('/sys/fs/cgroup' + run(['systemctl', '--user', 'show', '-P', 'ControlGroup', unit]).stdout.strip())
-        pids = sorted(int(pid) for procs in cgroup.rglob('cgroup.procs') for pid in procs.read_text().split())
-        for pid in pids:
+        cgroup = Path(CGROUP_ROOT + systemctl('show', '-P', 'ControlGroup', unit).strip())
+        if not cgroup.is_dir():
+            raise SystemExit(f'ERROR: cannot find the control group of running {unit}')
+        seen = set()
+        for pid in sorted(int(pid) for procs in cgroup.rglob('cgroup.procs') for pid in procs.read_text().split()):
             try:
                 exe = os.readlink(f'/proc/{pid}/exe')
+                identity = os.stat(f'/proc/{pid}/exe')
+                raw = Path(f'/proc/{pid}/environ').read_bytes()
             except OSError:
+                continue  # exited meanwhile
+            if not Path(exe.removesuffix(' (deleted)')).name.startswith('node'):
                 continue
-            if Path(exe.removesuffix(' (deleted)')).name.startswith('node'):
-                found.append((unit, pid, exe))
-                break
-    return found
+            environ = dict(item.split('=', 1) for item in raw.decode(errors='replace').split('\0') if '=' in item)
+            trust = {name: environ[name] for name in TRUST_ENV if environ.get(name)}
+            key = (exe, identity.st_dev, identity.st_ino, tuple(sorted(trust.items())))
+            if key not in seen:
+                seen.add(key)
+                yield unit, pid, exe, trust
 
 
 def check_host(node_min, probe_dir):
@@ -166,27 +190,27 @@ def check_host(node_min, probe_dir):
     if version_tuple(version) < version_tuple(node_min):
         fail(f'host: installed Node {version} is below the floor {node_min}')
     report(f'host {node} {version} (fresh process)', run([node, f'{probe_dir}/probe.js', *UNSAFE, *HEALTHY]))
-    services = node_services()
-    if not services:
-        fail('host: no running provisioned Node service found (is the gateway running?)')
-    for unit, pid, exe in services:
-        environ = dict(item.split('=', 1) for item in Path(f'/proc/{pid}/environ').read_bytes().decode(errors='replace').split('\0') if '=' in item)
-        trust = {name: environ[name] for name in TRUST_ENV if environ.get(name)}
+    probed = 0
+    for unit, pid, exe, trust in node_processes():
+        probed += 1
         if trust.get('NODE_TLS_REJECT_UNAUTHORIZED') == '0':
-            fail(f'host {unit}: NODE_TLS_REJECT_UNAUTHORIZED=0 disables certificate checks')
+            fail(f'host {unit} pid {pid}: NODE_TLS_REJECT_UNAUTHORIZED=0 disables certificate checks')
+        # Only trust settings travel; the process's other variables hold credentials.
         env = {'PATH': '/usr/bin:/bin', 'HOME': str(Path.home()), **trust}
         version = run([f'/proc/{pid}/exe', '--version'], env=env).stdout.strip()
         label = f'host {unit} pid {pid} on {exe} {version}' + (f' with {", ".join(sorted(trust))}' if trust else '')
         # The service's own (possibly replaced) executable, through /proc.
         report(label, run([f'/proc/{pid}/exe', f'{probe_dir}/probe.js', *UNSAFE, *HEALTHY], env=env))
+    if not probed:
+        fail('host: no running provisioned Node service found (is the gateway running?)')
 
 
 def check_images(probe_dir):
     for image, runtimes in IMAGES.items():
         inspect = run(['docker', 'image', 'inspect', '--format', '{{.Id}} {{.Created}}', image])
         if inspect.returncode:
-            if image in OPTIONAL_IMAGES and 'No such image' in inspect.stderr:
-                print(f'SKIP image {image}: not built on this server (its feature is off)', flush=True)
+            if image in FEATURE_MARKERS and not FEATURE_MARKERS[image]() and 'No such image' in inspect.stderr:
+                print(f'SKIP image {image}: its feature is off on this server', flush=True)
             else:
                 fail(f'image {image}: {inspect.stderr.strip()}')
             continue
