@@ -79,3 +79,19 @@
   notify:
     - reload user systemd
     - enable obsidian-headless services
+
+# Changes restart the daemons through the handler. Without a change nothing would
+# start one that is stopped (seen after the 2026-10-28 rollback left all nine off).
+# Starting one now and restarting it later for a pending change is harmless.
+- name: Ensure every obsidian-headless daemon is enabled and running
+  ansible.builtin.systemd:
+    name: "obsidian-headless-{{ item.agent_id }}.service"
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/1000"
+  loop: "{{ _obsidian_headless_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  when: not ansible_check_mode
