@@ -78,7 +78,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `memory-sources` | memory-sources | Markdown copies of text, PDF, image and Office files for memory search ([Memory Search](#memory-search)) |
 | `playwright` | playwright | Per-agent Playwright browsers and their relay to the home proxy; run as `--tags agents,playwright,plugins` (deny rules, browsers, registration) |
 | `plugins` | plugins | MCP adapter, GitHub and Playwright servers, GitHub token proxy for sandbox git, deny rules |
-| `sandbox` | sandbox | Rebuild custom Docker image, Mac access in sandboxes, recreate sandboxes after changes |
+| `sandbox` | sandbox | Rebuild custom Docker image, recreate sandboxes after image or settings changes |
 | `workspace` | workspace | Deploy key rotation, sync changes |
 
 ## Local CLI
@@ -257,7 +257,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 | Firecrawl API key (`firecrawlApiKey`) | (Recommended) Authenticates page-reading fallback; keyless access can be blocked | firecrawl.dev → API Keys |
 | DeepInfra API key (`deepinfraApiKey`) | (Optional) Enables memory search and recall across chats ([Memory Search](#memory-search)) | deepinfra.com/dash/keys → New API Key |
 | xAI API key | (Optional) Enables X search independently of Exa | x.ai/api → API Keys |
-| Groq API key | (Optional) `GROQ_API_KEY` for skill scripts | console.groq.com → API Keys |
+| Groq API key | (Optional) `GROQ_API_KEY` for native skill scripts | console.groq.com → API Keys |
 | ElevenLabs API key (`elevenlabsApiKey`) | (Optional) Enables voice transcription via ElevenLabs Scribe v2 (a speech-to-text-only key is enough) | elevenlabs.io/app/developers/api-keys |
 | Gemini API key | (Optional) Enables image generation via Google Gemini | aistudio.google.com → API Keys |
 | Obsidian auth token | (Optional) Authenticates with Obsidian Sync API | `ob login` locally, copy from `~/.obsidian-headless/auth_token` |
@@ -364,8 +364,8 @@ Do not run host-side Git inside an agent workspace: the agent can write `.git/co
 Exa provides search results and source excerpts. Set the Pulumi secret `exaApiKey`;
 Ansible supplies `EXA_API_KEY` through the gateway's private environment file.
 Without the key, web search is disabled rather than falling back to xAI.
-Since 2026.10 Claude turns have no native WebSearch or WebFetch at all; agents
-use OpenClaw's search and fetch tools through its MCP bridge. The optional
+Explicitly selecting Exa also disables Claude's native WebSearch,
+leaving OpenClaw's search tool available through its MCP bridge. The optional
 `xaiApiKey` remains available for X search.
 
 The config role installs the official Exa and Firecrawl plugins pinned to
@@ -398,7 +398,8 @@ openclaw gateway call webSearch.test --params '{"agentId":"main","providerId":"e
 Select a configured agent explicitly (`main` above); multi-agent deployments
 otherwise reject the test because model authentication has no single owner.
 A provider test proves Exa works, not that an agent completed a search turn.
-Firecrawl applies to OpenClaw's `web_fetch`. Fetching a page with Readability does not prove
+Firecrawl applies to OpenClaw's `web_fetch`; Claude's native WebFetch is not
+reconfigured by this setting. Fetching a page with Readability does not prove
 Firecrawl ran: inspect the fetch result's `extractor` when testing the fallback.
 
 To disable managed search, remove the key and re-provision:
@@ -503,19 +504,15 @@ MCP servers, workspaces, deny rules, and token mappings are generated automatica
 
 `workspace` -> `openclaw` -> `config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `memory-sources` -> `playwright` -> `plugins` -> `sandbox` -> `claude-cli`
 
-Telegram must run immediately after agents (prevents message misrouting). `memory-sources` and `sandbox` write per-agent settings, so they need the agents. Plugins after playwright (the browsers must answer before the adapter registers them). `claude-cli` needs the plugins proxy and the sandbox image; `config` already points the backend at its launcher, so the first switch-on has a few minutes where turns fail until `claude-cli` has run.
+Telegram must run immediately after agents (prevents message misrouting). `memory-sources` writes per-agent settings, so it needs the agents. Plugins after playwright (the browsers must answer before the adapter registers them). `claude-cli` needs the plugins proxy and the sandbox image; `config` already points the backend at its launcher, so the first switch-on has a few minutes where turns fail until `claude-cli` has run.
 
 ## Sandboxing
 
-OpenClaw's own tools run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain. Agent turns run through Claude Code, on the host or, with `openclaw_claude_cli_enabled: true`, in a per-agent container (`./scripts/provision.sh --tags config,claude-cli`; `false` switches back with `--tags config`).
+OpenClaw's own tools run in Docker containers with bridge networking and a custom sandbox image with a dev toolchain. Agent turns themselves run through Claude Code, and its own tools (Bash, Read, Edit, Write) do the work: on the host, or, with `openclaw_claude_cli_enabled: true`, inside a per-agent container (`./scripts/provision.sh --tags config,claude-cli`; `false` switches back with `--tags config`). See [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse).
 
-Since OpenClaw 2026.10, Claude turns get **no native Claude tools** (no Bash, Read, Edit, Write, WebSearch or WebFetch): they use OpenClaw's tools through its MCP bridge, so shell commands, file edits and skill scripts all run in the sandbox below. What 2026.10 took away is restored in the sandbox:
+**Stay on 2026.9.x for now.** OpenClaw 2026.10 takes Claude's own tools away from Claude turns and hands them OpenClaw's tools through its MCP bridge, but those run without a sandbox for Claude turns ([openclaw#84942](https://github.com/openclaw/openclaw/issues/84942)): no `exec` at all with sandbox mode on, and file tools on the host as `ubuntu`. Production ran 2026.10.8 for a few hours on 2026-10-28 and went back. The migration is tracked in [#70](https://github.com/pandysp/openclaw-infra/issues/70), blocked on #84942. Phoenix's smoke test fails on that model: it requires a working shell and a file read that cannot reach `~/.openclaw`.
 
-- **Skill keys** (`openclaw_claude_cli_skill_env`, e.g. `GROQ_API_KEY`) reach the sandbox as `${NAME}` references to the gateway environment in `agents.defaults.sandbox.docker.env`; the values stay out of `openclaw.json`.
-- **Sub-agents:** 2026.10.8 refuses OpenClaw's `sessions_spawn` for sandboxed sessions on the claude-cli runtime, so it is denied and Claude Code's own `Agent` and `Workflow` helpers stay on (`openclaw_claude_managed_native_tools`, written to `plugins.entries.anthropic.config.managedNativeTools`). They act through the same OpenClaw tools.
-- **Mac access:** see [Mac Access](#mac-access).
-
-Running sandboxes keep the image and settings they were created with. The sandbox role removes them when either changed (fingerprint in `~/.openclaw/.ansible-hashes/sandbox-runtime`); OpenClaw creates fresh ones on next use. See [SECURITY.md §4](./docs/SECURITY.md#4-agent-host-command-abuse).
+Running sandboxes keep the image and settings they were created with. The sandbox role removes them when either changed (fingerprint in `~/.openclaw/.ansible-hashes/sandbox-runtime`); OpenClaw creates fresh ones on next use.
 
 | | OpenClaw's sandboxed tools |
 |---|---|
@@ -546,7 +543,7 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 
 ## Mac Access
 
-Agents with `mac_access: true` reach the Mac account over pinned SSH from their OpenClaw sandbox (OpenClaw `exec` → sandbox SSH client → dedicated key + pinned host key), with that account's full permissions. Other agents' sandboxes get no Mac key.
+Agents with `mac_access: true` use native Bash → pinned SSH → the Mac account, with that account's full permissions. Other agents' containers get no Mac access.
 
 **Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** setting up the dedicated SSH identity, checking host pins, or debugging Mac access. The Mac-to-VPS route is accepted; see [SECURITY §5](./docs/SECURITY.md#5-self-modification-via-mac-access).
 

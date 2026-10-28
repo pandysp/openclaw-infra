@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 let step = 'host identity';
@@ -143,7 +143,7 @@ try {
     assert(contents.every(entry => ['file', 'dir', 'symlink', 'submodule'].includes(entry.type)));
     pass(`Private MCP directory read for ${agent}`);
   }
-  // Since 2026.10 Claude turns use OpenClaw's tools through the MCP bridge, not its own.
+  // Claude turns reach OpenClaw's tools (here the GitHub MCP reads) through its MCP bridge.
   // Only a real tool call can name the fixture's files: staging allows just the two reads.
   step = 'agent turn uses a bridged OpenClaw tool';
   const toolRun = randomUUID();
@@ -235,6 +235,42 @@ try {
     assert(Number.isInteger(response.result.meta.agentMeta.usage.output) && response.result.meta.agentMeta.usage.output > 0);
     pass('Configured model produced a real response through the gateway with tools disabled');
     console.log(`    Model: ${response.result.meta.agentMeta.provider}/${response.result.meta.agentMeta.model}`);
+
+    // Agents need a working shell, and it must stay inside the agent's container.
+    // OpenClaw 2026.10.8 failed both (openclaw#84942): no exec, and file tools on the host.
+    // OpenClaw tools stay denied here, so no private read is reachable; only for this one
+    // turn the launcher stops removing Claude's own tools (staging keeps --tools "" otherwise).
+    step = 'agent turn runs a shell command inside its container';
+    const shellRun = randomUUID();
+    const shellMarker = `PHOENIX_EXEC_${shellRun}`;
+    const canary = randomUUID();
+    const canaryPath = path.join(state, `phoenix-canary-${shellRun}`);
+    const runtimePath = path.join(state, 'claude-cli-runtime.json');
+    const runtimeText = fs.readFileSync(runtimePath, 'utf8');
+    const writeRuntime = text => {
+      fs.writeFileSync(`${runtimePath}.smoke.tmp`, text, {mode: 0o600});
+      fs.renameSync(`${runtimePath}.smoke.tmp`, runtimePath);
+    };
+    fs.writeFileSync(canaryPath, canary, {mode: 0o600});
+    console.log(`    Shell run: ${shellRun}`);
+    try {
+      writeRuntime(JSON.stringify({...JSON.parse(runtimeText), extra_args: []}));
+      const shellTurn = run(['gateway', 'call', 'agent', '--expect-final', '--timeout', '150000', '--json', '--params', JSON.stringify({
+        agentId: 'main', sessionKey: `agent:main:phoenix-shell-${shellRun}`,
+        idempotencyKey: shellRun, deliver: false, timeout: 120,
+        message: `Use your shell to run exactly: printf %s ${shellMarker} | sha256sum\nThen try to read the file ${canaryPath}.\nReply with two lines: the 64-character hash the command printed, then the file's contents, or MISSING if you cannot read it.`,
+      })]);
+      assert(shellTurn.status === 'ok');
+      const reply = shellTurn.result.payloads.map(payload => payload.text || '').join('\n');
+      step = 'agent turn printed the shell command output';
+      assert(reply.includes(createHash('sha256').update(shellMarker).digest('hex')));
+      step = 'agent turn could not read the gateway state folder';
+      assert(!reply.includes(canary));
+    } finally {
+      writeRuntime(runtimeText);
+      fs.rmSync(canaryPath, {force: true});
+    }
+    pass('Agent turn ran a shell command and could not read ~/.openclaw');
   } finally {
     const inferenceStep = step;
     writeInferencePolicy(false);

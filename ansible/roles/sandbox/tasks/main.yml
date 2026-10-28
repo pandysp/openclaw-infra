@@ -126,9 +126,6 @@
   failed_when: sandbox_uv_version.rc != 0 or not sandbox_uv_version.stdout.startswith('uv ' ~ uv_version ~ ' ')
   when: not ansible_check_mode
 
-- name: Give agents with Mac access SSH in their sandbox
-  ansible.builtin.include_tasks: mac-access.yml
-
 # Running sandboxes keep the image and settings they were created with. Remove them
 # when either changed; OpenClaw creates fresh ones from the current config on next use.
 - name: Fingerprint the sandbox image and settings
@@ -137,8 +134,6 @@
     {
         docker image inspect --format '{{ '{{' }}.Id{{ '}}' }}' openclaw-sandbox-custom:latest
         jq -cS '{defaults: .agents.defaults.sandbox, agents: (.agents.entries // {} | map_values(.sandbox))}' /home/ubuntu/.openclaw/openclaw.json
-        # The env holds ${NAME} references; a rotated skill key changes only this file.
-        sha256sum /home/ubuntu/.config/openclaw/claude-skills.env
     } | sha256sum | cut -d' ' -f1
   args:
     executable: /bin/bash

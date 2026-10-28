@@ -109,9 +109,6 @@ jobs:
           # OpenClaw's allowlist does not reach Claude's own tools, so the launcher
           # adds `--tools ""` to every launch (OpenClaw already passes --strict-mcp-config).
           openclaw_claude_cli_extra_args: ["--tools", ""]
-          # Since 2026.10 OpenClaw passes Claude's tool list itself; keep it empty here
-          # (no Agent/Workflow helpers) so it matches the launcher's `--tools ""`.
-          openclaw_claude_managed_native_tools: []
 
           openclaw_heartbeat_interval: "30m"
           openclaw_heartbeat_active_hours:

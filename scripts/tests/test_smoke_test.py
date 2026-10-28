@@ -140,6 +140,18 @@ elif args[:3]==['gateway','call','agent'] and 'phoenix-tool-' in args[args.index
  params=json.loads(args[args.index('--params')+1]);assert params['deliver'] is False
  assert 'github_get_file_contents' in params['message'] and 'private-repo' in params['message']
  print(json.dumps({'status':'ok','result':{'payloads':[{'text':'LICENSE' if mode=='tool_turn_wrong' else 'README.md'}]}}))
+elif args[:3]==['gateway','call','agent'] and 'phoenix-shell-' in args[args.index('--params')+1]:
+ import hashlib,re
+ config=json.loads((root/'gateway-snapshot.json').read_text())
+ assert config['tools']['deny']==['*'], 'The shell turn must not reach OpenClaw tools'
+ runtime=json.loads((root/'.openclaw/claude-cli-runtime.json').read_text())
+ assert runtime['extra_args']==[], 'Claude still launched without its own tools'
+ params=json.loads(args[args.index('--params')+1]);assert params['deliver'] is False
+ marker=re.search(r'PHOENIX_EXEC_[0-9a-f-]+',params['message']).group(0)
+ canary=pathlib.Path(re.search(r'read the file (\S+)\.',params['message']).group(1)).read_text()
+ lines=[] if mode=='shell_missing' else [hashlib.sha256(marker.encode()).hexdigest()]
+ lines.append(canary if mode=='canary_leak' else 'MISSING')
+ print(json.dumps({'status':'ok','result':{'payloads':[{'text':'\\n'.join(lines)}]}}))
 elif args[:3]==['gateway','call','agent']:
  config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'Inference still has tools'
@@ -169,6 +181,10 @@ else:raise AssertionError('Unexpected command')
             result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True, timeout=15)
             self.assertNotIn('fixture-secret', result.stdout + result.stderr)
             result.ssh_called = (root / 'ssh-called').exists()
+            # The shell window never outlives the smoke test, even when it fails.
+            self.assertEqual(json.loads((state / 'claude-cli-runtime.json').read_text())['extra_args'],
+                             [] if case == 'native_tools_enabled' else ['--tools', ''])
+            self.assertEqual(list(state.glob('phoenix-canary-*')), [])
             # The test note and its copy never outlive the smoke test, even when it fails.
             self.assertEqual(list((root / 'workspace/notes').glob('phoenix-*')) if (root / 'workspace/notes').exists() else [], [])
             result.cli_called = (root / 'cli-called').exists()
@@ -195,7 +211,8 @@ else:raise AssertionError('Unexpected command')
                      'embedded_fallback', 'no_model_usage', 'invalid_usage', 'public_repo',
                      'anonymous_allowed', 'mcp_failure', 'mcp_error_result', 'invalid_mcp_json', 'tools_not_disabled',
                      'no_container_launch', 'policy_timeout_forever', 'policy_abort',
-                     'memory_copy_missing', 'search_misses', 'tool_turn_wrong'):
+                     'memory_copy_missing', 'search_misses', 'tool_turn_wrong',
+                     'shell_missing', 'canary_leak'):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertNotEqual(result.returncode, 0)
