@@ -34,7 +34,7 @@ if cmd=='ansible-playbook':
  if os.environ.get('VALIDATE_SSH_KEY'):
   key=root/'consumer-key'
   source=pathlib.Path(os.environ['WORKSPACE_TASKS']).read_text()
-  task=re.search(r'(?ms)^- name: Install deploy keys\\n.*?(?=^- name:|\\Z)',source).group()
+  task=textwrap.dedent(re.search(r'(?ms)^( *)- name: Install deploy keys\\n.*?(?=^\\1- name:|\\Z)',source).group())
   destination='dest: "/home/ubuntu/.ssh/{{ item.key_file }}"'
   assert task.count(destination)==1
   task=task.replace(destination,'dest: '+json.dumps(str(key)))
