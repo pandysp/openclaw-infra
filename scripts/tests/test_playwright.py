@@ -276,14 +276,15 @@ class DeployCheckTest(unittest.TestCase):
 
 
 class DenyWriterTest(unittest.TestCase):
-    SCRIPT = ROOT / 'ansible/roles/agents/files/openclaw-mcp-deny.sh'
+    SCRIPT = ROOT / 'ansible/files/openclaw-mcp-deny.sh'
 
     def write(self, agent, desired, registered, current, owners=None, tighten=False):
+        """current=None: a just-created agent without any deny rules yet."""
         with tempfile.TemporaryDirectory(prefix='mcp-deny-') as directory:
             root = Path(directory)
             config = root / 'openclaw.json'
             config.write_text(json.dumps({
-                'agents': {'entries': {agent: {'tools': {'deny': current}}}},
+                'agents': {'entries': {agent: {} if current is None else {'tools': {'deny': current}}}},
                 'plugins': {'entries': {'openclaw-mcp-adapter': {'config': {'servers': [{'name': n} for n in registered]}}}}}))
             (root / 'openclaw').write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" > "$FAKE_ROOT/set"\n')
             (root / 'openclaw').chmod(0o755)
@@ -322,6 +323,19 @@ class DenyWriterTest(unittest.TestCase):
         self.assertEqual(out, 'OK')
         out, written = self.write(*args)
         self.assertEqual(written, [])
+
+    def test_a_new_agent_gets_a_reassigned_server_only_after_registration(self):
+        # Round-9 review: github-work moves from main to the brand-new bob.
+        args = ('bob', ['qmd_*'], ['github-work', 'qmd', 'github-bob'], None, {'github-work': 'bob', 'github-bob': 'bob'})
+        out, written = self.write(*args, tighten=True)
+        self.assertEqual(written, ['github-work_*', 'qmd_*'])
+        out, written = self.write(*args)
+        self.assertEqual(written, ['qmd_*'])
+
+    def test_manually_named_own_servers_stay_usable_for_existing_agents(self):
+        # No flapping: main keeps github-work on every tightening run.
+        out, written = self.write('main', [], ['github-work'], [], {'github-work': 'main'}, tighten=True)
+        self.assertEqual(out, 'OK')
 
     def test_tightening_still_drops_rules_for_servers_no_longer_registered(self):
         out, written = self.write('bob', [], ['github'], ['github_*', 'playwright-cama_*'], tighten=True)

@@ -253,7 +253,7 @@ obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env"
 # Must match setup-mac-workspaces.sh OBSIDIAN_CONFIGS.
 obsidian_headless_configs: "community-plugin,community-plugin-data"
 
-# Writes one agent's MCP deny rules (agents role; ansible/roles/agents/files/openclaw-mcp-deny.sh).
+# Writes one agent's MCP deny rules (agents and plugins roles; ansible/files/openclaw-mcp-deny.sh).
 openclaw_mcp_deny_script: /home/ubuntu/.openclaw/bin/openclaw-mcp-deny
 openclaw_config_file: /home/ubuntu/.openclaw/openclaw.json
 

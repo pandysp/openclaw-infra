@@ -219,6 +219,21 @@
         label: "{{ item.id }}"
       tags: [always]
 
+    # Both consumers need it, also on `--tags plugins` alone.
+    - name: Ensure the OpenClaw helper directory exists
+      ansible.builtin.file:
+        path: "{{ openclaw_mcp_deny_script | dirname }}"
+        state: directory
+        mode: "0755"
+      tags: [agents, plugins]
+
+    - name: Install the MCP deny-rule writer
+      ansible.builtin.copy:
+        src: files/openclaw-mcp-deny.sh
+        dest: "{{ openclaw_mcp_deny_script }}"
+        mode: "0755"
+      tags: [agents, plugins]
+
     # Workspaces: one per agent with mechanical naming
     - name: Initialize workspace metadata
       ansible.builtin.set_fact:

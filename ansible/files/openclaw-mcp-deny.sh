@@ -9,7 +9,9 @@
 # --tighten keeps every current rule that names a still-registered server: the
 # agents role runs before registration changes, so it may add rules but never
 # relax them (an ownership change only takes effect once the server's new
-# registration is in place). The plugins role runs it exact after registering.
+# registration is in place). An agent with no rules yet (just created) only gets
+# a registered server when its name and its declared owner both say so. The
+# plugins role runs it exact after registering.
 # Prints UPDATED when it changed the rules, OK otherwise.
 #
 # Usage: openclaw-mcp-deny.sh [--tighten] <openclaw.json> <agent-id> <desired-deny-json> <owners-json>
@@ -24,7 +26,9 @@ current=$(jq -cS --arg id "$id" '.agents.entries[$id] | select(. != null) | .too
 want=$(jq -cS --arg id "$id" --argjson desired "$desired" --argjson owners "$owners" \
         --argjson tighten "$tighten" '
     [.plugins.entries["openclaw-mcp-adapter"].config.servers[]?.name] as $registered
-    | [$registered[] | select(($owners[.] // (if test("-") then sub("^[^-]+-"; "") else "main" end)) != $id) | . + "_*"]
+    | ((.agents.entries[$id].tools // {}) | has("deny") | not) as $new
+    | def by_name: if test("-") then sub("^[^-]+-"; "") else "main" end;
+      [$registered[] | select((($owners[.] // by_name) != $id) or ($tighten and $new and (by_name != $id))) | . + "_*"]
     + $desired
     + (if $tighten then [(.agents.entries[$id].tools.deny // [])[] | select(rtrimstr("_*") as $s | $registered | index($s))]
        else [] end)
