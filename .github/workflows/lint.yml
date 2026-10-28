@@ -58,8 +58,10 @@ jobs:
       - name: Syntax-check included task files
         run: ./scripts/check-task-syntax.sh
 
+      # Against the pinned version's docs. OpenClaw main is checked weekly in
+      # upstream-contract.yml, so upstream changes cannot block unrelated PRs.
       - name: Check OpenClaw scheduler contract
-        run: ./scripts/check-openclaw-contract.sh --latest-docs
+        run: ./scripts/check-openclaw-contract.sh --pinned-docs
 
       - name: Test scheduled automation reconciliation
         run: ./scripts/test-scheduled-automation.sh

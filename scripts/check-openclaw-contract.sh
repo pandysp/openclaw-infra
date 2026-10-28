@@ -13,7 +13,10 @@
 #   missing jobs are created with --disabled. Never edit scheduler storage directly.
 # After reviewing a new version, bump openclaw_docs_reviewed_version in
 # ansible/group_vars/all.yml.
-# --latest-docs also checks that OpenClaw main still documents this contract.
+# --pinned-docs also checks the pinned version's docs (every PR, see lint.yml).
+# --latest-docs checks the pinned docs and OpenClaw main's docs. Upstream main
+# moves on its own, so this runs weekly (upstream-contract.yml), not per PR: a
+# failure means "adapt the contract before the next upgrade", not "this PR broke".
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,12 +33,13 @@ fail() {
     exit 1
 }
 
-CHECK_LATEST_DOCS=false
-if [ "${1:-}" = "--latest-docs" ]; then
-    CHECK_LATEST_DOCS=true
-elif [ "$#" -gt 0 ]; then
-    fail "usage: $0 [--latest-docs]"
-fi
+DOCS_REFS=()
+case "${1:-}" in
+    "") ;;
+    --pinned-docs) DOCS_REFS=(pinned) ;;
+    --latest-docs) DOCS_REFS=(pinned latest) ;;
+    *) fail "usage: $0 [--pinned-docs | --latest-docs]" ;;
+esac
 
 IAC_VERSION=$(sed -nE 's/^openclaw_version: "([^"]+)"/\1/p' "$ALL_VARS")
 REVIEWED_VERSION=$(sed -nE 's/^openclaw_docs_reviewed_version: "([^"]+)"/\1/p' "$ALL_VARS")
@@ -53,21 +57,19 @@ grep -q '"--disabled"' "$CRON_RECONCILER" || fail "cron reconciler cannot create
 grep -q '"--enable"' "$CRON_RECONCILER" || fail "cron reconciler cannot enable jobs in place"
 grep -q '"--disable"' "$CRON_RECONCILER" || fail "cron reconciler cannot disable jobs in place"
 
-if [ "$CHECK_LATEST_DOCS" = true ]; then
+if [ "${#DOCS_REFS[@]}" -gt 0 ]; then
     DOCS_TMP=$(mktemp -d)
     trap 'rm -rf "$DOCS_TMP"' EXIT
-    PINNED_BASE="https://raw.githubusercontent.com/openclaw/openclaw/v${IAC_VERSION}/docs"
-    LATEST_BASE="https://raw.githubusercontent.com/openclaw/openclaw/main/docs"
-    curl -fsSL --retry 3 "$PINNED_BASE/gateway/heartbeat.md" -o "$DOCS_TMP/pinned-heartbeat.md" \
-        || fail "could not fetch pinned heartbeat docs for v$IAC_VERSION"
-    curl -fsSL --retry 3 "$PINNED_BASE/automation/cron-jobs.md" -o "$DOCS_TMP/pinned-cron.md" \
-        || fail "could not fetch pinned cron docs for v$IAC_VERSION"
-    curl -fsSL --retry 3 "$LATEST_BASE/gateway/heartbeat.md" -o "$DOCS_TMP/latest-heartbeat.md" \
-        || fail "could not fetch latest heartbeat docs"
-    curl -fsSL --retry 3 "$LATEST_BASE/automation/cron-jobs.md" -o "$DOCS_TMP/latest-cron.md" \
-        || fail "could not fetch latest cron docs"
+    for docs in "${DOCS_REFS[@]}"; do
+        if [ "$docs" = pinned ]; then base="https://raw.githubusercontent.com/openclaw/openclaw/v${IAC_VERSION}/docs"
+        else base="https://raw.githubusercontent.com/openclaw/openclaw/main/docs"; fi
+        curl -fsSL --retry 3 "$base/gateway/heartbeat.md" -o "$DOCS_TMP/$docs-heartbeat.md" \
+            || fail "could not fetch $docs heartbeat docs"
+        curl -fsSL --retry 3 "$base/automation/cron-jobs.md" -o "$DOCS_TMP/$docs-cron.md" \
+            || fail "could not fetch $docs cron docs"
+    done
 
-    for docs in pinned latest; do
+    for docs in "${DOCS_REFS[@]}"; do
         grep -Fq 'agents.entries.*.heartbeat' "$DOCS_TMP/$docs-heartbeat.md" \
             || fail "$docs heartbeat docs no longer describe agents.entries.*.heartbeat; review the contract"
         grep -Fq '**only those agents** run heartbeats' "$DOCS_TMP/$docs-heartbeat.md" \
@@ -78,7 +80,7 @@ if [ "$CHECK_LATEST_DOCS" = true ]; then
         grep -Fq '`openclaw cron` remains an alias' "$DOCS_TMP/$docs-cron.md" \
             || fail "$docs scheduler docs no longer keep the cron alias; review the contract"
     done
-    echo "Pinned and latest docs match the reviewed contract"
+    echo "Docs match the reviewed contract: ${DOCS_REFS[*]}"
 fi
 
 if [ -n "${OPENCLAW_CONTRACT_HOST:-}" ]; then
