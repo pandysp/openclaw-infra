@@ -24,144 +24,146 @@
     label: "{{ item.0.agent_id }}.{{ item.1 }}"
   register: workspace_existing_units
 
-# Every run stops the timers, synchronizes each workspace once and starts them again.
-# Intended: provisioning proves the deploy keys and repository access still work, so
-# these tasks report changed on every run and stay outside Phoenix's idempotence scope.
-- name: Stop existing workspace units during installation
-  ansible.builtin.systemd:
-    name: "{{ item.stat.path | basename }}"
-    state: stopped
-    enabled: "{{ false if item.item.1 == 'timer' else omit }}"
-    scope: user
-  environment:
-    XDG_RUNTIME_DIR: /run/user/1000
-  loop: "{{ workspace_existing_units.results }}"
-  loop_control:
-    label: "{{ item.item.0.agent_id }}.{{ item.item.1 }}"
-  when: item.stat.exists
-
-# The pre-multi-agent layout ran Git on the host. Retire it before the first
-# isolated run so no host-side Git can race the container on the same repository.
-- name: Check legacy workspace timer
-  ansible.builtin.stat:
-    path: /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
-  register: workspace_legacy_timer
-
-- name: Stop legacy workspace timer
-  ansible.builtin.systemd:
-    name: workspace-git-sync.timer
-    state: stopped
-    enabled: false
-    scope: user
-  environment:
-    XDG_RUNTIME_DIR: /run/user/1000
-  when: workspace_legacy_timer.stat.exists
-
-- name: Remove legacy workspace files
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /home/ubuntu/.config/systemd/user/workspace-git-sync.service
-    - /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
-    - /home/ubuntu/.local/bin/workspace-git-sync.sh
-    - /home/ubuntu/.ssh/config.d/workspace
-
-- name: Ensure workspace support directories exist
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: directory
-    mode: "{{ item.mode }}"
-  loop:
-    - { path: /home/ubuntu/.ssh, mode: "0700" }
-    - { path: /home/ubuntu/.openclaw, mode: "0700" }
-    - { path: /home/ubuntu/.config/systemd/user, mode: "0755" }
-    - { path: /home/ubuntu/.local/share/workspace-sync-build, mode: "0755" }
-
-# A failed sync otherwise goes unnoticed (main's sync failed hourly for 39 hours).
-- name: Install the owner alert for failed workspace syncs
-  ansible.builtin.template:
-    src: workspace-sync-failed@.service.j2
-    dest: /home/ubuntu/.config/systemd/user/workspace-sync-failed@.service
-    mode: "0644"
-  vars:
-    _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
-
-- name: Install deploy keys
-  ansible.builtin.copy:
-    # OpenSSH requires a final newline, including for values read through shells.
-    content: "{{ (_deploy_key | trim) ~ '\n' if _deploy_key | trim | length > 0 else undef('Workspace deploy key is missing') }}"
-    dest: "/home/ubuntu/.ssh/{{ item.key_file }}"
-    mode: "0600"
-  vars:
-    _deploy_key: >-
-      {{ (openclaw_workspaces | selectattr('agent_id', 'equalto', item.agent_id) | first).deploy_key
-         if openclaw_workspaces is defined else lookup('vars', item.deploy_key_var) }}
-  no_log: true
-  loop: "{{ active_workspaces }}"
-  loop_control:
-    label: "{{ item.agent_id }}"
-  register: workspace_deploy_keys
-
-- name: Read official GitHub SSH host keys
-  ansible.builtin.uri:
-    url: https://api.github.com/meta
-    return_content: true
-  register: workspace_github_meta
-
-- name: Require GitHub SSH host keys
-  ansible.builtin.assert:
-    that:
-      - workspace_github_meta.json.ssh_keys is defined
-      - workspace_github_meta.json.ssh_keys | length > 0
-    fail_msg: GitHub did not provide SSH host keys; refusing unauthenticated Git access.
-
-- name: Install GitHub known hosts for isolated sync
-  ansible.builtin.copy:
-    content: "{{ (workspace_github_meta.json.ssh_keys | map('regex_replace', '^', 'github.com ') | join('\n')) ~ '\n' }}"
-    dest: /home/ubuntu/.ssh/workspace-github-known-hosts
-    mode: "0644"
-  register: workspace_github_pins
-
-# Warm C sessions bind individual SSH files and retain their old inodes.
-- name: Refresh C bindings after workspace SSH changes
-  ansible.builtin.include_role:
-    name: config
-    tasks_from: cli-assets-changed.yml
-  when: workspace_deploy_keys.changed or workspace_github_pins.changed
-
-- name: Install workspace sync image sources
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "/home/ubuntu/.local/share/workspace-sync-build/{{ item }}"
-    mode: "0644"
-  loop:
-    - Dockerfile
-    - workspace-sync-entrypoint.sh
-    - workspace-sync.sh
-    - gitignore-workspace
-  register: workspace_image_sources
-
-- name: Check workspace sync image
-  ansible.builtin.command: docker image inspect openclaw-workspace-sync:latest
-  register: workspace_image
-  changed_when: false
-  failed_when: false
-
-- name: Build workspace sync image
-  ansible.builtin.command:
-    argv:
-      - docker
-      - build
-      - --tag
-      - openclaw-workspace-sync:latest
-      - /home/ubuntu/.local/share/workspace-sync-build
-  when: workspace_image.rc != 0 or workspace_image_sources.changed
-
-# A failed sync must not leave every agent without backup: the timers stopped above come
-# back on failure too (seen in production, where one agent's merge conflict stopped all nine).
+# A failure must not leave every agent without backup: the timers stopped below come
+# back on failure too (seen in production, where one agent's merge conflict stopped all
+# nine). Every fallible step after the stop belongs inside this block, so a failed key
+# refresh or image build restores them just like a failed sync does.
 - name: Synchronize workspaces and restore their timers
   block:
+    # Every run stops the timers, synchronizes each workspace once and starts them again.
+    # Intended: provisioning proves the deploy keys and repository access still work, so
+    # these tasks report changed on every run and stay outside Phoenix's idempotence scope.
+    - name: Stop existing workspace units during installation
+      ansible.builtin.systemd:
+        name: "{{ item.stat.path | basename }}"
+        state: stopped
+        enabled: "{{ false if item.item.1 == 'timer' else omit }}"
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      loop: "{{ workspace_existing_units.results }}"
+      loop_control:
+        label: "{{ item.item.0.agent_id }}.{{ item.item.1 }}"
+      when: item.stat.exists
+
+    # The pre-multi-agent layout ran Git on the host. Retire it before the first
+    # isolated run so no host-side Git can race the container on the same repository.
+    - name: Check legacy workspace timer
+      ansible.builtin.stat:
+        path: /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
+      register: workspace_legacy_timer
+
+    - name: Stop legacy workspace timer
+      ansible.builtin.systemd:
+        name: workspace-git-sync.timer
+        state: stopped
+        enabled: false
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      when: workspace_legacy_timer.stat.exists
+
+    - name: Remove legacy workspace files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /home/ubuntu/.config/systemd/user/workspace-git-sync.service
+        - /home/ubuntu/.config/systemd/user/workspace-git-sync.timer
+        - /home/ubuntu/.local/bin/workspace-git-sync.sh
+        - /home/ubuntu/.ssh/config.d/workspace
+
+    - name: Ensure workspace support directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /home/ubuntu/.ssh, mode: "0700" }
+        - { path: /home/ubuntu/.openclaw, mode: "0700" }
+        - { path: /home/ubuntu/.config/systemd/user, mode: "0755" }
+        - { path: /home/ubuntu/.local/share/workspace-sync-build, mode: "0755" }
+
+    # A failed sync otherwise goes unnoticed (main's sync failed hourly for 39 hours).
+    - name: Install the owner alert for failed workspace syncs
+      ansible.builtin.template:
+        src: workspace-sync-failed@.service.j2
+        dest: /home/ubuntu/.config/systemd/user/workspace-sync-failed@.service
+        mode: "0644"
+      vars:
+        _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+
+    - name: Install deploy keys
+      ansible.builtin.copy:
+        # OpenSSH requires a final newline, including for values read through shells.
+        content: "{{ (_deploy_key | trim) ~ '\n' if _deploy_key | trim | length > 0 else undef('Workspace deploy key is missing') }}"
+        dest: "/home/ubuntu/.ssh/{{ item.key_file }}"
+        mode: "0600"
+      vars:
+        _deploy_key: >-
+          {{ (openclaw_workspaces | selectattr('agent_id', 'equalto', item.agent_id) | first).deploy_key
+             if openclaw_workspaces is defined else lookup('vars', item.deploy_key_var) }}
+      no_log: true
+      loop: "{{ active_workspaces }}"
+      loop_control:
+        label: "{{ item.agent_id }}"
+      register: workspace_deploy_keys
+
+    - name: Read official GitHub SSH host keys
+      ansible.builtin.uri:
+        url: https://api.github.com/meta
+        return_content: true
+      register: workspace_github_meta
+
+    - name: Require GitHub SSH host keys
+      ansible.builtin.assert:
+        that:
+          - workspace_github_meta.json.ssh_keys is defined
+          - workspace_github_meta.json.ssh_keys | length > 0
+        fail_msg: GitHub did not provide SSH host keys; refusing unauthenticated Git access.
+
+    - name: Install GitHub known hosts for isolated sync
+      ansible.builtin.copy:
+        content: "{{ (workspace_github_meta.json.ssh_keys | map('regex_replace', '^', 'github.com ') | join('\n')) ~ '\n' }}"
+        dest: /home/ubuntu/.ssh/workspace-github-known-hosts
+        mode: "0644"
+      register: workspace_github_pins
+
+    # Warm C sessions bind individual SSH files and retain their old inodes.
+    - name: Refresh C bindings after workspace SSH changes
+      ansible.builtin.include_role:
+        name: config
+        tasks_from: cli-assets-changed.yml
+      when: workspace_deploy_keys.changed or workspace_github_pins.changed
+
+    - name: Install workspace sync image sources
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/home/ubuntu/.local/share/workspace-sync-build/{{ item }}"
+        mode: "0644"
+      loop:
+        - Dockerfile
+        - workspace-sync-entrypoint.sh
+        - workspace-sync.sh
+        - gitignore-workspace
+      register: workspace_image_sources
+
+    - name: Check workspace sync image
+      ansible.builtin.command: docker image inspect openclaw-workspace-sync:latest
+      register: workspace_image
+      changed_when: false
+      failed_when: false
+
+    - name: Build workspace sync image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - build
+          - --tag
+          - openclaw-workspace-sync:latest
+          - /home/ubuntu/.local/share/workspace-sync-build
+      when: workspace_image.rc != 0 or workspace_image_sources.changed
+
     - name: Install and synchronize each workspace
       ansible.builtin.include_tasks: sync.yml
       loop: "{{ active_workspaces }}"

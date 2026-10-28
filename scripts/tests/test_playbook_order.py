@@ -166,6 +166,8 @@ class PlaybookOrderTest(unittest.TestCase):
         alert = (templates / 'workspace-sync-failed@.service.j2').read_text()
         self.assertIn('openclaw message send --channel {{ _owner.deliver_channel }} --target {{ _owner.deliver_to }}', alert)
         tasks, = load_yaml(ROOT / 'ansible/roles/workspace/tasks/main.yml')
+        installation = next(t for t in tasks if t.get('name') == 'Synchronize workspaces and restore their timers')
+        tasks = installation['block']
         names = [t.get('name') for t in tasks]
         install = tasks[names.index('Install the owner alert for failed workspace syncs')]
         self.assertEqual(install['ansible.builtin.template']['dest'],
@@ -174,7 +176,7 @@ class PlaybookOrderTest(unittest.TestCase):
         # Installed into the user unit directory once it exists, and before the first sync can fail.
         alert_index = names.index('Install the owner alert for failed workspace syncs')
         self.assertGreater(alert_index, names.index('Ensure workspace support directories exist'))
-        self.assertLess(alert_index, names.index('Synchronize workspaces and restore their timers'))
+        self.assertLess(alert_index, names.index('Install and synchronize each workspace'))
 
 if __name__ == '__main__':
     unittest.main()
