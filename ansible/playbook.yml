@@ -204,6 +204,8 @@
     - name: Initialize per-agent MCP deny lists
       ansible.builtin.set_fact:
         _openclaw_mcp_denies: {}
+        _openclaw_mcp_owners: >-
+          {{ dict(_openclaw_mcp_servers | map(attribute='name') | zip(_openclaw_mcp_servers | map(attribute='agent_id'))) }}
       tags: [always]
 
     - name: Derive per-agent MCP deny lists

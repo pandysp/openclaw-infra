@@ -276,7 +276,7 @@ class DeployCheckTest(unittest.TestCase):
 class DenyWriterTest(unittest.TestCase):
     SCRIPT = ROOT / 'ansible/roles/agents/files/openclaw-mcp-deny.sh'
 
-    def write(self, agent, desired, registered, current):
+    def write(self, agent, desired, registered, current, owners=None):
         with tempfile.TemporaryDirectory(prefix='mcp-deny-') as directory:
             root = Path(directory)
             config = root / 'openclaw.json'
@@ -286,7 +286,8 @@ class DenyWriterTest(unittest.TestCase):
             (root / 'openclaw').write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" > "$FAKE_ROOT/set"\n')
             (root / 'openclaw').chmod(0o755)
             env = {**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'FAKE_ROOT': str(root)}
-            result = subprocess.run(['bash', str(self.SCRIPT), str(config), agent, json.dumps(desired)],
+            result = subprocess.run(['bash', str(self.SCRIPT), str(config), agent, json.dumps(desired),
+                                     json.dumps(owners or {})],
                                     env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             written = (root / 'set').read_text().split(' --json ', 1)[1].strip() if (root / 'set').exists() else None
@@ -303,6 +304,12 @@ class DenyWriterTest(unittest.TestCase):
         out, written = self.write('cama', ['github_*', 'playwright_*'], ['github', 'github-cama'], [])
         self.assertEqual(out, 'UPDATED')
         self.assertEqual(written, ['github_*', 'playwright_*'])
+
+    def test_declared_owners_win_over_the_naming_rule(self):
+        # A manual definition gives main a server called github-work (round-7 review).
+        out, written = self.write('main', ['github-bob_*'], ['github-work', 'github-bob'], [],
+                                  owners={'github-work': 'main', 'github-bob': 'bob'})
+        self.assertEqual(written, ['github-bob_*'])
 
     def test_agent_ids_with_dashes_own_their_servers(self):
         out, written = self.write('team-a', [], ['github', 'github-team-a', 'qmd-team-b'], [])
