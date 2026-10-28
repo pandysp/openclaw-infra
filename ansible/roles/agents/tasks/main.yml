@@ -80,7 +80,7 @@
             # Restrict it before anything else can fail: config changes hot-reload, and
             # `agents add` can publish the agent and still fail afterwards.
             if jq -e --arg id {{ item.id | quote }} '.agents.entries[$id] != null' {{ openclaw_config_file | quote }} > /dev/null; then
-                {{ openclaw_mcp_deny_script | quote }} {{ openclaw_config_file | quote }} {{ item.id | quote }} \
+                {{ openclaw_mcp_deny_script | quote }} --tighten {{ openclaw_config_file | quote }} {{ item.id | quote }} \
                     {{ _openclaw_mcp_denies[item.id] | to_json | quote }} {{ _openclaw_mcp_owners | to_json | quote }}
             fi
             exit "$ADD_RC"
@@ -135,6 +135,7 @@
   ansible.builtin.command:
     argv:
       - "{{ openclaw_mcp_deny_script }}"
+      - --tighten
       - "{{ openclaw_config_file }}"
       - "{{ item.id }}"
       - "{{ _openclaw_mcp_denies[item.id] | to_json }}"

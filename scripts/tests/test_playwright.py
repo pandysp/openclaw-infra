@@ -116,6 +116,8 @@ class DerivationTest(unittest.TestCase):
         self.assertLess(agents.index('Refresh agent list for config targeting'), agents.index(writer))
         self.assertNotIn(writer, plugins)
         self.assertLess(plugins.index(check), plugins.index('Configure mcp-adapter plugin'))
+        self.assertGreater(plugins.index('Drop MCP deny rules that registration made obsolete'),
+                           plugins.index('Configure mcp-adapter plugin'))
 
     def test_disabled_registers_nothing(self):
         result, facts = self.derive(openclaw_playwright_enabled=False, openclaw_playwright_proxy={'host': '', 'port': 3128, 'client': ''})
@@ -276,7 +278,7 @@ class DeployCheckTest(unittest.TestCase):
 class DenyWriterTest(unittest.TestCase):
     SCRIPT = ROOT / 'ansible/roles/agents/files/openclaw-mcp-deny.sh'
 
-    def write(self, agent, desired, registered, current, owners=None):
+    def write(self, agent, desired, registered, current, owners=None, tighten=False):
         with tempfile.TemporaryDirectory(prefix='mcp-deny-') as directory:
             root = Path(directory)
             config = root / 'openclaw.json'
@@ -286,7 +288,8 @@ class DenyWriterTest(unittest.TestCase):
             (root / 'openclaw').write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" > "$FAKE_ROOT/set"\n')
             (root / 'openclaw').chmod(0o755)
             env = {**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'FAKE_ROOT': str(root)}
-            result = subprocess.run(['bash', str(self.SCRIPT), str(config), agent, json.dumps(desired),
+            result = subprocess.run(['bash', str(self.SCRIPT), *(['--tighten'] if tighten else []),
+                                     str(config), agent, json.dumps(desired),
                                      json.dumps(owners or {})],
                                     env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -310,6 +313,19 @@ class DenyWriterTest(unittest.TestCase):
         out, written = self.write('main', ['github-bob_*'], ['github-work', 'github-bob'], [],
                                   owners={'github-work': 'main', 'github-bob': 'bob'})
         self.assertEqual(written, ['github-bob_*'])
+
+    def test_an_ownership_change_relaxes_only_after_registration(self):
+        # github-work moves from main to bob; its registration still carries main's token
+        # until the plugins role re-registers it (round-8 review).
+        args = ('bob', [], ['github-work'], ['github-work_*'], {'github-work': 'bob'})
+        out, written = self.write(*args, tighten=True)
+        self.assertEqual(out, 'OK')
+        out, written = self.write(*args)
+        self.assertEqual(written, [])
+
+    def test_tightening_still_drops_rules_for_servers_no_longer_registered(self):
+        out, written = self.write('bob', [], ['github'], ['github_*', 'playwright-cama_*'], tighten=True)
+        self.assertEqual(written, ['github_*'])
 
     def test_agent_ids_with_dashes_own_their_servers(self):
         out, written = self.write('team-a', [], ['github', 'github-team-a', 'qmd-team-b'], [])

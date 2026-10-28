@@ -480,6 +480,23 @@
     executable: /bin/bash
   changed_when: false
 
+# Registration is in place, so rules for servers that changed owner or retired
+# can now be relaxed (the agents role only tightens).
+- name: Drop MCP deny rules that registration made obsolete
+  ansible.builtin.command:
+    argv:
+      - "{{ openclaw_mcp_deny_script }}"
+      - "{{ openclaw_config_file }}"
+      - "{{ item.id }}"
+      - "{{ _openclaw_mcp_denies[item.id] | to_json }}"
+      - "{{ _openclaw_mcp_owners | to_json }}"
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: deny_relax
+  changed_when: "'UPDATED' in deny_relax.stdout"
+  notify: restart openclaw-gateway
+
 # --- Disable built-in memory search (memory.search) when qmd servers are registered ---
 # Moved here from qmd role (Fix #2): only disable AFTER qmd MCP servers are
 # confirmed in the plugin config. If provisioning fails between qmd and plugins,

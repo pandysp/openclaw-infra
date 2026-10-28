@@ -87,14 +87,14 @@ class AgentCreationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # Restricted in the same step it was created in, before anything else can fail.
         self.assertEqual(added, ['agents add test --non-interactive --workspace /home/ubuntu/.openclaw/workspace-test',
-                                 'deny <tmp>/openclaw.json test ["github_*"] {"github": "main", "github-test": "test"}'])
+                                 'deny --tighten <tmp>/openclaw.json test ["github_*"] {"github": "main", "github-test": "test"}'])
         self.assertRegex(result.stdout, r'localhost\s+: ok=\d+\s+changed=1 ')
 
     def test_an_agent_published_by_a_failing_add_is_still_restricted(self):
         result, added = self.run_role('[{"id":"main"}]', add='fail-after')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(added), 2)
-        self.assertTrue(added[1].startswith('deny <tmp>/openclaw.json test '))
+        self.assertTrue(added[1].startswith('deny --tighten <tmp>/openclaw.json test '))
 
     def test_an_add_that_published_nothing_fails_without_restricting(self):
         result, added = self.run_role('[{"id":"main"}]', add='fail-before')
