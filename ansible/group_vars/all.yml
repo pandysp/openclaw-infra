@@ -127,10 +127,35 @@ openclaw_sandbox_workspace_access: "rw"
 openclaw_sandbox_docker_network: "bridge"
 openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
-openclaw_browser_allow_host_control: false  # Allow sandboxed agents to use browser tool with target="host"
+# OpenClaw's own browser plugin only (off here; agents get Playwright below).
+# Claude Code turns get no OpenClaw sandbox, so this has no effect on them (openclaw#84942).
+openclaw_browser_allow_host_control: false
 
 # Telegram: silently suppress error reply messages (true = user sees nothing on failure)
 openclaw_telegram_silent_error_replies: true
+
+# Playwright browser per agent (docs/INTEGRATIONS.md#playwright-browser). Off by default.
+# Each agent gets Microsoft's Playwright MCP server in its own container on a
+# Docker network with no route out. One relay container forwards only to
+# openclaw_playwright_proxy, a proxy on a Mac at home
+# (scripts/deploy-mac-browser-proxy.sh), so pages load from a home connection
+# and the proxy refuses private and tailnet addresses.
+openclaw_playwright_enabled: false
+openclaw_playwright_image: "mcr.microsoft.com/playwright/mcp:v0.0.83@sha256:690763cbb437ee7233f538a953bb5390bf03791eb5c965b471e59d17a6132fcb"
+openclaw_playwright_memory: "1g"
+# A /16 split into /29s (.1 Docker, .2 browser, .3 relay). Each agent's /29 comes
+# from a hash of its ID, so reordering, adding or removing agents never hands one
+# agent's address to another. On the rare clash provisioning stops; then set
+# `playwright_slot: <0-8191>` on the agent you are adding, never on one that runs:
+# provisioning refuses to move a subnet another agent's network still holds.
+openclaw_playwright_subnet_base: "172.31.0.0"
+openclaw_playwright_egress_network: openclaw-playwright-egress
+# The proxy listens on the Mac's tailnet address and serves only `client`,
+# this server's tailnet address. Provisioning fails if `client` is stale.
+openclaw_playwright_proxy:
+  host: ""
+  port: 3128
+  client: ""
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
@@ -227,6 +252,10 @@ obsidian_headless_excluded_folders: ".git,.venv,node_modules,.cache,.env"
 # Sync reaches the phone). Empty string disables config syncing entirely.
 # Must match setup-mac-workspaces.sh OBSIDIAN_CONFIGS.
 obsidian_headless_configs: "community-plugin,community-plugin-data"
+
+# Writes one agent's MCP deny rules (agents and plugins roles; ansible/files/openclaw-mcp-deny.sh).
+openclaw_mcp_deny_script: /home/ubuntu/.openclaw/bin/openclaw-mcp-deny
+openclaw_config_file: /home/ubuntu/.openclaw/openclaw.json
 
 # Note: openclaw_workspaces is auto-generated in playbook.yml pre_tasks from
 # openclaw_agents. Override by defining openclaw_workspaces in openclaw.yml.

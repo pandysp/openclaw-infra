@@ -16,8 +16,14 @@
 # openclaw_claude_cli_mac_host: my-mac     # SSH alias the provisioning machine can reach
 # openclaw_claude_cli_mac_user: my-account
 
-# Allow sandboxed agents to control browser on the host (native browser tool with target="host")
-# openclaw_browser_allow_host_control: true
+# Playwright browser for every agent, loading pages through a proxy on a Mac at
+# home (docs/INTEGRATIONS.md#playwright-browser). Deploy the Mac side first with
+# scripts/deploy-mac-browser-proxy.sh, then `./scripts/provision.sh --tags agents,playwright,plugins`.
+# openclaw_playwright_enabled: true
+# openclaw_playwright_proxy:
+#   host: 100.x.y.z      # the Mac's tailnet IPv4 (tailscale ip -4 on the Mac)
+#   port: 3128
+#   client: 100.a.b.c    # this server's tailnet IPv4 (tailscale ip -4 on the server)
 
 # Show error replies in Telegram (default true = errors silently swallowed)
 # openclaw_telegram_silent_error_replies: false

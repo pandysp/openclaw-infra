@@ -61,7 +61,17 @@
         if [ "$JQ_RC" -eq 0 ]; then
             echo "Agent {{ item.id }} already exists"
         elif [ "$JQ_RC" -eq 1 ]; then
+            set +e
             openclaw agents add {{ item.id | quote }} --non-interactive --workspace "/home/ubuntu/.openclaw/workspace-{{ item.id }}"
+            ADD_RC=$?
+            set -e
+            # Restrict it before anything else can fail: config changes hot-reload, and
+            # `agents add` can publish the agent and still fail afterwards.
+            if jq -e --arg id {{ item.id | quote }} '.agents.entries[$id] != null' {{ openclaw_config_file | quote }} > /dev/null; then
+                {{ openclaw_mcp_deny_script | quote }} --tighten {{ openclaw_config_file | quote }} {{ item.id | quote }} \
+                    {{ _openclaw_mcp_denies[item.id] | to_json | quote }} {{ _openclaw_mcp_owners | to_json | quote }}
+            fi
+            exit "$ADD_RC"
         else
             echo "ERROR: could not query validated agents JSON for {{ item.id }} (jq exit $JQ_RC)" >&2
             exit 1
@@ -104,6 +114,26 @@
   register: agents_current
   changed_when: false
   check_mode: false
+
+# --- Per-agent MCP tool scoping (sole writer; the plugins role only checks) ---
+# Runs after agents exist and before any later role restarts the gateway. New
+# agents get theirs in the creation task itself, so a later creation failing
+# cannot leave an earlier new agent unrestricted.
+- name: Set per-agent tool deny rules for MCP tools
+  ansible.builtin.command:
+    argv:
+      - "{{ openclaw_mcp_deny_script }}"
+      - --tighten
+      - "{{ openclaw_config_file }}"
+      - "{{ item.id }}"
+      - "{{ _openclaw_mcp_denies[item.id] | to_json }}"
+      - "{{ _openclaw_mcp_owners | to_json }}"
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: deny_result
+  changed_when: "'UPDATED' in deny_result.stdout"
+  notify: restart openclaw-gateway
 
 # The agents role is the only heartbeat writer. A safe 0m global default means
 # omission can never opt an agent into OpenClaw's upstream 30m default.

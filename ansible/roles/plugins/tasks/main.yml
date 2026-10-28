@@ -1,6 +1,6 @@
 ---
 # Install and configure the mcp-adapter plugin with per-agent MCP servers
-# (GitHub, qmd). Mac execution uses the approved native Bash/SSH route.
+# (GitHub, qmd, Playwright). Mac execution uses the approved native Bash/SSH route.
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
 
@@ -144,6 +144,32 @@
   loop_control:
     label: "{{ item.name }}"
 
+# --- Per-agent MCP tool scoping ---
+# The agents role writes each agent's deny rules. Registering servers while they
+# are incomplete would offer one agent's tools to another, so stop instead (e.g.
+# `--tags plugins` alone after adding a server type: rerun with the agents tag).
+- name: Require every agent's MCP deny rules before registering servers
+  ansible.builtin.command:
+    argv:
+      - jq
+      - -e
+      - --arg
+      - id
+      - "{{ item.id }}"
+      - --argjson
+      - desired
+      - "{{ _openclaw_mcp_denies[item.id] | to_json }}"
+      - '($desired - (.agents.entries[$id].tools.deny // [])) == []'
+      - /home/ubuntu/.openclaw/openclaw.json
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: deny_check
+  changed_when: false
+  failed_when: deny_check.rc != 0
+  # A dry run of the agents role writes nothing, so there is nothing to compare yet.
+  when: not ansible_check_mode
+
 - name: Configure mcp-adapter plugin
   vars:
     # One comparison for the maintenance decision and for the write after a reinstall.
@@ -200,6 +226,12 @@
             echo "NOTE: qmd binary not found, skipping qmd MCP servers"
         fi
         {% endif %}
+
+        # Playwright browsers — HTTP, one locked-down container per agent (playwright role)
+        {% for b in _openclaw_playwright %}
+        SERVERS=$(printf '%s' "$SERVERS" | jq --arg name "{{ b.server_name }}" --arg url "{{ b.url }}" \
+            '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 120000}]')
+        {% endfor %}
 
         # Build final config
         test ! -L /tmp/ansible-plugin-config
@@ -448,45 +480,21 @@
     executable: /bin/bash
   changed_when: false
 
-# --- Per-agent MCP tool scoping ---
-# Each agent denies all MCP server tool prefixes except its own.
-# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
-# Safe because toolPrefix uses "_" while server names use "-" as separator,
-# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
-
-- name: Set per-agent tool deny rules for MCP tools
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    # A missing agent would run without its deny rules: stop instead.
-    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
-        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
-        exit 1
-    }
-    DESIRED='{{ deny_list | to_json }}'
-    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
-    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
-        echo "OK"
-    else
-        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
-        echo "UPDATED"
-    fi
-  args:
-    executable: /bin/bash
-  vars:
-    deny_list: >-
-      {{ _openclaw_mcp_servers
-         | rejectattr('agent_id', 'equalto', item.id)
-         | map(attribute='name')
-         | map('regex_replace', '$', '_*')
-         | list }}
+# Registration is in place, so rules for servers that changed owner or retired
+# can now be relaxed (the agents role only tightens).
+- name: Drop MCP deny rules that registration made obsolete
+  ansible.builtin.command:
+    argv:
+      - "{{ openclaw_mcp_deny_script }}"
+      - "{{ openclaw_config_file }}"
+      - "{{ item.id }}"
+      - "{{ _openclaw_mcp_denies[item.id] | to_json }}"
+      - "{{ _openclaw_mcp_owners | to_json }}"
   loop: "{{ openclaw_agents }}"
   loop_control:
     label: "{{ item.id }}"
-  register: deny_result
-  changed_when: "'UPDATED' in deny_result.stdout"
+  register: deny_relax
+  changed_when: "'UPDATED' in deny_relax.stdout"
   notify: restart openclaw-gateway
 
 # --- Disable built-in memory search (memory.search) when qmd servers are registered ---
