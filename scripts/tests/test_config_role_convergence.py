@@ -418,38 +418,21 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                     self.assertEqual(writes['tools.media.models'][0]['provider'], 'elevenlabs')
                 self.assertNotIn('fixture-elevenlabs-key', (root / 'store.json').read_text())
 
-    def test_skill_keys_reach_the_sandbox_only_as_gateway_environment_references(self):
-        # Since 2026.10 skill scripts run through OpenClaw's sandboxed exec, not Claude's Bash.
-        for keys in ({}, {'groq_api_key': 'fixture-groq-key', 'gemini_api_key': 'fixture-gemini-key'}):
-            with self.subTest(keys=sorted(keys)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
-                root = Path(tmp)
-                result = self.run_task([self.temp_files, self.configure], root, keys)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                store = json.loads((root / 'store.json').read_text())
-                self.assertEqual(store['agents']['defaults']['sandbox']['docker']['env'],
-                                 {name.upper(): '${' + name.upper() + '}' for name in keys})
-                # Groq has no provider config: its key must not reach openclaw.json at all.
-                self.assertNotIn('fixture-groq-key', (root / 'store.json').read_text())
-                self.assertNotIn('fixture-', json.dumps(store['agents']))
-                self.assertEqual(store['plugins']['entries']['anthropic']['config']['managedNativeTools'],
-                                 {'default': ['Agent', 'Workflow']})
-
-    def test_a_removed_skill_key_leaves_the_sandbox_and_the_config_converges(self):
-        # config patch merges objects: without replacing the env map a removed key would stay
-        # (as an unresolvable reference) and every run would stop the gateway again.
+    def test_settings_of_the_withdrawn_2026_10_pin_are_removed(self):
+        # 2026.9.35 Claude turns keep their own tools: no sandbox skill env and no managed
+        # native tool list (9.35's schema does not know it), and sessions_spawn is allowed again.
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
             root = Path(tmp)
-            tasks = [self.temp_files, self.configure]
-            both = {'groq_api_key': 'fixture-groq-key', 'gemini_api_key': 'fixture-gemini-key'}
-            self.assertEqual(self.run_task(tasks, root, both).returncode, 0)
-            result = self.run_task(tasks, root, {'groq_api_key': 'fixture-groq-key'})
+            (root / 'store.json').write_text(json.dumps({
+                'agents': {'defaults': {'sandbox': {'docker': {'env': {'GROQ_API_KEY': '${GROQ_API_KEY}'}}}}},
+                'plugins': {'entries': {'anthropic': {'enabled': True, 'config': {'managedNativeTools': {'default': ['Agent']}}}}},
+                'tools': {'deny': ['sessions_spawn', 'firecrawl_search', 'firecrawl_scrape']}}))
+            result = self.run_task([self.temp_files, self.configure], root, {'groq_api_key': 'fixture-groq-key'})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             store = json.loads((root / 'store.json').read_text())
-            self.assertEqual(store['agents']['defaults']['sandbox']['docker']['env'], {'GROQ_API_KEY': '${GROQ_API_KEY}'})
-            (root / 'writes').unlink()
-            result = self.run_task(tasks, root, {'groq_api_key': 'fixture-groq-key'})
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertFalse((root / 'writes').exists(), 'an unchanged config was written again')
+            self.assertNotIn('env', store['agents']['defaults']['sandbox']['docker'])
+            self.assertNotIn('managedNativeTools', store['plugins']['entries']['anthropic'].get('config', {}))
+            self.assertEqual(store['tools']['deny'], ['firecrawl_search', 'firecrawl_scrape'])
 
     def test_web_credentials_reach_gateway_environment_but_not_container_allowlist(self):
         # Run only the directory and file tasks; systemd is outside this fixture.
@@ -535,7 +518,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertEqual(str(store['plugins']['entries']['firecrawl']['enabled']).lower(), 'true')
             self.assertNotIn('apiKey', store['plugins']['entries']['firecrawl'].get('config', {}).get('webFetch', {}))
             # Firecrawl stays the fetch fallback only; agents cannot call it directly.
-            self.assertEqual(store['tools']['deny'], ['sessions_spawn', 'firecrawl_search', 'firecrawl_scrape'])
+            self.assertEqual(store['tools']['deny'], ['firecrawl_search', 'firecrawl_scrape'])
             (root / 'writes').unlink()
             second = self.run_task(tasks, root, extra)
             self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
@@ -547,8 +530,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertNotIn('provider', store['tools']['web']['search'])
             self.assertEqual(str(store['tools']['web']['search']['enabled']).lower(), 'false')
             self.assertNotIn('provider', store['tools']['web']['fetch'])
-            # sessions_spawn stays denied: 2026.10.8 refuses it here (Claude's Agent helper replaces it).
-            self.assertEqual(store['tools']['deny'], ['sessions_spawn'])
+            self.assertNotIn('deny', store['tools'])
             # Disabling the hosted fallback must not disable ordinary page reads.
             self.assertEqual(str(store['tools']['web']['fetch']['enabled']).lower(), 'true')
             for plugin in ('exa', 'firecrawl'):

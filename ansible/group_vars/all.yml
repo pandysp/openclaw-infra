@@ -62,7 +62,10 @@ nodejs_min_version: "26.12.1"
 debian_ca_certificates_min_version: "20250419+deb13u1"
 # uv copied into the sandbox image; 0.13.4 has uv's eMudhra trust fix.
 uv_version: "0.13.4"
-openclaw_version: "2026.10.8"
+# 2026.9.35 is OpenClaw's extended-stable line. Do not move to 2026.10.x before #84942:
+# there Claude turns lose their own tools and OpenClaw's replacements run unsandboxed
+# (no exec, file tools on the host); see issue #70.
+openclaw_version: "2026.9.35"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
 claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
@@ -88,24 +91,15 @@ openclaw_claude_cli_mcp_target: /home/ubuntu/.openclaw/claude-cli-mcp-target.jso
 # only for agents with `mac_access: true` in openclaw_agents.
 openclaw_claude_cli_mac_host: ""
 openclaw_claude_cli_mac_user: ""
-# Per-agent copies of the Mac key, pin and SSH config, mounted at ~/.ssh in the
-# sandboxes of agents with Mac access (OpenClaw refuses binds from the host's ~/.ssh).
-sandbox_ssh_dir: /home/ubuntu/.openclaw/sandbox-ssh
-# Skill credentials for scripts: passed to Claude containers and, since 2026.10 (where
-# skill scripts run through OpenClaw's sandboxed exec), to the OpenClaw sandbox as
-# references to the gateway environment. Only names with a configured value are passed.
+# Skill credentials that Claude containers inherit from the gateway environment.
 openclaw_claude_cli_skill_env:
   - GROQ_API_KEY
   - GEMINI_API_KEY
   - OPENAI_API_KEY
   - NOTION_API_TOKEN
-# Claude Code helpers kept on OpenClaw-managed Claude turns (2026.10+ accepts Agent and
-# Workflow only). They replace OpenClaw's sessions_spawn, which 2026.10.8 refuses for
-# sandboxed sessions on the claude-cli runtime.
-openclaw_claude_managed_native_tools: ["Agent", "Workflow"]
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in scripts/check-openclaw-contract.sh. Provisioning refuses scheduler changes on a mismatch.
-openclaw_docs_reviewed_version: "2026.10.8"
+openclaw_docs_reviewed_version: "2026.9.35"
 # Agent existence never opts into autonomous work. Deployments must explicitly
 # enable scheduled automation per agent in group_vars/openclaw.yml.
 openclaw_scheduled_automation_default: false

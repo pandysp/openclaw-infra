@@ -37,18 +37,12 @@
   'tools.exec.mode': openclaw_exec_mode,
   'channels.telegram.silentErrorReplies': openclaw_telegram_silent_error_replies | bool
 } %}
-{# Since 2026.10 Claude turns get OpenClaw's tools only: shell commands and skill
-   scripts run in the sandbox, so it receives the approved skill keys as references to
-   the gateway environment (no copies in this file). Claude Code's own sub-agent and
-   workflow helpers stay on (they act through the same OpenClaw tools). #}
-{% set sandbox_env = {} %}
-{% for name in openclaw_claude_cli_skill_env if lookup('vars', name | lower, default='') | length > 0 %}
-{%   set _ = sandbox_env.update({name: '${' ~ name ~ '}'}) %}
-{% endfor %}
-{% set _ = settings.update({
-     'agents.defaults.sandbox.docker.env': sandbox_env,
-     'plugins.entries.anthropic.config.managedNativeTools': {'default': openclaw_claude_managed_native_tools}}) %}
-{% set unset = ['tools.web.search.apiKey', 'tools.web.search.grok.apiKey'] %}
+{# Written by the withdrawn 2026.10.8 pin (#65). On 2026.9.35 Claude turns keep their own
+   tools, so neither is wanted. 9.35's schema rejects managedNativeTools: a host that still
+   has it must be restored from its pre-10.8 backup (see #75's runbook); otherwise doctor
+   quarantines the anthropic plugin config before this unset can run. #}
+{% set unset = ['tools.web.search.apiKey', 'tools.web.search.grok.apiKey',
+                'agents.defaults.sandbox.docker.env', 'plugins.entries.anthropic.config.managedNativeTools'] %}
 {% set plugin_allow = ['device-pair', 'memory-core', 'talk-voice', 'telegram', 'anthropic'] %}
 {% set tool_allow = ['group:openclaw', 'group:runtime', 'group:fs', 'group:sessions', 'group:memory', 'group:web', 'group:ui', 'group:automation', 'group:messaging', 'group:nodes'] %}
 {% if exa_api_key | default('') | length > 0 %}
@@ -58,20 +52,15 @@
 {%   set _ = settings.update({'tools.web.search.enabled': false, 'plugins.entries.exa.enabled': false}) %}
 {%   set _ = unset.extend(['tools.web.search.provider', 'tools.web.search.timeoutSeconds']) %}
 {% endif %}
-{# 2026.10.8 refuses sessions_spawn for sandboxed sessions on the claude-cli runtime;
-   agents delegate through Claude Code's Agent helper (managedNativeTools) instead. #}
-{% set tool_deny = ['sessions_spawn'] %}
 {% if openclaw_firecrawl_enabled | bool %}
 {#   Firecrawl is only the web_fetch fallback. Its direct tools would let agents
      bypass Exa search and spend the small Firecrawl allowance. #}
-{%   set _ = settings.update({'tools.web.fetch.provider': 'firecrawl', 'tools.web.fetch.enabled': true, 'plugins.entries.firecrawl.enabled': true}) %}
-{%   set _ = tool_deny.extend(['firecrawl_search', 'firecrawl_scrape']) %}
+{%   set _ = settings.update({'tools.web.fetch.provider': 'firecrawl', 'tools.web.fetch.enabled': true, 'plugins.entries.firecrawl.enabled': true, 'tools.deny': ['firecrawl_search', 'firecrawl_scrape']}) %}
 {%   set _ = plugin_allow.append('firecrawl') %}
 {% else %}
-{%   set _ = unset.append('tools.web.fetch.provider') %}
+{%   set _ = unset.extend(['tools.web.fetch.provider', 'tools.deny']) %}
 {%   set _ = settings.update({'plugins.entries.firecrawl.enabled': false}) %}
 {% endif %}
-{% set _ = settings.update({'tools.deny': tool_deny}) %}
 {# Built-in memory search over notes, logs and private chats, embedded by DeepInfra.
    The key sits in memory.search.remote so the gateway and on-host CLI commands
    (memory status/index) both see it; it reaches no chat model. Active Memory

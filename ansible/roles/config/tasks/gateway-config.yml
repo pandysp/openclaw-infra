@@ -57,8 +57,7 @@
                 node = node.setdefault(part, {})
             node[parts[-1]] = value
             changed.append(key)
-            # Objects whose removed entries must disappear, not be merged with the old ones.
-            if key in ('models', 'agents.defaults.models', 'agents.defaults.sandbox.docker.env'):
+            if key in ('models', 'agents.defaults.models'):
                 replace_args.extend(['--replace-path', key])
 
         for key, value in desired['set'].items():

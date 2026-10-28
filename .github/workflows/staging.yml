@@ -99,7 +99,8 @@ jobs:
           openclaw_custom_models: {}
 
           # Real-note credentials are usable only through read-only MCP tools.
-          # Native Claude tools stay disabled for every session, including heartbeats.
+          # Native Claude tools stay disabled for every session, including heartbeats,
+          # except the smoke test's one shell turn (Bash only, fixed prompt, backups paused, checked after).
           openclaw_tools_allow:
             - github_get_file_contents
             - github-test_get_file_contents
@@ -109,9 +110,6 @@ jobs:
           # OpenClaw's allowlist does not reach Claude's own tools, so the launcher
           # adds `--tools ""` to every launch (OpenClaw already passes --strict-mcp-config).
           openclaw_claude_cli_extra_args: ["--tools", ""]
-          # Since 2026.10 OpenClaw passes Claude's tool list itself; keep it empty here
-          # (no Agent/Workflow helpers) so it matches the launcher's `--tools ""`.
-          openclaw_claude_managed_native_tools: []
 
           openclaw_heartbeat_interval: "30m"
           openclaw_heartbeat_active_hours:

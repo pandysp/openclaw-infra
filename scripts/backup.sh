@@ -79,15 +79,14 @@ set -e
 BACKUP_TMP=$(mktemp -d)
 trap 'rm -rf "$BACKUP_TMP"' EXIT
 
-# Copy .openclaw to temp dir, excluding workspaces, the sandboxes' Mac key copies
-# and the memory search copies (text extracted from private workspace files)
+# Copy .openclaw to temp dir, excluding workspaces and the memory search copies
+# (text extracted from private workspace files)
 echo "Copying config and sessions (excluding git-synced workspaces)..."
 rsync -a \
     --exclude='workspace' \
     --exclude='workspace-*' \
     --exclude='agents/*/workspace' \
     --exclude='extensions/*/node_modules' \
-    --exclude='sandbox-ssh' \
     --exclude='memory-sources' \
     ~/.openclaw/ "$BACKUP_TMP/openclaw-config/"
 

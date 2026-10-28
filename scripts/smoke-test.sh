@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 let step = 'host identity';
@@ -81,6 +81,15 @@ try {
   const mainWorkspace = config.agents.entries.main?.workspace || config.agents.defaults.workspace || path.join(state, 'workspace');
   const sourceFile = path.join(mainWorkspace, 'notes', `phoenix-${sourceRun}.txt`);
   const sourceCopy = path.join(state, 'memory-sources', 'main', 'notes', `phoenix-${sourceRun}.txt.md`);
+  // Each Claude launch is logged with its session; the transcript shows the tool calls.
+  const launchLog = path.join(state, 'claude-cli-invocations.jsonl');
+  const launchCount = () => fs.existsSync(launchLog) ? fs.readFileSync(launchLog, 'utf8').split('\n').filter(Boolean).length : 0;
+  const launchesSince = count => fs.readFileSync(launchLog, 'utf8').split('\n').filter(Boolean).slice(count).map(line => JSON.parse(line));
+  const transcripts = path.join(os.homedir(), '.claude/projects', mainWorkspace.replace(/[^A-Za-z0-9]/g, '-'));
+  const toolBlocks = launches => launches.filter(launch => launch.agent === 'main' && launch.session).flatMap(launch =>
+    fs.readFileSync(path.join(transcripts, `${launch.session}.jsonl`), 'utf8').split('\n').filter(Boolean)
+      .map(line => JSON.parse(line)).flatMap(event => Array.isArray(event.message?.content) ? event.message.content : []))
+    .filter(block => block.type === 'tool_use' || block.type === 'tool_result');
   const refreshCopies = () => execFileSync('systemctl', ['--user', 'start', 'openclaw-memory-sources.service'], {
     timeout: 600000, stdio: ['ignore', 'pipe', 'pipe'],
     env: {HOME: os.homedir(), PATH: process.env.PATH, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`},
@@ -143,9 +152,10 @@ try {
     assert(contents.every(entry => ['file', 'dir', 'symlink', 'submodule'].includes(entry.type)));
     pass(`Private MCP directory read for ${agent}`);
   }
-  // Since 2026.10 Claude turns use OpenClaw's tools through the MCP bridge, not its own.
+  // Claude turns reach OpenClaw's tools (here the GitHub MCP reads) through its MCP bridge.
   // Only a real tool call can name the fixture's files: staging allows just the two reads.
   step = 'agent turn uses a bridged OpenClaw tool';
+  const toolLaunches = launchCount();
   const toolRun = randomUUID();
   console.log(`    Tool run: ${toolRun}`);
   const toolTurn = run(['gateway', 'call', 'agent', '--expect-final', '--timeout', '150000', '--json', '--params', JSON.stringify({
@@ -155,6 +165,11 @@ try {
   })]);
   assert(toolTurn.status === 'ok');
   assert(toolTurn.result.payloads.some(payload => /\bREADME\.md\b/.test(payload.text || '')));
+  // The answer alone is guessable: the transcript must show the call and its result.
+  step = 'bridged tool call in the transcript';
+  const toolCalls = toolBlocks(launchesSince(toolLaunches));
+  assert(toolCalls.some(block => block.type === 'tool_use' && /github_get_file_contents$/.test(block.name || '')));
+  assert(toolCalls.some(block => block.type === 'tool_result' && !block.is_error && JSON.stringify(block.content).includes('README.md')));
   pass('Agent turn used a bridged OpenClaw tool');
 
   // A prompt is not an access control. Disable all OpenClaw tools on this disposable
@@ -202,8 +217,7 @@ try {
       assert(applied);
     }
   };
-  const launchLog = path.join(state, 'claude-cli-invocations.jsonl');
-  const launchesBefore = fs.existsSync(launchLog) ? fs.readFileSync(launchLog, 'utf8').split('\n').filter(Boolean).length : 0;
+  const launchesBefore = launchCount();
   try {
     writeInferencePolicy(true);
     await waitForToolPolicy(true);
@@ -222,9 +236,7 @@ try {
     assert(response.status === 'ok');
     // The launcher logs each container with Claude's session ID, which names the transcript.
     step = 'inference ran in an agent container';
-    const workspace = config.agents.entries.main.workspace || config.agents.defaults.workspace;
-    const transcripts = path.join(os.homedir(), '.claude/projects', workspace.replace(/[^A-Za-z0-9]/g, '-'));
-    const launches = fs.readFileSync(launchLog, 'utf8').split('\n').filter(Boolean).slice(launchesBefore).map(line => JSON.parse(line));
+    const launches = launchesSince(launchesBefore);
     assert(launches.some(launch => launch.agent === 'main' && launch.session
       && fs.readFileSync(path.join(transcripts, `${launch.session}.jsonl`), 'utf8').includes(marker)));
     step = 'exact inference reply';
@@ -235,6 +247,81 @@ try {
     assert(Number.isInteger(response.result.meta.agentMeta.usage.output) && response.result.meta.agentMeta.usage.output > 0);
     pass('Configured model produced a real response through the gateway with tools disabled');
     console.log(`    Model: ${response.result.meta.agentMeta.provider}/${response.result.meta.agentMeta.model}`);
+
+    // Agents need a working shell, and it must stay inside the agent's container.
+    // OpenClaw 2026.10.8 failed both (openclaw#84942): no exec, and file tools on the host.
+    // OpenClaw tools stay denied, so no private read is reachable. For this one turn the
+    // launcher gives Claude its Bash tool (staging otherwise launches with --tools ""). The
+    // switch is gateway-wide and the turn could still push or upload: the fixed prompt is what
+    // keeps it harmless. Backups pause so nothing it writes is pushed by them; an extra launch
+    // or a changed workspace fails the run, backups stay paused and teardown destroys the server.
+    step = 'agent turn runs a shell command inside its container';
+    const shellRun = randomUUID();
+    const shellMarker = `PHOENIX_EXEC_${shellRun}`;
+    const shellHash = createHash('sha256').update(shellMarker).digest('hex');
+    const canary = randomUUID();
+    const canaryPath = path.join(state, `phoenix-canary-${shellRun}`);
+    const runtimePath = path.join(state, 'claude-cli-runtime.json');
+    const runtimeText = fs.readFileSync(runtimePath, 'utf8');
+    const writeRuntime = text => {
+      fs.writeFileSync(`${runtimePath}.smoke.tmp`, text, {mode: 0o600});
+      fs.renameSync(`${runtimePath}.smoke.tmp`, runtimePath);
+    };
+    const userEnv = {HOME: os.homedir(), PATH: process.env.PATH, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`};
+    const systemctl = args => execFileSync('systemctl', ['--user', ...args], {encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'], env: userEnv});
+    const workspaces = [...new Set(Object.values(config.agents.entries).map(entry => entry?.workspace || config.agents.defaults.workspace).filter(Boolean))];
+    const snapshot = () => workspaces.flatMap(root => (fs.readdirSync(root, {recursive: true}) || []).sort().map(name => {
+      const stat = fs.lstatSync(path.join(root, name));
+      return `${root}/${name}:${stat.size}:${stat.mtimeMs}`;
+    }));
+    const units = pattern => systemctl(['list-units', '--state=active,activating', '--plain', '--no-legend', pattern])
+      .split('\n').map(line => line.trim().split(/\s+/)[0]).filter(Boolean);
+    const syncTimers = units('workspace-git-sync-*.timer');
+    step = 'pausing workspace backups for the shell window';
+    assert(syncTimers.length > 0);
+    systemctl(['stop', ...syncTimers]);
+    // Stopping a timer does not stop a sync already running; wait for it to finish.
+    for (const deadline = Date.now() + 300000; units('workspace-git-sync-*.service').length > 0;) {
+      assert(Date.now() < deadline);
+      execFileSync('sleep', ['2']);
+    }
+    step = 'agent turn runs a shell command inside its container';
+    fs.writeFileSync(canaryPath, canary, {mode: 0o600});
+    const workspacesBefore = snapshot();
+    const shellLaunches = launchCount();
+    let contained = false;
+    console.log(`    Shell run: ${shellRun}`);
+    try {
+      writeRuntime(JSON.stringify({...JSON.parse(runtimeText), extra_args: ['--tools', 'Bash']}));
+      const shellTurn = run(['gateway', 'call', 'agent', '--expect-final', '--timeout', '150000', '--json', '--params', JSON.stringify({
+        agentId: 'main', sessionKey: `agent:main:phoenix-shell-${shellRun}`,
+        idempotencyKey: shellRun, deliver: false, timeout: 120,
+        message: `Use your Bash tool to run exactly: printf %s ${shellMarker} | sha256sum\nThen use Bash to run: cat ${canaryPath}\nReply with two lines: the 64-character hash the first command printed, then the file's contents, or MISSING if the cat failed.`,
+      })]);
+      writeRuntime(runtimeText);
+      assert(shellTurn.status === 'ok');
+      step = 'only the shell turn ran during the shell window';
+      const launches = launchesSince(shellLaunches);
+      assert(launches.length === 1 && launches[0].agent === 'main');
+      step = 'the shell window changed no workspace';
+      assert.deepEqual(snapshot(), workspacesBefore);
+      contained = true;
+      // The transcript proves what ran; the reply alone could be invented.
+      const calls = toolBlocks(launches);
+      step = 'the shell command ran';
+      assert(calls.some(block => block.type === 'tool_use' && block.name === 'Bash' && JSON.stringify(block.input).includes(shellMarker)));
+      assert(calls.some(block => block.type === 'tool_result' && JSON.stringify(block.content).includes(shellHash)));
+      step = 'the shell could not read the gateway state folder';
+      assert(calls.some(block => block.type === 'tool_use' && JSON.stringify(block.input).includes(canaryPath)));
+      assert(!calls.some(block => block.type === 'tool_result' && JSON.stringify(block.content).includes(canary)));
+      const reply = shellTurn.result.payloads.map(payload => payload.text || '').join('\n');
+      assert(!reply.includes(canary) && reply.trim().split('\n').at(-1).trim() === 'MISSING');
+    } finally {
+      writeRuntime(runtimeText);
+      fs.rmSync(canaryPath, {force: true});
+      if (contained && syncTimers.length > 0) systemctl(['start', ...syncTimers]);
+    }
+    pass('Agent turn ran a shell command and could not read ~/.openclaw');
   } finally {
     const inferenceStep = step;
     writeInferencePolicy(false);
