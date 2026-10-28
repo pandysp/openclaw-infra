@@ -78,6 +78,20 @@
         state: latest
         update_cache: true
 
+# The dist-upgrade above normally lifts Node to the floor already. This catches a host
+# whose package was held or whose index predates the release; the check below fails
+# if apt has nothing new enough.
+- name: Raise Node.js to its floor {{ nodejs_min_version }}
+  ansible.builtin.apt:
+    name: nodejs
+    state: latest
+    update_cache: true
+  when:
+    - node_installed.rc == 0
+    - (node_installed.stdout | regex_replace('^v', '')) is version(nodejs_min_version, '<')
+
+# Running services keep the Node they started with until the end-of-run restart in
+# playbook.yml (Restart services still running a replaced program).
 - name: Verify Node.js major version and minimum release
   ansible.builtin.command: node --version
   register: node_final

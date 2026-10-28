@@ -1,6 +1,11 @@
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Provisioning passes debian_ca_certificates_min_version; the build fails if Debian's
+# CA package is older (older ones trust the eMudhra roots).
+ARG CA_CERTIFICATES_MIN_VERSION
+RUN test -n "$CA_CERTIFICATES_MIN_VERSION" \
+    && apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates git openssh-client iptables python3 util-linux passwd \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge "$CA_CERTIFICATES_MIN_VERSION" \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --create-home --home-dir /home/sync --shell /bin/bash workspace-sync
 COPY workspace-sync.sh workspace-sync-entrypoint.sh /usr/local/bin/

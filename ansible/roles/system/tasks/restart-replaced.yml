@@ -1,0 +1,25 @@
+---
+# Runs from playbook.yml post_tasks, after every role and pending gateway restart, so a
+# service restarted here starts on the final programs (e.g. Node above nodejs_min_version).
+- name: Restart services still running a replaced program
+  ansible.builtin.script: restart-replaced-programs.sh
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  register: replaced_program_restarts
+  changed_when: "'RESTARTED' in replaced_program_restarts.stdout"
+  when: not ansible_check_mode
+
+- name: Wait for the gateway after restarting it onto its new program
+  ansible.builtin.command: openclaw health --json
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  register: replaced_program_gateway_health
+  changed_when: false
+  until: >-
+    replaced_program_gateway_health.rc == 0 and
+    (replaced_program_gateway_health.stdout | from_json).ok | default(false) | bool
+  retries: 12
+  delay: 5
+  when:
+    - not ansible_check_mode
+    - "'RESTARTED openclaw-gateway.service ' in replaced_program_restarts.stdout"

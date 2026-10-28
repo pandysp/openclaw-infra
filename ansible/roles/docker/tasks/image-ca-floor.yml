@@ -1,0 +1,45 @@
+---
+# Reads the Debian ca-certificates version inside one local image and compares it with
+# debian_ca_certificates_min_version. Sets image_ca_floor to `missing`, `stale` or `current`.
+# An image built before the floor still trusts the eMudhra roots, and nothing else
+# rebuilds an image whose Dockerfile did not change (the sandbox image stayed six
+# months old). Callers rebuild a stale image from scratch and assert `current` after.
+# Inputs: image_ca_floor_image; image_ca_floor_require (default false) fails unless current.
+- name: Read ca-certificates in {{ image_ca_floor_image }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if ! inspect=$(docker image inspect --format '{% raw %}{{.Id}}{% endraw %}' "$IMAGE" 2>&1); then
+      # Only a missing image may continue; daemon and permission errors stop here.
+      case "$inspect" in *"No such image"*) echo missing; exit 0 ;; esac
+      echo "$inspect" >&2
+      exit 1
+    fi
+    version=$(docker run --rm --network none --entrypoint dpkg-query "$IMAGE" -W '-f=${Version}' ca-certificates)
+    if dpkg --compare-versions "$version" ge "$FLOOR"; then
+      echo "current $version"
+    else
+      echo "stale $version"
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    IMAGE: "{{ image_ca_floor_image }}"
+    FLOOR: "{{ debian_ca_certificates_min_version }}"
+  register: image_ca_floor_check
+  changed_when: false
+  # Read-only, so a dry run reports the rebuild a real run would do.
+  check_mode: false
+
+- name: Record the CA floor state of {{ image_ca_floor_image }}
+  ansible.builtin.set_fact:
+    image_ca_floor: "{{ image_ca_floor_check.stdout.split() | first }}"
+    image_ca_floor_version: "{{ image_ca_floor_check.stdout.split()[1:] | join('') }}"
+
+- name: Require the CA floor in {{ image_ca_floor_image }}
+  ansible.builtin.assert:
+    that: image_ca_floor == 'current'
+    fail_msg: >-
+      {{ image_ca_floor_image }} has ca-certificates {{ image_ca_floor_version | default('none', true) }}
+      ({{ image_ca_floor }}); it needs {{ debian_ca_certificates_min_version }} or later.
+  # A dry run skips the builds this would check.
+  when: image_ca_floor_require | default(false) | bool and not ansible_check_mode

@@ -63,7 +63,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
 # --- Layer 2: uv + uvx (official Docker method — https://docs.astral.sh/uv/guides/integration/docker/) ---
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# Pinned: uv_version carries uv's own eMudhra trust fix (0.13.4).
+COPY --from=ghcr.io/astral-sh/uv:{{ uv_version }} /uv /uvx /usr/local/bin/
 
 # --- Layer 3: yq (official Docker method — https://github.com/mikefarah/yq) ---
 COPY --from=mikefarah/yq:latest /usr/bin/yq /usr/local/bin/yq

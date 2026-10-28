@@ -74,6 +74,11 @@ jobs:
           WORKSPACE_CONTAINER_TESTS: '1'
         run: python3 -m unittest scripts.tests.test_workspace_container -v
 
+      - name: Test image CA floor
+        env:
+          IMAGE_CA_FLOOR_TESTS: '1'
+        run: python3 -m unittest scripts.tests.test_image_ca_floor -v
+
   shellcheck:
     runs-on: ubuntu-latest
     timeout-minutes: 5
