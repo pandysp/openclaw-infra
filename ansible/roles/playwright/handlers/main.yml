@@ -1,0 +1,27 @@
+---
+- name: reload user systemd for playwright
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+
+# Browsers Require the relay, so systemd restarts them with it.
+- name: restart playwright relay
+  ansible.builtin.systemd:
+    name: openclaw-playwright-relay.service
+    state: restarted
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+
+- name: restart playwright browsers
+  ansible.builtin.systemd:
+    name: "openclaw-playwright-{{ item.agent_id }}.service"
+    state: restarted
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  loop: "{{ _openclaw_playwright }}"
+  loop_control:
+    label: "{{ item.agent_id }}"

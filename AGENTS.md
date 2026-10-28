@@ -76,6 +76,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
 | `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
+| `playwright` | playwright | Per-agent Playwright browsers and their relay to the home proxy; run with `plugins` to register them |
 | `plugins` | plugins | MCP adapter, GitHub/qmd servers, GitHub token proxy for sandbox git, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |
@@ -491,9 +492,9 @@ MCP servers, workspaces, deny rules, and token mappings are generated automatica
 
 ### Role Ordering
 
-`workspace` -> `openclaw` -> `config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `qmd` -> `plugins` -> `sandbox` -> `claude-cli`
+`workspace` -> `openclaw` -> `config` -> `agents` -> `telegram` -> `whatsapp` -> `discord` -> `obsidian-headless` -> `qmd` -> `playwright` -> `plugins` -> `sandbox` -> `claude-cli`
 
-Telegram must run immediately after agents (prevents message misrouting). Plugins after qmd (qmd binary needed for MCP registration). `claude-cli` needs the plugins proxy and the sandbox image; `config` already points the backend at its launcher, so the first switch-on has a few minutes where turns fail until `claude-cli` has run.
+Telegram must run immediately after agents (prevents message misrouting). Plugins after qmd (qmd binary needed for MCP registration) and playwright (the browsers must answer before the adapter registers them). `claude-cli` needs the plugins proxy and the sandbox image; `config` already points the backend at its launcher, so the first switch-on has a few minutes where turns fail until `claude-cli` has run.
 
 ## Sandboxing
 
@@ -531,6 +532,12 @@ agents.defaults.sandbox.docker.readOnlyRoot: false
 Agents with `mac_access: true` use native Bash → pinned SSH → the Mac account, with that account's full permissions. Other agents' containers get no Mac access.
 
 **Read [docs/NODE-EXEC.md](./docs/NODE-EXEC.md) in full when:** setting up the dedicated SSH identity, checking host pins, or debugging Mac access. The Mac-to-VPS route is accepted; see [SECURITY §5](./docs/SECURITY.md#5-self-modification-via-mac-access).
+
+## Playwright Browser (Optional)
+
+Each agent gets its own Playwright browser in a locked-down container. Pages load only through a proxy on a Mac at home, so sites see a home connection, not the data centre. Off by default (`openclaw_playwright_enabled`). Mac side: `scripts/deploy-mac-browser-proxy.sh`. OpenClaw's own `browser` plugin stays off: Claude Code turns get no OpenClaw sandbox (openclaw#84942), so it would be one browser shared by all agents.
+
+**Read [docs/INTEGRATIONS.md#playwright-browser](./docs/INTEGRATIONS.md#playwright-browser) in full when:** enabling the browser, changing the proxy Mac, after a server rebuild (new tailnet address), or when pages stop loading.
 
 ## Semantic Search (qmd)
 

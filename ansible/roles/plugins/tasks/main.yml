@@ -1,6 +1,6 @@
 ---
 # Install and configure the mcp-adapter plugin with per-agent MCP servers
-# (GitHub, qmd). Mac execution uses the approved native Bash/SSH route.
+# (GitHub, qmd, Playwright). Mac execution uses the approved native Bash/SSH route.
 # Skipped entirely if openclaw_mcp_adapter is not defined (in playbook.yml).
 # Force reinstall with: -e force_plugin_reinstall=true
 
@@ -200,6 +200,12 @@
             echo "NOTE: qmd binary not found, skipping qmd MCP servers"
         fi
         {% endif %}
+
+        # Playwright browsers — HTTP, one locked-down container per agent (playwright role)
+        {% for b in _openclaw_playwright %}
+        SERVERS=$(printf '%s' "$SERVERS" | jq --arg name "{{ b.server_name }}" --arg url "{{ b.url }}" \
+            '. + [{name: $name, transport: "http", url: $url, allowPrivateUrls: true, timeout: 120000}]')
+        {% endfor %}
 
         # Build final config
         test ! -L /tmp/ansible-plugin-config

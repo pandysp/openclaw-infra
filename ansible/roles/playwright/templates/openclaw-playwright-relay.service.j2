@@ -1,0 +1,25 @@
+[Unit]
+Description=Relay from the Playwright browser networks to the home proxy
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f openclaw-playwright-relay
+# The first network is the only one with a route out. Each browser network has
+# none, so this relay, which only ever connects to the proxy, is their sole exit.
+ExecStart=/usr/bin/docker run --rm --name openclaw-playwright-relay \
+    --network {{ openclaw_playwright_egress_network }} \
+{% for b in _openclaw_playwright %}
+    --network name={{ b.network }},ip={{ b.relay_ip }} \
+{% endfor %}
+    --cap-drop ALL --security-opt no-new-privileges --read-only \
+    --memory 128m --pids-limit 512 \
+    openclaw-playwright-relay:latest \
+    TCP-LISTEN:3128,fork,reuseaddr TCP:{{ openclaw_playwright_proxy.host }}:{{ openclaw_playwright_proxy.port }}
+ExecStop=/usr/bin/docker stop -t 5 openclaw-playwright-relay
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

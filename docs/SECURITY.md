@@ -47,7 +47,8 @@ Threat model and mitigations for the OpenClaw Hetzner/Tailscale deployment.
 | **UFW** | Blocks all except tailscale0 interface | On VM |
 | **Tailscale** | Encrypts + authenticates network access | Overlay network |
 | **Gateway Auth** | Tailscale identity + device pairing (token fallback) | Application |
-| **Process Isolation** | `ubuntu` user, systemd --user service; OpenClaw's own tools sandboxed in Docker, Claude Code's tools on the host (see [Threat 4](#4-agent-host-command-abuse)) | OS level |
+| **Process Isolation** | `ubuntu` user, systemd --user service; OpenClaw's own tools sandboxed in Docker; Claude Code's tools on the host, or in a per-agent container with `openclaw_claude_cli_enabled` (see [Threat 4](#4-agent-host-command-abuse)) | OS level |
+| **Browser egress** | Playwright browsers have no route out except a relay to the home proxy, which refuses private destinations (see [Threat 12](#12-browser-pages-as-an-attack-path)) | Docker networks + Mac proxy |
 
 ## Threat Model
 
@@ -219,6 +220,19 @@ Plugins run in-process — they have the same access as the gateway itself (conf
 - Normal merges remain supported. Conflicts fail rather than force-pushing over remote history.
 
 **Residual risk**: Untrusted hooks can still read their own repository's deploy key and change that workspace. Isolation does not make concurrent edits during two-way Git synchronization atomic. Workspace repositories should remain private.
+
+### 12. Browser Pages as an Attack Path
+
+**Attack**: A page an agent opens tries to reach private services: this server's gateway or credential proxy, the tailnet, the cloud metadata address, or devices on the home network behind the proxy. Or a page tries to drive the browser's own MCP server.
+
+**Mitigations**:
+- Each Playwright browser runs on an internal Docker network with no route out; Docker enforces this, not a browser setting. It cannot reach this host's services, the tailnet or the internet directly.
+- The relay forwards only to the configured proxy address. The proxy (squid on the Mac) serves only the server's tailnet address, allows ports 80 and 443, and refuses private, loopback, link-local, tailnet and multicast ranges plus the home network's IPv6 /64s. squid resolves names itself and checks the address it connects to, so DNS tricks land on the same rules.
+- Provisioning loads a private address through every browser and fails unless the proxy refuses it.
+- The MCP server accepts only the adapter's Host header, so a page cannot call it through localhost. Containers drop all capabilities and set no-new-privileges.
+- Profiles live in memory: no cookies or logins survive a restart.
+
+**Residual risk**: Sites see and can log the home connection's address. A page can still reach public IPv6 addresses at home if the provider changes the prefix while the proxy runs (it reads the ranges at start). The proxy is a home-connection relay for anything the agents browse, so an agent misusing it acts from your home address.
 
 ### Writable Rootfs Rationale
 

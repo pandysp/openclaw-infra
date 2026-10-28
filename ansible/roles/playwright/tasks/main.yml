@@ -1,0 +1,212 @@
+---
+# Playwright browser per agent (docs/INTEGRATIONS.md#playwright-browser).
+# Each agent's Playwright MCP server runs in its own container on an internal
+# Docker network: no route out, not even to this host's services. The relay
+# container is the only other member of each network and forwards every
+# connection to the home proxy, which refuses private and tailnet addresses.
+# The plugins role registers the servers with the MCP adapter.
+
+- name: Reconcile Playwright services that are no longer configured
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    UNITS=/home/ubuntu/.config/systemd/user
+    DESIRED=" {{ _openclaw_playwright | map(attribute='agent_id') | join(' ') }} "
+    CHANGED=""
+    for unit in "$UNITS"/openclaw-playwright-*.service; do
+        [ -e "$unit" ] || continue
+        name=$(basename "$unit" .service)
+        id=${name#openclaw-playwright-}
+        if [ "$id" = relay ]; then
+            [ "$DESIRED" != "  " ] && continue
+        elif [[ "$DESIRED" == *" $id "* ]]; then
+            continue
+        fi
+        systemctl --user disable --now "$name.service"
+        rm -f "$unit"
+        docker rm -f "$name" >/dev/null 2>&1 || true
+        CHANGED=yes
+    done
+    for network in $(docker network ls --format '{% raw %}{{.Name}}{% endraw %}' | grep '^openclaw-playwright-' || true); do
+        id=${network#openclaw-playwright-}
+        if [ "$network" = "{{ openclaw_playwright_egress_network }}" ]; then
+            [ "$DESIRED" != "  " ] && continue
+        elif [[ "$DESIRED" == *" $id "* ]]; then
+            continue
+        fi
+        # The relay is attached to every browser network.
+        docker network disconnect -f "$network" openclaw-playwright-relay >/dev/null 2>&1 || true
+        docker network rm "$network" >/dev/null
+        CHANGED=yes
+    done
+    if [ -n "$CHANGED" ]; then systemctl --user daemon-reload; echo REMOVED; fi
+  args:
+    executable: /bin/bash
+  register: playwright_reconcile
+  changed_when: "'REMOVED' in playwright_reconcile.stdout"
+
+- name: Provision Playwright browsers
+  when: openclaw_playwright_enabled | bool
+  block:
+    # The home proxy admits one source address. A rebuilt server gets a new one.
+    - name: Read this server's tailnet address
+      ansible.builtin.command: tailscale ip -4
+      register: playwright_tailnet_ip
+      changed_when: false
+
+    - name: Require the home proxy to admit this server
+      ansible.builtin.assert:
+        that: (playwright_tailnet_ip.stdout | trim) == openclaw_playwright_proxy.client
+        fail_msg: >-
+          This server's tailnet address is {{ playwright_tailnet_ip.stdout | trim }}, but
+          openclaw_playwright_proxy.client is {{ openclaw_playwright_proxy.client }}. Update it
+          in group_vars/openclaw.yml, rerun scripts/deploy-mac-browser-proxy.sh on the Mac,
+          then provision again.
+        quiet: true
+
+    - name: Inspect the current Playwright image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ openclaw_playwright_image }}", --format, "{% raw %}{{.Id}}{% endraw %}"]
+      register: playwright_image_before
+      changed_when: false
+      failed_when: false
+
+    - name: Pull the pinned Playwright image
+      ansible.builtin.command:
+        argv: [docker, pull, --quiet, "{{ openclaw_playwright_image }}"]
+      when: playwright_image_before.rc != 0
+      changed_when: true
+      notify: restart playwright browsers
+
+    - name: Ensure relay build directory exists
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/playwright-relay-build
+        state: directory
+        mode: "0755"
+
+    - name: Copy relay Dockerfile
+      ansible.builtin.copy:
+        src: Dockerfile.relay
+        dest: /home/ubuntu/.openclaw/playwright-relay-build/Dockerfile
+        mode: "0644"
+
+    - name: Inspect the existing relay image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, openclaw-playwright-relay:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
+      register: playwright_relay_before
+      changed_when: false
+      failed_when: >-
+        playwright_relay_before.rc != 0 and not (playwright_relay_before.rc == 1
+        and 'No such image: openclaw-playwright-relay:latest' in playwright_relay_before.stderr)
+
+    - name: Build relay image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - build
+          # Local-only image: timestamped attestations change its ID on cache hits.
+          - --provenance=false
+          - --tag
+          - openclaw-playwright-relay:latest
+          - /home/ubuntu/.openclaw/playwright-relay-build
+      changed_when: false
+
+    - name: Inspect the built relay image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, openclaw-playwright-relay:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
+      register: playwright_relay_after
+      changed_when: playwright_relay_before.rc != 0 or playwright_relay_before.stdout != playwright_relay_after.stdout
+      notify: restart playwright relay
+
+    - name: Create the relay's network out
+      community.docker.docker_network:
+        name: "{{ openclaw_playwright_egress_network }}"
+        driver: bridge
+
+    - name: Create one internal network per browser
+      community.docker.docker_network:
+        name: "{{ item.network }}"
+        driver: bridge
+        internal: true
+        ipam_config:
+          - subnet: "{{ item.subnet }}"
+      loop: "{{ _openclaw_playwright }}"
+      loop_control:
+        label: "{{ item.agent_id }}"
+
+    - name: Install the relay service
+      ansible.builtin.template:
+        src: openclaw-playwright-relay.service.j2
+        dest: /home/ubuntu/.config/systemd/user/openclaw-playwright-relay.service
+        mode: "0644"
+      notify:
+        - reload user systemd for playwright
+        - restart playwright relay
+
+    - name: Install one browser service per agent
+      ansible.builtin.template:
+        src: openclaw-playwright.service.j2
+        dest: "/home/ubuntu/.config/systemd/user/openclaw-playwright-{{ item.agent_id }}.service"
+        mode: "0644"
+      loop: "{{ _openclaw_playwright }}"
+      loop_control:
+        label: "{{ item.agent_id }}"
+      register: playwright_units
+      notify: reload user systemd for playwright
+
+    - name: Apply service and image changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Restart browsers whose service changed
+      ansible.builtin.systemd:
+        name: "openclaw-playwright-{{ item.item.agent_id }}.service"
+        state: restarted
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      loop: "{{ playwright_units.results | selectattr('changed') | list }}"
+      loop_control:
+        label: "{{ item.item.agent_id }}"
+
+    - name: Enable and start the relay and every browser
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: /run/user/1000
+      loop: "{{ ['openclaw-playwright-relay.service'] + (_openclaw_playwright | map(attribute='agent_id') | map('regex_replace', '^(.*)$', 'openclaw-playwright-\\1.service') | list) }}"
+
+    - name: Wait for every browser's MCP endpoint
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        method: POST
+        body_format: json
+        headers:
+          Accept: application/json, text/event-stream
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: initialize
+          params: {protocolVersion: "2025-06-18", capabilities: {}, clientInfo: {name: openclaw-provision, version: "1"}}
+        status_code: 200
+        return_content: false
+      loop: "{{ _openclaw_playwright }}"
+      loop_control:
+        label: "{{ item.agent_id }}"
+      register: playwright_ready
+      retries: 12
+      delay: 5
+      until: playwright_ready is succeeded
+
+    # End to end through the relay and the Mac: a broken proxy, a stale proxy
+    # policy or a browser leaving from this server fails provisioning here.
+    - name: Check every browser loads pages through the home proxy
+      ansible.builtin.script:
+        cmd: playwright-check.py {{ item.url }}
+        executable: /usr/bin/python3
+      loop: "{{ _openclaw_playwright }}"
+      loop_control:
+        label: "{{ item.agent_id }}"
+      changed_when: false

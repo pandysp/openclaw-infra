@@ -166,10 +166,11 @@
       vars:
         _name: "{{ item.0.name_prefix if item.1.id == 'main' else item.0.name_prefix ~ '-' ~ item.1.id }}"
         _token_var: "{{ 'github_token' if item.1.id == 'main' else 'github_token_' ~ item.1.id }}"
+        _playwright_server_types: "{{ [{'type': 'playwright', 'name_prefix': 'playwright'}] if openclaw_playwright_enabled | bool else [] }}"
         _entry: >-
           {{ {'name': _name, 'type': item.0.type, 'agent_id': item.1.id}
              | combine({'token_var': _token_var} if item.0.type == 'github' else {}) }}
-      loop: "{{ openclaw_mcp_server_types | product(openclaw_agents) | list }}"
+      loop: "{{ (openclaw_mcp_server_types + _playwright_server_types) | product(openclaw_agents) | list }}"
       loop_control:
         label: "{{ _name }}"
       when: openclaw_mcp_servers is not defined
@@ -179,7 +180,7 @@
       ansible.builtin.assert:
         that:
           - (_openclaw_mcp_servers | type_debug) == 'list'
-          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github', 'qmd']) | list | length) == (_openclaw_mcp_servers | length)
+          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github', 'qmd', 'playwright']) | list | length) == (_openclaw_mcp_servers | length)
           - (_openclaw_mcp_servers | selectattr('name', 'defined') | list | length) == (_openclaw_mcp_servers | length)
           - (_openclaw_mcp_servers | selectattr('agent_id', 'defined') | selectattr('agent_id', 'in', openclaw_agents | map(attribute='id') | list) | list | length) == (_openclaw_mcp_servers | length)
           - >-
@@ -188,7 +189,7 @@
              | select('string') | reject('equalto', '') | list | length)
             == (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | list | length)
         fail_msg: >-
-          MCP servers must use type github or qmd, have a name, and have an
+          MCP servers must use type github, qmd or playwright, have a name, and have an
           agent_id from openclaw_agents. GitHub definitions also need a nonempty
           string token_var. Remove unsupported server types and
           update manual openclaw_mcp_servers overrides before provisioning.
@@ -282,6 +283,52 @@
         label: "{{ item.agent_id }}"
       tags: [always]
 
+    # Playwright browsers: one /29 per agent in openclaw_agents order. The playwright
+    # role creates the networks and containers, the plugins role registers the URLs.
+    - name: Validate Playwright browser settings
+      ansible.builtin.assert:
+        that:
+          - openclaw_playwright_proxy.host is match(_ipv4)
+          - openclaw_playwright_proxy.client is match(_ipv4)
+          - openclaw_playwright_subnet_base is match('^([0-9]{1,3}\\.){3}0$')
+          - (openclaw_playwright_proxy.port | int) > 0
+          - openclaw_agents | length <= 32
+          - (_openclaw_mcp_servers | selectattr('type', 'equalto', 'playwright') | list | length) == (openclaw_agents | length)
+        fail_msg: >-
+          openclaw_playwright_enabled needs openclaw_playwright_proxy.host (the Mac's
+          tailnet IPv4), .port and .client (this server's tailnet IPv4), at most 32
+          agents, and, with manual openclaw_mcp_servers, one playwright server per agent.
+          openclaw_playwright_subnet_base must end in .0 (a /24 split into /29s).
+      vars:
+        _ipv4: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$'
+      when: openclaw_playwright_enabled | bool
+      tags: [always]
+
+    - name: Initialize Playwright browser list
+      ansible.builtin.set_fact:
+        _openclaw_playwright: []
+      tags: [always]
+
+    - name: Derive Playwright browser networks and addresses
+      ansible.builtin.set_fact:
+        _openclaw_playwright: >-
+          {{ _openclaw_playwright + [{
+               'agent_id': item.id,
+               'server_name': 'playwright' if item.id == 'main' else 'playwright-' ~ item.id,
+               'network': 'openclaw-playwright-' ~ item.id,
+               'subnet': _prefix ~ '.' ~ (_idx * 8) ~ '/29',
+               'browser_ip': _prefix ~ '.' ~ (_idx * 8 + 2),
+               'relay_ip': _prefix ~ '.' ~ (_idx * 8 + 3),
+               'url': 'http://' ~ _prefix ~ '.' ~ (_idx * 8 + 2) ~ ':8931/mcp'
+             }] }}
+      vars:
+        _prefix: "{{ openclaw_playwright_subnet_base | regex_replace('\\.0$', '') }}"
+      loop: "{{ openclaw_agents if openclaw_playwright_enabled | bool else [] }}"
+      loop_control:
+        index_var: _idx
+        label: "{{ item.id }}"
+      tags: [always]
+
     # Tailscale WSS URL: used by telegram and post_tasks to route CLI commands through
     # Tailscale Serve instead of local loopback (broken in OpenClaw 2026.3.13).
     # See: https://github.com/openclaw/openclaw/issues/48167
@@ -332,6 +379,8 @@
     # qmd after obsidian-headless — needs workspace dirs from agents role, before plugins registers MCP servers.
     - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
     # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
+    # Before plugins, which registers the browsers' MCP URLs with the adapter.
+    - { role: playwright, tags: [playwright] }
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
     - { role: sandbox,   tags: [sandbox] }
     - role: claude-cli

@@ -225,3 +225,61 @@ ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u obs
 ### Token Expiry
 
 The Obsidian auth token may expire if the Obsidian Sync subscription lapses or is renewed. Re-run `ob login` locally, update the Pulumi secret, and re-provision with `--tags obsidian-headless`.
+
+## Playwright Browser
+
+Every agent can drive a real browser: open pages, click, type, fill forms and read the page as text. Pages load from a home internet connection, through a proxy on a Mac, so sites that block data-centre addresses (Google, shops, booking sites, Cloudflare checks) treat the agent like a normal visitor.
+
+### How it works
+
+```
+agent turn → MCP adapter → Playwright container (one per agent, internal network, no route out)
+                                 → relay container (only connects to the proxy)
+                                 → tailnet → squid on the Mac (home connection) → website
+```
+
+- **Browser:** Microsoft's [Playwright MCP server](https://github.com/microsoft/playwright-mcp), pinned in `openclaw_playwright_image`, one container per agent. Each agent sees only its own browser's tools (`playwright_*` for main, `playwright-<id>_*` for the others), through the same per-agent deny rules as GitHub and qmd.
+- **No way out except the proxy:** each browser sits on its own internal Docker network. Docker gives it no route to the internet, to this server's services or to the tailnet. The only other member of that network is the relay, which forwards every connection to the proxy and nowhere else.
+- **Proxy on the Mac** (`scripts/deploy-mac-browser-proxy.sh`): squid, listening only on the Mac's tailnet address, serving only the server's tailnet address, ports 80 and 443 only. It refuses private, loopback, link-local and tailnet addresses and the home network's own IPv6 ranges, so a page cannot reach devices at home.
+- **Nothing persists:** profiles are in memory (`--isolated`). Logins and cookies are gone after a container restart, and agents cannot use your accounts.
+- **Why not OpenClaw's own browser plugin:** turns on the Claude Code runtime get no OpenClaw sandbox ([openclaw#84942](https://github.com/openclaw/openclaw/issues/84942)), so the plugin would give all agents one shared browser on the host. Its sandbox browser image has no proxy setting either.
+
+### Setup
+
+1. **Pick the Mac** that stays on at home. Find both tailnet addresses: `tailscale ip -4` on the Mac and on the server.
+2. **Configure** in `group_vars/openclaw.yml`:
+   ```yaml
+   openclaw_playwright_enabled: true
+   openclaw_playwright_proxy:
+     host: 100.x.y.z     # the Mac
+     port: 3128
+     client: 100.a.b.c   # the server
+   ```
+3. **Deploy the proxy** on that Mac, from this repo (needs `brew install squid yq` and sudo for the LaunchDaemon):
+   ```bash
+   ./scripts/deploy-mac-browser-proxy.sh
+   ```
+4. **Provision** the browsers and register them with the adapter:
+   ```bash
+   ./scripts/provision.sh --tags playwright,plugins
+   ```
+   Provisioning ends by loading a page through every agent's browser: it fails if a browser leaves from the server's own address or the proxy stops refusing private addresses.
+
+### Verify
+
+```bash
+# On the Mac: daemon state, and the proxy answers (it refuses the Mac itself)
+./scripts/deploy-mac-browser-proxy.sh --status
+
+# On the server: relay and browsers
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user list-units "openclaw-playwright-*"'
+```
+
+### Limits
+
+- **No logins.** Sites that need an account stay out of reach.
+- **No screenshots.** The MCP adapter returns every result as one text part, so images are switched off (`--image-responses omit`). Agents read pages through snapshots.
+- **The Mac must be on.** While the proxy is down, pages fail to load with a proxy error. Nothing falls back to the server's own address.
+- **Rebuilt server:** a new server gets a new tailnet address. Provisioning stops with the new address; update `client`, rerun the Mac script, then provision again.
+- **Home IPv6 ranges** are read when the proxy starts. If the provider changes them, restart the proxy: `./scripts/deploy-mac-browser-proxy.sh`.
+- **Logs:** refusals go to `~/Library/Logs/openclaw/browser-proxy-refused.log` on the Mac. Allowed requests are not logged.

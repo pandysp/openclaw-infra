@@ -1,0 +1,206 @@
+"""Playwright browsers: addresses, settings checks, the home proxy policy and the deploy check."""
+import importlib.util
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[2]
+PLAYBOOK = ROOT / 'ansible/playbook.yml'
+ALL_VARS = ROOT / 'ansible/group_vars/all.yml'
+PROXY_SCRIPT = ROOT / 'scripts/deploy-mac-browser-proxy.sh'
+CHECK = ROOT / 'ansible/roles/playwright/files/playwright-check.py'
+DERIVATION = [
+    'Initialize auto-generated MCP server list',
+    'Auto-generate MCP servers from server types × agents',
+    'Validate supported MCP server definitions before provisioning',
+    'Validate Playwright browser settings',
+    'Initialize Playwright browser list',
+    'Derive Playwright browser networks and addresses',
+]
+PROXY = {'host': '100.100.1.1', 'port': 3128, 'client': '100.100.2.2'}
+
+
+class DerivationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ansible = shutil.which('ansible-playbook')
+        if not cls.ansible:
+            raise RuntimeError('Install the project Ansible dependency')
+        python = shlex.split(Path(cls.ansible).read_text().splitlines()[0].removeprefix('#!'))
+        plays, cls.defaults = json.loads(subprocess.check_output([*python, '-c',
+            'import json,sys,yaml; print(json.dumps([yaml.safe_load(open(p)) for p in sys.argv[1:]]))',
+            str(PLAYBOOK), str(ALL_VARS)], text=True))
+        pre_tasks = next(play for play in plays if play.get('roles'))['pre_tasks']
+        cls.tasks = [task for name in DERIVATION for task in pre_tasks if task.get('name') == name]
+        assert len(cls.tasks) == len(DERIVATION), 'a derivation task was renamed'
+
+    def derive(self, **overrides):
+        with tempfile.TemporaryDirectory(prefix='playwright-derive-') as directory:
+            root = Path(directory)
+            out = root / 'facts.json'
+            variables = {**self.defaults, 'openclaw_agents': [{'id': 'main'}, {'id': 'cama'}],
+                         'openclaw_playwright_enabled': True, 'openclaw_playwright_proxy': PROXY, **overrides}
+            dump = {'ansible.builtin.copy': {'dest': str(out), 'content':
+                    "{{ {'browsers': _openclaw_playwright, 'servers': _openclaw_mcp_servers} | to_json }}"}}
+            play = root / 'play.json'
+            play.write_text(json.dumps([{'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
+                                         'vars': variables, 'tasks': [*self.tasks, dump]}]))
+            env = {**os.environ, 'ANSIBLE_NOCOLOR': '1', 'ANSIBLE_LOCAL_TEMP': str(root / 'local')}
+            result = subprocess.run([self.ansible, '-i', 'localhost,', str(play)], env=env,
+                                    capture_output=True, text=True, timeout=120)
+            return result, (json.loads(out.read_text()) if out.exists() else None)
+
+    def test_each_agent_gets_its_own_network_and_server(self):
+        result, facts = self.derive()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(facts['browsers'], [
+            {'agent_id': 'main', 'server_name': 'playwright', 'network': 'openclaw-playwright-main',
+             'subnet': '172.31.240.0/29', 'browser_ip': '172.31.240.2', 'relay_ip': '172.31.240.3',
+             'url': 'http://172.31.240.2:8931/mcp'},
+            {'agent_id': 'cama', 'server_name': 'playwright-cama', 'network': 'openclaw-playwright-cama',
+             'subnet': '172.31.240.8/29', 'browser_ip': '172.31.240.10', 'relay_ip': '172.31.240.11',
+             'url': 'http://172.31.240.10:8931/mcp'},
+        ])
+        # Same naming as the other per-agent servers, so the deny rules scope them per agent.
+        playwright = [s for s in facts['servers'] if s['type'] == 'playwright']
+        self.assertEqual([(s['name'], s['agent_id']) for s in playwright],
+                         [('playwright', 'main'), ('playwright-cama', 'cama')])
+        self.assertTrue(all('_' not in s['name'] for s in facts['servers']))
+
+    def test_disabled_registers_nothing(self):
+        result, facts = self.derive(openclaw_playwright_enabled=False, openclaw_playwright_proxy={'host': '', 'port': 3128, 'client': ''})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(facts['browsers'], [])
+        self.assertFalse([s for s in facts['servers'] if s['type'] == 'playwright'])
+
+    def test_missing_or_malformed_proxy_settings_stop_provisioning(self):
+        for proxy in ({**PROXY, 'host': ''}, {**PROXY, 'client': 'mac-studio'}, {**PROXY, 'host': '300.1.1.1'}):
+            with self.subTest(proxy=proxy):
+                result, facts = self.derive(openclaw_playwright_proxy=proxy)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNone(facts)
+                self.assertIn('openclaw_playwright_proxy.host', result.stdout)
+
+    def test_subnet_base_must_be_a_whole_24(self):
+        result, facts = self.derive(openclaw_playwright_subnet_base='172.31.240.1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(facts)
+
+
+class HomeProxyPolicyTest(unittest.TestCase):
+    def render(self):
+        env = {**os.environ, 'BROWSER_PROXY_HOST': PROXY['host'], 'BROWSER_PROXY_PORT': '3128',
+               'BROWSER_PROXY_CLIENT': PROXY['client'], 'CONF_DIR': '/conf', 'LOG_DIR': '/logs'}
+        return subprocess.check_output(['bash', str(PROXY_SCRIPT), '--print-config'], env=env, text=True)
+
+    def test_serves_only_the_server_and_refuses_private_destinations_first(self):
+        config = self.render()
+        lines = [line for line in config.splitlines() if line.startswith('http_access')]
+        self.assertEqual(lines, [
+            'http_access deny !openclaw_server', 'http_access deny !safe_ports',
+            'http_access deny CONNECT !tls_port', 'http_access deny blocked_dst',
+            'http_access allow openclaw_server', 'http_access deny all'])
+        self.assertIn('http_port 100.100.1.1:3128', config)
+        self.assertIn('acl openclaw_server src 100.100.2.2/32', config)
+        blocked = ' '.join(line for line in config.splitlines() if line.startswith('acl blocked_dst'))
+        for cidr in ('10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12',
+                     '192.168.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10', '"/conf/home-ipv6.acl"'):
+            self.assertIn(cidr, blocked)
+
+    def test_never_lists_ranges_squid_reads_as_all_of_ipv4(self):
+        # Seen while building this: squid folds ::ffff:0:0/96 into 0.0.0.0/0, refusing every site.
+        config = self.render()
+        self.assertNotIn('::ffff:', config)
+        self.assertNotIn('64:ff9b:', config)
+
+    def test_rejects_settings_that_are_not_ipv4(self):
+        env = {**os.environ, 'BROWSER_PROXY_HOST': 'mac-studio', 'BROWSER_PROXY_PORT': '3128',
+               'BROWSER_PROXY_CLIENT': PROXY['client']}
+        result = subprocess.run(['bash', str(PROXY_SCRIPT), '--print-config'], env=env,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be this Mac's tailnet IPv4", result.stderr)
+
+
+class FakeBrowser(BaseHTTPRequestHandler):
+    """Answers the MCP calls playwright-check.py makes; `pages` maps URL to page text."""
+    pages, calls = {}, []
+    current = None
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):  # the IP echo, fetched directly by the check
+        self.reply(b'203.0.113.9', 'text/plain')
+
+    def do_POST(self):
+        message = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        FakeBrowser.calls.append(message.get('params', {}).get('name', message['method']))
+        if 'id' not in message:
+            self.send_response(202)
+            self.end_headers()
+            return
+        params = message.get('params', {})
+        text = ''
+        if params.get('name') == 'browser_navigate':
+            FakeBrowser.current = params['arguments']['url']
+            text = FakeBrowser.pages.get(FakeBrowser.current, '')
+        elif params.get('name') == 'browser_snapshot':
+            text = FakeBrowser.pages.get(FakeBrowser.current, '')
+        body = {'jsonrpc': '2.0', 'id': message['id'], 'result': {'content': [{'type': 'text', 'text': text}]}}
+        self.reply(('event: message\ndata: ' + json.dumps(body) + '\n\n').encode(), 'text/event-stream')
+
+    def reply(self, body, kind):
+        self.send_response(200)
+        self.send_header('Content-Type', kind)
+        self.send_header('Mcp-Session-Id', 'fake')
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class DeployCheckTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('playwright_check', CHECK)
+        cls.check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.check)
+        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), FakeBrowser)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.base = f'http://127.0.0.1:{cls.server.server_port}'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def run_check(self, echo_page, private_page):
+        FakeBrowser.calls = []
+        FakeBrowser.pages = {self.base + '/echo': echo_page, self.check.PRIVATE: private_page}
+        with mock.patch.object(self.check, 'ECHO', self.base + '/echo'):
+            self.check.main(self.base + '/mcp')
+
+    def test_passes_when_pages_leave_from_home_and_private_is_refused(self):
+        self.run_check('- generic [ref=e1]: 92.0.2.1', '- HTTP status: 403 Forbidden')
+        self.assertEqual(FakeBrowser.calls[-1], 'browser_close')
+
+    def test_fails_when_the_browser_leaves_from_this_server(self):
+        with self.assertRaises(SystemExit) as failure:
+            self.run_check('- generic [ref=e1]: 203.0.113.9', '- HTTP status: 403 Forbidden')
+        self.assertIn('not through the home proxy', str(failure.exception))
+        self.assertEqual(FakeBrowser.calls[-1], 'browser_close')
+
+    def test_fails_when_the_proxy_does_not_refuse_private_addresses(self):
+        with self.assertRaises(SystemExit) as failure:
+            self.run_check('- generic [ref=e1]: 92.0.2.1', '- Page Title: Router login')
+        self.assertIn('did not refuse', str(failure.exception))
+
+
+if __name__ == '__main__':
+    unittest.main()

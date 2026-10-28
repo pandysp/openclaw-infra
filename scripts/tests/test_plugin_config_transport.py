@@ -197,6 +197,7 @@ p.write_text(json.dumps(cfg))
                 "github_mcp_binary": {"stdout": "/usr/bin/false"},
                 "github_token": "fixture-main\n\n", "github_token_test": "fixture-test\n",
                 "qmd_workspaces": [],
+                "_openclaw_playwright": [],
                 "_tailscale_wss_url": "wss://openclaw-test.example",
                 "_openclaw_mcp_servers": [
                     {"type": "github", "name": "github", "token_var": "github_token"},
@@ -208,6 +209,9 @@ p.write_text(json.dumps(cfg))
                 variables["_openclaw_mcp_servers"] = [server for server in variables["_openclaw_mcp_servers"] if server["type"] == "github"]
             if case == "force_reinstall":
                 variables["force_plugin_reinstall"] = True
+            if case == "with_playwright":
+                variables["_openclaw_playwright"] = [{"agent_id": "main", "server_name": "playwright",
+                                                       "url": "http://172.31.240.2:8931/mcp"}]
             tasks = replace_paths(copy.deepcopy(self.tasks), root)
             # Corrupt only the external desired-file boundary after a successful
             # build; the production comparison and cleanup remain unchanged.
@@ -231,7 +235,7 @@ p.write_text(json.dumps(cfg))
                                     timeout=60, umask=0o022)
             self.assertFalse("fixture-" in result.stdout + result.stderr, "Synthetic credential appeared in task output")
             self.assertFalse((root / "argv-leak").exists(), "Credential reached process argv")
-            success = case in ("fresh", "existing_0644", "minimal_servers",
+            success = case in ("fresh", "existing_0644", "minimal_servers", "with_playwright",
                                "disabled", "enabled_only", "upgrade", "force_reinstall", "global_disabled", "global_enabled")
             if success:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -245,7 +249,13 @@ p.write_text(json.dumps(cfg))
                 self.assertEqual((root / "installed").exists(), case in ("upgrade", "force_reinstall"))
                 config = actual["plugins"]["entries"]["openclaw-mcp-adapter"]["config"]
                 self.assertEqual(config["toolPrefix"], True)
-                self.assertEqual([s["name"] for s in config["servers"]], ["github", "github-test"])
+                expected = ["github", "github-test"] + (["playwright"] if case == "with_playwright" else [])
+                self.assertEqual([s["name"] for s in config["servers"]], expected)
+                if case == "with_playwright":
+                    # Browser containers sit on private Docker networks; the adapter refuses those by default.
+                    self.assertEqual(config["servers"][2], {"name": "playwright", "transport": "http",
+                                                            "url": "http://172.31.240.2:8931/mcp",
+                                                            "allowPrivateUrls": True, "timeout": 120000})
                 self.assertFalse(any('OPENCLAW_GATEWAY_TOKEN' in server.get('env', {})
                                      for server in config['servers']),
                                  'Retired Mac MCP transport forwarded the gateway token')
@@ -330,6 +340,9 @@ p.write_text(json.dumps(cfg))
 
     def test_existing_public_output_becomes_private_before_population(self):
         self.run_tasks("existing_0644")
+
+    def test_playwright_browsers_are_registered_over_http(self):
+        self.run_tasks("with_playwright")
 
     def test_optional_server_types_can_be_absent(self):
         self.run_tasks("minimal_servers")

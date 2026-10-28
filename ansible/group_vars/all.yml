@@ -127,10 +127,31 @@ openclaw_sandbox_workspace_access: "rw"
 openclaw_sandbox_docker_network: "bridge"
 openclaw_sandbox_docker_image: "openclaw-sandbox-custom:latest"
 openclaw_sandbox_read_only_root: false  # Allow runtime pip/npm/curl installs (see docs/SECURITY.md §4)
-openclaw_browser_allow_host_control: false  # Allow sandboxed agents to use browser tool with target="host"
+# OpenClaw's own browser plugin only (off here; agents get Playwright below).
+# Claude Code turns get no OpenClaw sandbox, so this has no effect on them (openclaw#84942).
+openclaw_browser_allow_host_control: false
 
 # Telegram: silently suppress error reply messages (true = user sees nothing on failure)
 openclaw_telegram_silent_error_replies: true
+
+# Playwright browser per agent (docs/INTEGRATIONS.md#playwright-browser). Off by default.
+# Each agent gets Microsoft's Playwright MCP server in its own container on a
+# Docker network with no route out. One relay container forwards only to
+# openclaw_playwright_proxy, a proxy on a Mac at home
+# (scripts/deploy-mac-browser-proxy.sh), so pages load from a home connection
+# and the proxy refuses private and tailnet addresses.
+openclaw_playwright_enabled: false
+openclaw_playwright_image: "mcr.microsoft.com/playwright/mcp:v0.0.83@sha256:690763cbb437ee7233f538a953bb5390bf03791eb5c965b471e59d17a6132fcb"
+openclaw_playwright_memory: "1g"
+# One /29 per agent, in openclaw_agents order: .1 Docker, .2 browser, .3 relay.
+openclaw_playwright_subnet_base: "172.31.240.0"
+openclaw_playwright_egress_network: openclaw-playwright-egress
+# The proxy listens on the Mac's tailnet address and serves only `client`,
+# this server's tailnet address. Provisioning fails if `client` is stale.
+openclaw_playwright_proxy:
+  host: ""
+  port: 3128
+  client: ""
 
 # Force sandbox image rebuild (override with -e force_sandbox_rebuild=true)
 force_sandbox_rebuild: false
