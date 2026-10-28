@@ -1,0 +1,116 @@
+---
+# OpenClaw's memory search indexes Markdown only. Keep everything qmd searched
+# findable by writing Markdown copies of the rest (notes/**/*.{txt,csv}, and text
+# from PDFs, images, .docx and .xlsx) to one folder per agent, outside the workspace,
+# and adding that folder to the agent's memory search paths.
+
+- name: Create the memory search copy folders
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop: "{{ [memory_sources_dir] + (_openclaw_workspaces | map(attribute='agent_id') | map('regex_replace', '^', memory_sources_dir ~ '/') | list) }}"
+
+# A fresh host has none of these (qmd used to create ~/.local/bin).
+- name: Create the memory search copy build, program and unit folders
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /home/ubuntu/.local/share/memory-sources-build
+    - /home/ubuntu/.local/bin
+    - /home/ubuntu/.config/systemd/user
+
+- name: Install memory search copy image sources
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/home/ubuntu/.local/share/memory-sources-build/{{ item }}"
+    mode: "0644"
+  loop:
+    - Dockerfile
+    - memory-sources.py
+  register: memory_sources_image_sources
+
+- name: Check memory search copy image
+  ansible.builtin.command: docker image inspect openclaw-memory-sources:latest
+  register: memory_sources_image
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Build memory search copy image
+  ansible.builtin.command:
+    argv: [docker, build, --tag, openclaw-memory-sources:latest, /home/ubuntu/.local/share/memory-sources-build]
+  when: memory_sources_image.rc != 0 or memory_sources_image_sources.changed
+  register: memory_sources_build
+
+- name: Install the memory search copy runner
+  ansible.builtin.template:
+    src: openclaw-memory-sources.sh.j2
+    dest: /home/ubuntu/.local/bin/openclaw-memory-sources
+    mode: "0755"
+  register: memory_sources_runner
+
+- name: Install the owner alert for failed copy runs
+  ansible.builtin.template:
+    src: openclaw-memory-sources-alert.sh.j2
+    dest: /home/ubuntu/.local/bin/openclaw-memory-sources-alert
+    mode: "0755"
+  vars:
+    _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+
+# A failed run (a container error, or a file that newly cannot be read) alerts the owner.
+- name: Install memory search copy units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/home/ubuntu/.config/systemd/user/{{ item }}"
+    mode: "0644"
+  loop:
+    - openclaw-memory-sources.service
+    - openclaw-memory-sources.timer
+    - openclaw-memory-sources-failed.service
+  notify: reload memory-sources units
+
+- name: Load changed memory search copy units
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the memory search copy timer
+  ansible.builtin.systemd:
+    name: openclaw-memory-sources.timer
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+
+# The first run reads every PDF and image, which can take long; it continues
+# in the background. Check it with: journalctl --user -u openclaw-memory-sources
+- name: Refresh the copies now after an image or runner change
+  ansible.builtin.command: systemctl --user start --no-block openclaw-memory-sources.service
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: memory_sources_build is changed or memory_sources_runner is changed
+
+# Per-agent paths combine with the global memory.search.extraPaths (notes, logs).
+- name: Add each agent's copy folder to its memory search paths
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    KEY="agents.entries.{{ item.agent_id }}.memory.search.extraPaths"
+    DESIRED='{{ [memory_sources_dir ~ "/" ~ item.agent_id] | to_json }}'
+    CURRENT=$(openclaw config get "$KEY" --json 2>/dev/null | sed -E '/^\[[A-Za-z][^]]*\]/d') || CURRENT=null
+    if [ "$(jq -cS . <<< "$CURRENT")" = "$(jq -cS . <<< "$DESIRED")" ]; then
+        echo "OK"
+    else
+        openclaw config set "$KEY" --json "$DESIRED"
+        echo "UPDATED: {{ item.agent_id }} memory search paths"
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ _openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  register: memory_sources_paths
+  # Memory settings apply without a gateway restart.
+  changed_when: "'UPDATED' in memory_sources_paths.stdout"

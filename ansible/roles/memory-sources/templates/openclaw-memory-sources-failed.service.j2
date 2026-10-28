@@ -1,0 +1,6 @@
+[Unit]
+Description=Tell the owner that refreshing the memory search copies failed
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/.local/bin/openclaw-memory-sources-alert

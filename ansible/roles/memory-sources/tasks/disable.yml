@@ -1,0 +1,54 @@
+---
+- name: Check for the memory search copy timer
+  ansible.builtin.stat:
+    path: /home/ubuntu/.config/systemd/user/openclaw-memory-sources.timer
+  register: memory_sources_timer
+
+- name: Stop the memory search copy timer and job
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  loop:
+    - openclaw-memory-sources.timer
+    - openclaw-memory-sources.service
+  when: memory_sources_timer.stat.exists
+
+- name: Remove the memory search copy units, runner and copies
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /home/ubuntu/.config/systemd/user/openclaw-memory-sources.timer
+    - /home/ubuntu/.config/systemd/user/openclaw-memory-sources.service
+    - /home/ubuntu/.config/systemd/user/openclaw-memory-sources-failed.service
+    - /home/ubuntu/.local/bin/openclaw-memory-sources
+    - /home/ubuntu/.local/bin/openclaw-memory-sources-alert
+    - /home/ubuntu/.local/state/openclaw-memory-sources
+    - "{{ memory_sources_dir }}"
+  notify: reload memory-sources units
+
+- name: Remove each agent's copy folder from its memory search paths
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    KEY="agents.entries.{{ item.agent_id }}.memory.search.extraPaths"
+    if OUTPUT=$(openclaw config get "$KEY" --json 2>&1); then
+        openclaw config unset "$KEY" >/dev/null
+        echo "UPDATED: {{ item.agent_id }} memory search paths removed"
+    elif grep -q 'valid but unset' <<< "$OUTPUT"; then
+        echo "OK"
+    else
+        echo "ERROR: could not read $KEY" >&2
+        exit 1
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ _openclaw_workspaces }}"
+  loop_control:
+    label: "{{ item.agent_id }}"
+  register: memory_sources_paths_removed
+  changed_when: "'UPDATED' in memory_sources_paths_removed.stdout"

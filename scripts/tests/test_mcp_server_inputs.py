@@ -43,18 +43,20 @@ class McpServerInputsTest(unittest.TestCase):
             return result, marker.exists()
 
     def test_supported_definitions_and_empty_list_pass(self):
-        for servers in ([], [{'name': 'github', 'type': 'github', 'agent_id': 'main', 'token_var': 'github_token'},
-                            {'name': 'qmd', 'type': 'qmd', 'agent_id': 'main'}]):
+        for servers in ([], [{'name': 'github', 'type': 'github', 'agent_id': 'main', 'token_var': 'github_token'}]):
             with self.subTest(servers=servers):
                 result, started = self.run_validation(servers)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertTrue(started)
 
     def test_unsupported_type_fails_before_roles_start(self):
-        result, started = self.run_validation([{'name': 'old', 'type': 'retired', 'agent_id': 'main'}])
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(started)
-        self.assertIn('Remove unsupported server types', result.stdout + result.stderr)
+        # qmd was removed in favour of built-in memory search; stale overrides must fail loudly.
+        for server_type in ('retired', 'qmd'):
+            with self.subTest(server_type=server_type):
+                result, started = self.run_validation([{'name': 'old', 'type': server_type, 'agent_id': 'main'}])
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(started)
+                self.assertIn('Remove unsupported server types', result.stdout + result.stderr)
 
     def test_legacy_shared_manual_shape_has_a_clear_error(self):
         result, started = self.run_validation([{'name': 'old', 'type': 'retired'}])

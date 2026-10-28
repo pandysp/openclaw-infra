@@ -151,7 +151,7 @@
 # VPS never reads it. Everything Mac-shaped is nested under the single `mac:` key
 # so it stays one skippable block no matter how many knobs get added later.
 #
-# Path & toolchain tunables (workspace dir, Node pin, GitHub org, qmd binary) are
+# Path & toolchain tunables (workspace dir, Node pin, GitHub org, Mac qmd binary) are
 # NOT here — they live in scripts/lib/mac-config.sh as env-overridable defaults.
 # This block is per-deployment POLICY only.
 #

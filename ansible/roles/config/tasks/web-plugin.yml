@@ -17,18 +17,18 @@
   delay: 5
   changed_when: false
 
-# Search/fetch providers are official external plugins. Keep their SDK in
+# Search, fetch and embedding providers are official external plugins. Keep their SDK in
 # lockstep with core; newer packages can require a newer plugin API.
-- name: "Install compatible {{ web_plugin }} web provider"
+- name: "Install compatible {{ web_plugin.id }} provider"
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR=/run/user/1000
-    CURRENT=$(openclaw plugins list --json | jq -er --arg id "{{ web_plugin }}" '
+    CURRENT=$(openclaw plugins list --json | jq -er --arg id "{{ web_plugin.id }}" '
       .plugins | if type != "array" then error("Missing plugin inventory") else . end |
       map(select(.id == $id)) | .[0].version // ""')
     if [ "$CURRENT" != "{{ openclaw_version }}" ]; then
-        openclaw plugins install --pin --force "@openclaw/{{ web_plugin }}-plugin@{{ openclaw_version }}"
-        echo "INSTALLED: {{ web_plugin }}"
+        openclaw plugins install --pin --force "{{ web_plugin.package }}@{{ openclaw_version }}"
+        echo "INSTALLED: {{ web_plugin.id }}"
     else
         echo "OK"
     fi

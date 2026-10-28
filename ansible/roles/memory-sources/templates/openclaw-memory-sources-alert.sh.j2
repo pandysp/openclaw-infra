@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Tell the owner that the memory search copy job failed (OnFailure of its unit).
+# The job runs every few minutes: send each distinct failure once, repeats once a day.
+set -euo pipefail
+state=/home/ubuntu/.local/state/openclaw-memory-sources
+mkdir -p "$state"
+problems=$(grep -E '(UNREADABLE|ERROR)' "$state/last-run.log" 2>/dev/null | sort -u || true)
+[ -n "$problems" ] || problems="the run did not finish"
+fingerprint=$(printf '%s' "$problems" | sha256sum | cut -d' ' -f1)
+if [ "$(cat "$state/alerted" 2>/dev/null || true)" = "$fingerprint" ] \
+    && [ -n "$(find "$state/alerted" -mmin -1440)" ]; then
+    exit 0
+fi
+count=$(printf '%s\n' "$problems" | wc -l)
+/home/ubuntu/.npm-global/bin/openclaw message send --channel {{ _owner.deliver_channel }} --target {{ _owner.deliver_to }} \
+    --message "Memory search copies failed ($count problem lines): some workspace files may not be searchable. Details: journalctl --user -u openclaw-memory-sources"
+printf '%s\n' "$fingerprint" > "$state/alerted"

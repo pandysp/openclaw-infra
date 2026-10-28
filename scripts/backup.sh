@@ -79,14 +79,16 @@ set -e
 BACKUP_TMP=$(mktemp -d)
 trap 'rm -rf "$BACKUP_TMP"' EXIT
 
-# Copy .openclaw to temp dir, excluding workspaces and large caches
+# Copy .openclaw to temp dir, excluding workspaces, the sandboxes' Mac key copies
+# and the memory search copies (text extracted from private workspace files)
 echo "Copying config and sessions (excluding git-synced workspaces)..."
 rsync -a \
     --exclude='workspace' \
     --exclude='workspace-*' \
     --exclude='agents/*/workspace' \
     --exclude='extensions/*/node_modules' \
-    --exclude='qmd/*/embeddings' \
+    --exclude='sandbox-ssh' \
+    --exclude='memory-sources' \
     ~/.openclaw/ "$BACKUP_TMP/openclaw-config/"
 
 # Redact tokens from the backup copy
@@ -101,15 +103,21 @@ except (json.JSONDecodeError, IOError) as e:
     print(f'ERROR: Could not parse openclaw.json for redaction: {e}', file=sys.stderr)
     print('Aborting — refusing to create backup with unredacted secrets.', file=sys.stderr)
     sys.exit(1)
-# Redact all known sensitive fields
-for path in [('gateway','auth','token'), ('gateway','remote','token'),
-             ('channels','telegram','botToken'), ('channels','whatsapp','credentials'),
-             ('tools','web','search','grok','apiKey')]:
-    obj = c
-    for key in path[:-1]:
-        obj = obj.get(key, {})
-    if path[-1] in obj:
-        obj[path[-1]] = '<REDACTED>'
+# Redact every credential-shaped field wherever it sits (gateway and bot tokens,
+# provider and memory search API keys, MCP server env such as GitHub tokens).
+import re
+secret = re.compile(r'(token|apikey|api_key|secret|password|credentials)$', re.I)
+def redact(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if secret.search(key) and isinstance(value, (str, dict, list)) and value:
+                node[key] = '<REDACTED>'
+            else:
+                redact(value)
+    elif isinstance(node, list):
+        for value in node:
+            redact(value)
+redact(c)
 with open('$BACKUP_TMP/openclaw-config/openclaw.json', 'w') as f:
     json.dump(c, f, indent=2)
 "

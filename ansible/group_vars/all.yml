@@ -50,9 +50,12 @@ openclaw_custom_models:
           input: ["text", "image"]
           contextWindow: 200000
           maxTokens: 128000
-# OpenClaw 2026.9.3+ supports Node >=24.16 <25 or >=26.1 (Node 26 recommended).
+# OpenClaw 2026.9.35 and 2026.10.6+ require Node >=24.22.1 <25 or >=26.12.1 (patched TLS roots).
+# Provisioning's dist-upgrade installs the newest NodeSource build; the system role
+# then refuses a Node older than nodejs_min_version.
 nodejs_major_version: 26
-openclaw_version: "2026.9.9"
+nodejs_min_version: "26.12.1"
+openclaw_version: "2026.10.8"
 # Host Claude Code CLI (@anthropic-ai/claude-code) for the claude-cli model runtime.
 # Update intentionally.
 claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
@@ -78,15 +81,24 @@ openclaw_claude_cli_mcp_target: /home/ubuntu/.openclaw/claude-cli-mcp-target.jso
 # only for agents with `mac_access: true` in openclaw_agents.
 openclaw_claude_cli_mac_host: ""
 openclaw_claude_cli_mac_user: ""
-# Inherited variables only; provider keys stay with the host's OpenClaw tools.
+# Per-agent copies of the Mac key, pin and SSH config, mounted at ~/.ssh in the
+# sandboxes of agents with Mac access (OpenClaw refuses binds from the host's ~/.ssh).
+sandbox_ssh_dir: /home/ubuntu/.openclaw/sandbox-ssh
+# Skill credentials for scripts: passed to Claude containers and, since 2026.10 (where
+# skill scripts run through OpenClaw's sandboxed exec), to the OpenClaw sandbox as
+# references to the gateway environment. Only names with a configured value are passed.
 openclaw_claude_cli_skill_env:
   - GROQ_API_KEY
   - GEMINI_API_KEY
   - OPENAI_API_KEY
   - NOTION_API_TOKEN
+# Claude Code helpers kept on OpenClaw-managed Claude turns (2026.10+ accepts Agent and
+# Workflow only). They replace OpenClaw's sessions_spawn, which 2026.10.8 refuses for
+# sandboxed sessions on the claude-cli runtime.
+openclaw_claude_managed_native_tools: ["Agent", "Workflow"]
 # Bump only after reviewing the versioned heartbeat + cron contracts documented
 # in scripts/check-openclaw-contract.sh. Provisioning refuses scheduler changes on a mismatch.
-openclaw_docs_reviewed_version: "2026.9.9"
+openclaw_docs_reviewed_version: "2026.10.8"
 # Agent existence never opts into autonomous work. Deployments must explicitly
 # enable scheduled automation per agent in group_vars/openclaw.yml.
 openclaw_scheduled_automation_default: false
@@ -164,27 +176,11 @@ force_sandbox_rebuild: false
 # Force plugin reinstall (override with -e force_plugin_reinstall=true)
 force_plugin_reinstall: false
 
-# Force qmd reindex (override with -e force_qmd_reindex=true)
-force_qmd_reindex: false
-
-# qmd semantic search settings
-# @tobilu/qmd published on npm — pin with semver
-qmd_version: "2.0.1"
-# Base port for qmd HTTP daemons (one per agent, assigned by position in qmd_workspaces).
-# Port N+0 = first agent, N+1 = second, etc. Re-run --tags qmd,plugins if agents change.
-qmd_http_base_port: 8191
-# qmd collections for search. Paths are relative to the workspace root.
-# qmd silently skips missing paths. Override in openclaw.yml for deployment-specific collections.
-qmd_collections:
-  - name: notes
-    path: "notes"
-    pattern: "**/*.{md,txt,csv}"
-  - name: logs
-    path: "logs"
-    pattern: "**/*.md"
-  - name: extracted-content
-    path: ".scripts/extract-cache"
-    pattern: "*.json"
+# Memory search reads Markdown only. The memory-sources role writes Markdown copies of
+# notes/**/*.{txt,csv} and of the text in PDFs, images, .docx and .xlsx files here
+# (one folder per agent, outside the workspaces) and adds them to each agent's search paths.
+memory_sources_dir: /home/ubuntu/.openclaw/memory-sources
+memory_sources_interval: 2min
 
 # Agent definitions — single-agent default for new deployments.
 # Override in openclaw.yml for multi-agent setups (see openclaw.yml.example).
@@ -233,8 +229,6 @@ openclaw_mcp_adapter:
 openclaw_mcp_server_types:
   - type: "github"
     name_prefix: "github"
-  - type: "qmd"
-    name_prefix: "qmd"
 
 # Obsidian Headless Sync (obsidian-headless npm package)
 # Runs per-workspace sync daemons for near-real-time Obsidian Sync cloud access.

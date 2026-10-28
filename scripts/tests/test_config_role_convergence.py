@@ -418,6 +418,39 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                     self.assertEqual(writes['tools.media.models'][0]['provider'], 'elevenlabs')
                 self.assertNotIn('fixture-elevenlabs-key', (root / 'store.json').read_text())
 
+    def test_skill_keys_reach_the_sandbox_only_as_gateway_environment_references(self):
+        # Since 2026.10 skill scripts run through OpenClaw's sandboxed exec, not Claude's Bash.
+        for keys in ({}, {'groq_api_key': 'fixture-groq-key', 'gemini_api_key': 'fixture-gemini-key'}):
+            with self.subTest(keys=sorted(keys)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                result = self.run_task([self.temp_files, self.configure], root, keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                store = json.loads((root / 'store.json').read_text())
+                self.assertEqual(store['agents']['defaults']['sandbox']['docker']['env'],
+                                 {name.upper(): '${' + name.upper() + '}' for name in keys})
+                # Groq has no provider config: its key must not reach openclaw.json at all.
+                self.assertNotIn('fixture-groq-key', (root / 'store.json').read_text())
+                self.assertNotIn('fixture-', json.dumps(store['agents']))
+                self.assertEqual(store['plugins']['entries']['anthropic']['config']['managedNativeTools'],
+                                 {'default': ['Agent', 'Workflow']})
+
+    def test_a_removed_skill_key_leaves_the_sandbox_and_the_config_converges(self):
+        # config patch merges objects: without replacing the env map a removed key would stay
+        # (as an unresolvable reference) and every run would stop the gateway again.
+        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+            root = Path(tmp)
+            tasks = [self.temp_files, self.configure]
+            both = {'groq_api_key': 'fixture-groq-key', 'gemini_api_key': 'fixture-gemini-key'}
+            self.assertEqual(self.run_task(tasks, root, both).returncode, 0)
+            result = self.run_task(tasks, root, {'groq_api_key': 'fixture-groq-key'})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            store = json.loads((root / 'store.json').read_text())
+            self.assertEqual(store['agents']['defaults']['sandbox']['docker']['env'], {'GROQ_API_KEY': '${GROQ_API_KEY}'})
+            (root / 'writes').unlink()
+            result = self.run_task(tasks, root, {'groq_api_key': 'fixture-groq-key'})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / 'writes').exists(), 'an unchanged config was written again')
+
     def test_web_credentials_reach_gateway_environment_but_not_container_allowlist(self):
         # Run only the directory and file tasks; systemd is outside this fixture.
         tasks = [task for task in self.skill_environment
@@ -437,6 +470,8 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                         env_file = root / 'config/openclaw/claude-skills.env'
                         values = dict(line.split('=', 1) for line in shlex.split(env_file.read_text()))
                         self.assertEqual(values[env_name], key)
+                        for name in self.defaults['openclaw_claude_cli_skill_env']:
+                            self.assertIn(name, values, 'a sandbox ${NAME} reference would not resolve')
                         self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
                         self.assertEqual(env_file.parent.stat().st_mode & 0o777, 0o700)
                         self.assertNotIn(f'fixture-{provider}-key', result.stdout + result.stderr)
@@ -500,7 +535,7 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertEqual(str(store['plugins']['entries']['firecrawl']['enabled']).lower(), 'true')
             self.assertNotIn('apiKey', store['plugins']['entries']['firecrawl'].get('config', {}).get('webFetch', {}))
             # Firecrawl stays the fetch fallback only; agents cannot call it directly.
-            self.assertEqual(store['tools']['deny'], ['firecrawl_search', 'firecrawl_scrape'])
+            self.assertEqual(store['tools']['deny'], ['sessions_spawn', 'firecrawl_search', 'firecrawl_scrape'])
             (root / 'writes').unlink()
             second = self.run_task(tasks, root, extra)
             self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
@@ -512,7 +547,8 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             self.assertNotIn('provider', store['tools']['web']['search'])
             self.assertEqual(str(store['tools']['web']['search']['enabled']).lower(), 'false')
             self.assertNotIn('provider', store['tools']['web']['fetch'])
-            self.assertNotIn('deny', store['tools'])
+            # sessions_spawn stays denied: 2026.10.8 refuses it here (Claude's Agent helper replaces it).
+            self.assertEqual(store['tools']['deny'], ['sessions_spawn'])
             # Disabling the hosted fallback must not disable ordinary page reads.
             self.assertEqual(str(store['tools']['web']['fetch']['enabled']).lower(), 'true')
             for plugin in ('exa', 'firecrawl'):

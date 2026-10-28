@@ -1,0 +1,9 @@
+Host {{ openclaw_claude_cli_mac_host }}
+    User {{ openclaw_claude_cli_mac_user }}
+    IdentityFile ~/.ssh/id_ed25519_openclaw_mac
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.ssh/known_hosts_openclaw_mac
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ForwardAgent no
+    ConnectTimeout 10

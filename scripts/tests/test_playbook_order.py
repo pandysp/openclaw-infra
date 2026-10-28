@@ -44,6 +44,14 @@ class PlaybookOrderTest(unittest.TestCase):
         self.assertIn('telegram', cron['ansible.builtin.include_role']['apply']['tags'])
 
 
+    def test_memory_sources_run_after_agents_and_before_sandboxes(self):
+        # Per-agent memory search paths need the agents; a fresh host has none before the agents role.
+        play, = load_yaml(PLAYBOOK)
+        roles = [r['role'] if isinstance(r, dict) else r for r in next(p for p in play if p.get('roles'))['roles']]
+        self.assertLess(roles.index('agents'), roles.index('memory-sources'))
+        self.assertLess(roles.index('memory-sources'), roles.index('sandbox'))
+        self.assertNotIn('qmd', roles)
+
     def test_a_new_openclaw_never_starts_without_the_container_launcher(self):
         # `openclaw doctor --fix` (install.yml) and `openclaw daemon install` start the gateway;
         # without the PATH drop-in it runs the real Claude Code on the host (both seen on the test server).

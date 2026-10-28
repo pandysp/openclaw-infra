@@ -1,0 +1,7 @@
+---
+- name: reload memory-sources units
+  ansible.builtin.systemd:
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
