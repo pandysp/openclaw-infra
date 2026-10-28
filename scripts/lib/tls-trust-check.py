@@ -199,23 +199,34 @@ def check_images(probe_dir):
             completed = run(['docker', 'run', '--rm', '--network', 'bridge', '-v', f'{probe_dir}:/probe:ro',
                              '--entrypoint', command[0], image, *command[1:], *UNSAFE, *HEALTHY])
             report(f'image {image} {runtime}', completed)
-    containers = run(['docker', 'ps', '--no-trunc', '--format', '{{.ID}} {{.Image}} {{.Names}}'])
-    if containers.returncode:
-        return fail(f'containers: {containers.stderr.strip()}')
+    # By the image each container was created from (.Config.Image): `docker ps` shows a
+    # bare image ID instead of the name once the tag has moved to a newer build.
+    ids = run(['docker', 'ps', '-q', '--no-trunc'])
+    if ids.returncode:
+        return fail(f'containers: {ids.stderr.strip()}')
     current = {image: run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image]).stdout.strip() for image in IMAGES}
-    ours = [line.split() for line in containers.stdout.splitlines() if line.split()[1] in IMAGES]
-    stale = [name for container, image, name in ours
-             if run(['docker', 'inspect', '--format', '{{.Image}}', container]).stdout.strip() != current[image]]
+    ours, stale = 0, []
+    if ids.stdout.split():
+        inspect = run(['docker', 'inspect', '--format', '{{.Name}} {{.Config.Image}} {{.Image}}', *ids.stdout.split()])
+        if inspect.returncode:
+            return fail(f'containers: {inspect.stderr.strip()}')
+        for name, image, image_id in (line.split() for line in inspect.stdout.splitlines()):
+            if image in IMAGES:
+                ours += 1
+                if image_id != current[image]:
+                    stale.append(f'{name.lstrip("/")} ({image})')
     if stale:
         fail(f'containers on an older image build (restart the gateway to recreate them): {", ".join(stale)}')
     else:
-        print(f'PASS running containers: {len(ours)} from OpenClaw images, all on the current builds', flush=True)
+        print(f'PASS running containers: {ours} from OpenClaw images, all on the current builds', flush=True)
 
 
 def main(args):
     if not args:
         raise SystemExit(__doc__)
     node_min, sections = args[0], args[1:] or ['host', 'images']
+    if unknown := set(sections) - {'host', 'images'}:
+        raise SystemExit(f'ERROR: unknown section(s) {", ".join(sorted(unknown))}; use host and/or images')
     with tempfile.TemporaryDirectory(prefix='tls-trust-') as probe_dir:
         os.chmod(probe_dir, 0o755)  # readable by the images' UID 1000 users
         for name, content in (('probe.js', NODE_PROBE), ('probe.py', PYTHON_PROBE),
