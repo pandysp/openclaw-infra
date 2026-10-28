@@ -1,0 +1,28 @@
+# Weekly early warning: does OpenClaw main still document the scheduler
+# contract this repo relies on (scripts/check-openclaw-contract.sh)?
+#
+# Upstream main changes independently of this repo, so this is not a PR gate
+# (lint.yml checks the pinned version's docs). A red run here means: review the
+# contract before the next OpenClaw upgrade. GitHub notifies on failed
+# scheduled runs.
+
+name: Upstream contract
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check OpenClaw main still documents the scheduler contract
+        run: ./scripts/check-openclaw-contract.sh --latest-docs
