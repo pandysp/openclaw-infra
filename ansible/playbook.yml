@@ -180,7 +180,7 @@
       ansible.builtin.assert:
         that:
           - (_openclaw_mcp_servers | type_debug) == 'list'
-          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github', 'qmd', 'playwright']) | list | length) == (_openclaw_mcp_servers | length)
+          - (_openclaw_mcp_servers | selectattr('type', 'defined') | selectattr('type', 'in', ['github', 'playwright']) | list | length) == (_openclaw_mcp_servers | length)
           - (_openclaw_mcp_servers | selectattr('name', 'defined') | list | length) == (_openclaw_mcp_servers | length)
           - (_openclaw_mcp_servers | selectattr('agent_id', 'defined') | selectattr('agent_id', 'in', openclaw_agents | map(attribute='id') | list) | list | length) == (_openclaw_mcp_servers | length)
           - >-
@@ -189,14 +189,14 @@
              | select('string') | reject('equalto', '') | list | length)
             == (_openclaw_mcp_servers | selectattr('type', 'equalto', 'github') | list | length)
         fail_msg: >-
-          MCP servers must use type github, qmd or playwright, have a name, and have an
+          MCP servers must use type github or playwright, have a name, and have an
           agent_id from openclaw_agents. GitHub definitions also need a nonempty
           string token_var. Remove unsupported server types and
           update manual openclaw_mcp_servers overrides before provisioning.
       tags: [always]
 
     # Per-agent MCP tool scoping: each agent denies every other agent's servers.
-    # Glob patterns use server name + "_*" (e.g. "github-manon_*", "qmd-tl_*").
+    # Glob patterns use server name + "_*" (e.g. "github-manon_*", "playwright-tl_*").
     # Safe because toolPrefix uses "_" while server names use "-" as separator,
     # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
     # The agents role writes these (adding servers still registered), the plugins
@@ -302,24 +302,6 @@
              | selectattr('repo_url', 'eq', '')
              | map(attribute='agent_id')
              | list }}
-      tags: [always]
-
-    - name: Initialize qmd_workspaces list
-      ansible.builtin.set_fact:
-        qmd_workspaces: []
-      tags: [always]
-
-    - name: Derive qmd_workspaces (agents with workspace repos + assigned HTTP port + server name)
-      ansible.builtin.set_fact:
-        qmd_workspaces: >-
-          {{ qmd_workspaces + [item | combine({
-               'port': qmd_http_base_port | int + _idx,
-               'server_name': 'qmd' if item.agent_id == 'main' else 'qmd-' ~ item.agent_id
-             })] }}
-      loop: "{{ _openclaw_workspaces | selectattr('repo_url', 'ne', '') | list }}"
-      loop_control:
-        index_var: _idx
-        label: "{{ item.agent_id }}"
       tags: [always]
 
     # Playwright browsers: one /29 per agent, chosen by a hash of the agent ID so an
@@ -441,9 +423,8 @@
     - role: obsidian-headless
       tags: [obsidian-headless]
       when: obsidian_headless_enabled | default(false) | bool
-    # qmd after obsidian-headless — needs workspace dirs from agents role, before plugins registers MCP servers.
-    - { role: qmd,       tags: [qmd],       when: openclaw_mcp_adapter is defined }
-    # plugins after qmd — qmd binary must exist for MCP server registration + deny rules need agents.
+    # memory-sources after agents: it adds per-agent memory search paths.
+    - { role: memory-sources, tags: [memory-sources] }
     # Before plugins, which registers the browsers' MCP URLs with the adapter.
     - { role: playwright, tags: [playwright] }
     - { role: plugins,   tags: [plugins],   when: openclaw_mcp_adapter is defined }
@@ -552,11 +533,11 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/1000"
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
     - name: Apply pending gateway restarts before verification
       ansible.builtin.meta: flush_handlers
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
     - name: Verify restarted gateway health
       ansible.builtin.command: openclaw health --json
@@ -571,7 +552,7 @@
       delay: 5
       # Not hidden: the health report carries no secrets, and a failure must show which part is unhealthy.
       when: not ansible_check_mode
-      tags: [docker, config, openclaw, sandbox, agents, plugins, qmd, whatsapp, discord, claude-cli]
+      tags: [docker, config, openclaw, sandbox, agents, plugins, whatsapp, discord, claude-cli]
 
     # Since 2026.9.8 a job's delivery channel must already be loaded, so declared jobs are
     # reconciled only after every channel role, the sensitive-key injection (Discord token)

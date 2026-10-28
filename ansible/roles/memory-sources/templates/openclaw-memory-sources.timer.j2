@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh memory search copies every {{ memory_sources_interval }}
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec={{ memory_sources_interval }}
+
+[Install]
+WantedBy=timers.target

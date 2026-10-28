@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Refresh each agent's Markdown copies for memory search (ansible/roles/memory-sources).
+# One throwaway container per agent: no network, only that workspace (read-only) and
+# that agent's copy folder are mounted, so a hostile file can reach nothing else.
+set -uo pipefail
+state=/home/ubuntu/.local/state/openclaw-memory-sources
+mkdir -p "$state"
+log="$state/last-run.log"
+: > "$log"
+# A stopped or timed-out run leaves its container running under dockerd; it would
+# block this run's container name and keep writing.
+docker ps -aq --filter 'name=^openclaw-memory-sources-' | xargs -r docker rm -f >/dev/null
+status=0
+{% for workspace in _openclaw_workspaces %}
+if [ -d {{ workspace.workspace_dir | quote }} ]; then
+    docker run --rm --init --name openclaw-memory-sources-{{ workspace.agent_id }} \
+        --network none --read-only --security-opt no-new-privileges --cap-drop ALL \
+        --pids-limit 128 --memory 1g --cpus 1 \
+        --tmpfs /tmp:rw,nosuid,size=512m \
+        --mount type=bind,source={{ workspace.workspace_dir }},target=/source,readonly \
+        --mount type=bind,source={{ memory_sources_dir }}/{{ workspace.agent_id }},target=/out \
+        openclaw-memory-sources:latest 2>&1 | sed 's/^/{{ workspace.agent_id }}: /' | tee -a "$log"
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] || { echo "ERROR: {{ workspace.agent_id }} copies failed (exit $rc)" | tee -a "$log" >&2; status=1; }
+fi
+{% endfor %}
+exit "$status"

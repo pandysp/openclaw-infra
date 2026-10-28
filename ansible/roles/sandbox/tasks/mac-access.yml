@@ -1,0 +1,109 @@
+---
+# Since 2026.10, Claude turns run shell commands through OpenClaw's sandboxed exec
+# instead of Claude's own Bash. Agents with `mac_access: true` get the dedicated Mac
+# key, host-key pin and SSH config at ~/.ssh in their own sandbox, plus the Mac's
+# tailnet address. OpenClaw refuses binds from the host's ~/.ssh, so the files are
+# copied to one folder per agent. Other agents' sandboxes get nothing.
+
+- name: Select the agents with Mac access
+  ansible.builtin.set_fact:
+    _sandbox_mac_agents: >-
+      {{ (openclaw_claude_cli_mac_host | length > 0)
+         | ternary(openclaw_agents | selectattr('mac_access', 'defined') | selectattr('mac_access', 'equalto', true)
+                   | map(attribute='id') | list, []) }}
+
+- name: Require the Mac account whenever a Mac host is set
+  ansible.builtin.assert:
+    that: openclaw_claude_cli_mac_host | length == 0 or openclaw_claude_cli_mac_user | length > 0
+    fail_msg: Set openclaw_claude_cli_mac_user to the Mac account, or leave openclaw_claude_cli_mac_host empty.
+
+- name: Bootstrap the approved Mac SSH identity and host pin
+  ansible.builtin.include_role:
+    name: claude-cli
+    tasks_from: mac-ssh.yml
+  when: _sandbox_mac_agents | length > 0
+
+- name: Resolve the Mac's tailnet address for the sandboxes
+  ansible.builtin.command: getent ahostsv4 {{ openclaw_claude_cli_mac_host }}
+  register: sandbox_mac_address
+  changed_when: false
+  check_mode: false
+  when: _sandbox_mac_agents | length > 0
+
+- name: Create the per-agent sandbox SSH folders
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop: "{{ [sandbox_ssh_dir] + (_sandbox_mac_agents | map('regex_replace', '^', sandbox_ssh_dir ~ '/') | list) }}"
+
+- name: Install the Mac key and host pin for sandboxes with Mac access
+  ansible.builtin.copy:
+    src: "/home/ubuntu/.ssh/{{ item.1.source }}"
+    dest: "{{ sandbox_ssh_dir }}/{{ item.0 }}/{{ item.1.dest }}"
+    remote_src: true
+    mode: "0600"
+  loop: >-
+    {{ _sandbox_mac_agents | product([
+         {'source': 'id_ed25519_openclaw_mac_air', 'dest': 'id_ed25519_openclaw_mac'},
+         {'source': 'known_hosts_openclaw_mac_air', 'dest': 'known_hosts_openclaw_mac'}]) | list }}
+  loop_control:
+    label: "{{ item.0 }}: {{ item.1.dest }}"
+  no_log: true
+
+- name: Install the sandbox SSH configuration for the Mac
+  ansible.builtin.template:
+    src: mac-ssh-config.j2
+    dest: "{{ sandbox_ssh_dir }}/{{ item }}/config"
+    mode: "0600"
+  loop: "{{ _sandbox_mac_agents }}"
+
+- name: Mount Mac SSH only into the sandboxes of agents with Mac access
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    ID={{ item.id | quote }}
+    DESIRED={{ _desired | to_json | quote }}
+    CURRENT=$(jq -cS --arg id "$ID" '.agents.entries[$id].sandbox.docker // {} | {binds, extraHosts}' /home/ubuntu/.openclaw/openclaw.json)
+    if [ "$CURRENT" = "$(jq -cS . <<< "$DESIRED")" ]; then
+        echo "OK"
+        exit 0
+    fi
+    for key in binds extraHosts; do
+        VALUE=$(jq -c --arg key "$key" '.[$key]' <<< "$DESIRED")
+        if [ "$VALUE" = null ]; then
+            # unset fails on a missing path; only one of the two may be left after a manual edit.
+            [ "$(jq -c --arg key "$key" '.[$key]' <<< "$CURRENT")" = null ] && continue
+            openclaw config unset "agents.entries.$ID.sandbox.docker.$key" >/dev/null
+        else
+            openclaw config set "agents.entries.$ID.sandbox.docker.$key" --json "$VALUE" >/dev/null
+        fi
+    done
+    echo "UPDATED: $ID sandbox Mac access"
+  args:
+    executable: /bin/bash
+  vars:
+    _desired: >-
+      {{ {'binds': [sandbox_ssh_dir ~ '/' ~ item.id ~ ':/home/node/.ssh:ro'],
+          'extraHosts': [openclaw_claude_cli_mac_host ~ ':' ~ (sandbox_mac_address.stdout_lines[0].split() | first)]}
+         if item.id in _sandbox_mac_agents else {'binds': none, 'extraHosts': none} }}
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: sandbox_mac_config
+  changed_when: "'UPDATED' in sandbox_mac_config.stdout"
+
+# After the mounts are gone, so no sandbox is created against a missing folder.
+- name: Find sandbox SSH folders
+  ansible.builtin.find:
+    paths: "{{ sandbox_ssh_dir }}"
+    file_type: directory
+  register: sandbox_ssh_folders
+
+- name: Remove the Mac key from agents without Mac access
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ sandbox_ssh_folders.files | rejectattr('path', 'in', _sandbox_mac_agents | map('regex_replace', '^', sandbox_ssh_dir ~ '/') | list) | list }}"
+  loop_control:
+    label: "{{ item.path | basename }}"

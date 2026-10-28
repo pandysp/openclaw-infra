@@ -29,7 +29,7 @@ class SmokeTests(unittest.TestCase):
                           'alsoAllow': ['group:plugins'] if case == 'unsafe_tool_allowlist' else []},
                 'agents': {'defaults': {'model': {'primary': 'anthropic/wrong-model' if case == 'wrong_configured_model' else 'anthropic/claude-sonnet-4-6'},
                             'models': {'anthropic/claude-sonnet-4-6': {'agentRuntime': {'id': 'claude-cli'}}},
-                            'workspace': '/home/ubuntu/.openclaw/workspace'},
+                            'workspace': str(root / 'workspace')},
                            'entries': {'main': {}}},
                 'plugins': {'entries': {'openclaw-mcp-adapter': {'config': {'servers': [
                     {'name': 'github', 'env': {'GITHUB_PERSONAL_ACCESS_TOKEN': 'fixture-secret-pat'}}
@@ -90,16 +90,26 @@ raise SystemExit(subprocess.run(shlex.split(sys.argv[3]), input=sys.stdin.read()
                 'hostname': "print('openclaw-staging-123-1')\n",
                 'systemctl': '''import os,pathlib,shutil,sys
 root=pathlib.Path(os.environ['HOME'])
-assert sys.argv[1:]==['--user','restart','openclaw-gateway'], sys.argv
 assert os.environ.get('XDG_RUNTIME_DIR','').startswith('/run/user/')
+if sys.argv[1:]==['--user','start','openclaw-memory-sources.service']:
+ # Fixture copy job: mirrors notes/*.txt like the memory-sources container.
+ notes=root/'workspace/notes';copies=root/'.openclaw/memory-sources/main/notes';copies.mkdir(parents=True,exist_ok=True)
+ if (root/'fixture-case').read_text()!='memory_copy_missing':
+  for source in notes.glob('*.txt'):(copies/(source.name+'.md')).write_text('# notes/'+source.name+'\\n\\n'+source.read_text())
+ for copy in copies.glob('*.md'):
+  if not (notes/copy.name[:-3]).exists():copy.unlink()
+ raise SystemExit(0)
+assert sys.argv[1:]==['--user','restart','openclaw-gateway'], sys.argv
 shutil.copyfile(root/'.openclaw/openclaw.json', root/'gateway-snapshot.json')
 (root/'gateway-restarting').touch()
 with (root/'restarts').open('a') as f: f.write('restart\\n')
 ''',
                 '.openclaw/claude-cli-container': '''import json,os,pathlib,sys,uuid
 # Fixture launcher: logs the container it would start and writes Claude's transcript.
+import re
 home=pathlib.Path(os.environ['HOME']);session=str(uuid.uuid4())
-transcripts=home/'.claude/projects/-home-ubuntu--openclaw-workspace';transcripts.mkdir(parents=True,exist_ok=True)
+workspace=json.loads((home/'.openclaw/openclaw.json').read_text())['agents']['defaults']['workspace']
+transcripts=home/'.claude/projects'/re.sub('[^A-Za-z0-9]','-',workspace);transcripts.mkdir(parents=True,exist_ok=True)
 (transcripts/(session+'.jsonl')).write_text(json.dumps({'message':sys.argv[-1]})+'\\n')
 if (home/'fixture-case').read_text()!='no_container_launch':
  with (home/'.openclaw/claude-cli-invocations.jsonl').open('a') as f:
@@ -116,6 +126,20 @@ assert 'OPENCLAW_PROFILE' not in os.environ
 assert 'fixture-secret' not in ' '.join(args), 'Secret reached command arguments'
 if args[:1]==['devices']:
  raise SystemExit('A local token-authenticated CLI needs no pairing')
+elif args==['memory','status','--agent','main','--deep','--json']:
+ print('[memory] status log line before JSON');print(json.dumps([{'agentId':'main','status':{'provider':'deepinfra','model':'google/embeddinggemma-2'},'embeddingProbe':{'ok':True}}]))
+elif args==['memory','index','--agent','main']:
+ print('[memory] indexed')
+elif args[:3]==['memory','search','--query']:
+ assert args[4:]==['--agent','main','--max-results','5','--json'], args
+ hits=[{'path':str(copy),'snippet':copy.read_text()} for copy in (root/'.openclaw/memory-sources/main/notes').glob('*.md') if args[3] in copy.read_text()]
+ print(json.dumps({'results':[] if mode=='search_misses' else hits}))
+elif args[:3]==['gateway','call','agent'] and 'phoenix-tool-' in args[args.index('--params')+1]:
+ config=json.loads((root/'gateway-snapshot.json').read_text())
+ assert '*' not in config['tools'].get('deny',[]), 'Tool turn ran with tools disabled'
+ params=json.loads(args[args.index('--params')+1]);assert params['deliver'] is False
+ assert 'github_get_file_contents' in params['message'] and 'private-repo' in params['message']
+ print(json.dumps({'status':'ok','result':{'payloads':[{'text':'LICENSE' if mode=='tool_turn_wrong' else 'README.md'}]}}))
 elif args[:3]==['gateway','call','agent']:
  config=json.loads((root/'gateway-snapshot.json').read_text())
  assert config['tools']['deny']==['*'], 'Inference still has tools'
@@ -145,6 +169,8 @@ else:raise AssertionError('Unexpected command')
             result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True, timeout=15)
             self.assertNotIn('fixture-secret', result.stdout + result.stderr)
             result.ssh_called = (root / 'ssh-called').exists()
+            # The test note and its copy never outlive the smoke test, even when it fails.
+            self.assertEqual(list((root / 'workspace/notes').glob('phoenix-*')) if (root / 'workspace/notes').exists() else [], [])
             result.cli_called = (root / 'cli-called').exists()
             restored = json.loads((state/'openclaw.json').read_text())
             self.assertEqual(restored['tools'], original_config['tools'])
@@ -168,7 +194,8 @@ else:raise AssertionError('Unexpected command')
                      'no_auth', 'empty_gateway_token', 'unauthenticated_gateway_allowed',
                      'embedded_fallback', 'no_model_usage', 'invalid_usage', 'public_repo',
                      'anonymous_allowed', 'mcp_failure', 'mcp_error_result', 'invalid_mcp_json', 'tools_not_disabled',
-                     'no_container_launch', 'policy_timeout_forever', 'policy_abort'):
+                     'no_container_launch', 'policy_timeout_forever', 'policy_abort',
+                     'memory_copy_missing', 'search_misses', 'tool_turn_wrong'):
             with self.subTest(case=case):
                 result = self.run_smoke(case)
                 self.assertNotEqual(result.returncode, 0)

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Markdown copies of workspace files for OpenClaw memory search
+OnFailure=openclaw-memory-sources-failed.service
+
+[Service]
+Type=oneshot
+# The first run reads every PDF and image; later runs only changed files.
+TimeoutStartSec=6h
+ExecStart=/home/ubuntu/.local/bin/openclaw-memory-sources
+# A stop or timeout kills only the docker client; remove the containers themselves.
+ExecStopPost=/bin/sh -c "docker ps -aq --filter name=^openclaw-memory-sources- | xargs -r docker rm -f"

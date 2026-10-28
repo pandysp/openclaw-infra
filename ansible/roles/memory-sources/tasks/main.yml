@@ -1,0 +1,11 @@
+---
+# OpenClaw's memory search indexes Markdown only. With memory search on (a DeepInfra
+# key), keep everything qmd searched findable through Markdown copies; without it,
+# stop the job and remove the copies, which hold extracted private text.
+- name: Keep non-Markdown workspace files searchable
+  ansible.builtin.include_tasks: enable.yml
+  when: deepinfra_api_key | default('') | length > 0
+
+- name: Remove the memory search copies when memory search is off
+  ansible.builtin.include_tasks: disable.yml
+  when: deepinfra_api_key | default('') | length == 0

@@ -55,13 +55,50 @@ try {
   const runtime = JSON.parse(fs.readFileSync(path.join(state, 'claude-cli-runtime.json'), 'utf8'));
   assert.deepEqual(runtime.extra_args, ['--tools', '']);
   const port = config.gateway.port || 18789;
-  const run = args => JSON.parse(execFileSync('openclaw', args, {
+  const runText = args => execFileSync('openclaw', args, {
     encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       HOME: os.homedir(), PATH: process.env.PATH, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`,
       OPENCLAW_CONFIG_PATH: path.join(state, 'openclaw.json'), OPENCLAW_STATE_DIR: state,
     },
-  }));
+  });
+  const run = args => JSON.parse(runText(args));
+
+  // A live embedding probe proves the DeepInfra key, plugin and model, not just config.
+  step = 'memory search embeds through DeepInfra';
+  const memoryText = runText(['memory', 'status', '--agent', 'main', '--deep', '--json']);
+  // The CLI can print log lines such as "[memory] ..." before its JSON array.
+  const [memory] = JSON.parse(memoryText.slice(memoryText.search(/^\[\s*[{\]]/m)));
+  assert.equal(memory.status.provider, 'deepinfra');
+  assert.equal(memory.status.model, 'google/embeddinggemma-2');
+  assert.equal(memory.embeddingProbe?.ok, true);
+  pass('memory search embeds through DeepInfra');
+
+  // Memory search reads Markdown only; text files reach it through the memory-sources copies.
+  step = 'memory search finds a text note through its Markdown copy';
+  const sourceRun = randomUUID();
+  const sourceMarker = `PHOENIX_SOURCE_${sourceRun}`;
+  const mainWorkspace = config.agents.entries.main?.workspace || config.agents.defaults.workspace || path.join(state, 'workspace');
+  const sourceFile = path.join(mainWorkspace, 'notes', `phoenix-${sourceRun}.txt`);
+  const sourceCopy = path.join(state, 'memory-sources', 'main', 'notes', `phoenix-${sourceRun}.txt.md`);
+  const refreshCopies = () => execFileSync('systemctl', ['--user', 'start', 'openclaw-memory-sources.service'], {
+    timeout: 600000, stdio: ['ignore', 'pipe', 'pipe'],
+    env: {HOME: os.homedir(), PATH: process.env.PATH, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`},
+  });
+  fs.mkdirSync(path.dirname(sourceFile), {recursive: true});
+  fs.writeFileSync(sourceFile, `Phoenix memory source check ${sourceMarker}\n`);
+  try {
+    refreshCopies();
+    assert(fs.readFileSync(sourceCopy, 'utf8').includes(sourceMarker));
+    runText(['memory', 'index', '--agent', 'main']);
+    const found = JSON.parse(runText(['memory', 'search', '--query', sourceMarker, '--agent', 'main', '--max-results', '5', '--json']));
+    assert(!found.stale && JSON.stringify(found.results).includes(`phoenix-${sourceRun}.txt.md`));
+  } finally {
+    fs.rmSync(sourceFile, {force: true});
+    refreshCopies();
+  }
+  assert(!fs.existsSync(sourceCopy));
+  pass('memory search finds a text note through its Markdown copy');
 
   const [owner, repoName] = repository.split('/');
   const mainRead = {tool: 'github_get_file_contents', args: {owner, repo: repoName, path: ''}, sessionKey: 'agent:main:main'};
@@ -106,6 +143,20 @@ try {
     assert(contents.every(entry => ['file', 'dir', 'symlink', 'submodule'].includes(entry.type)));
     pass(`Private MCP directory read for ${agent}`);
   }
+  // Since 2026.10 Claude turns use OpenClaw's tools through the MCP bridge, not its own.
+  // Only a real tool call can name the fixture's files: staging allows just the two reads.
+  step = 'agent turn uses a bridged OpenClaw tool';
+  const toolRun = randomUUID();
+  console.log(`    Tool run: ${toolRun}`);
+  const toolTurn = run(['gateway', 'call', 'agent', '--expect-final', '--timeout', '150000', '--json', '--params', JSON.stringify({
+    agentId: 'main', sessionKey: `agent:main:phoenix-tool-${toolRun}`,
+    idempotencyKey: toolRun, deliver: false, timeout: 120,
+    message: `Call the github_get_file_contents tool with owner "${owner}", repo "${repoName}" and path "" (the repository root). Reply with only the names of the entries it returns, one per line.`,
+  })]);
+  assert(toolTurn.status === 'ok');
+  assert(toolTurn.result.payloads.some(payload => /\bREADME\.md\b/.test(payload.text || '')));
+  pass('Agent turn used a bridged OpenClaw tool');
+
   // A prompt is not an access control. Disable all OpenClaw tools on this disposable
   // gateway, verify the policy against the previously working private reads,
   // then run inference. Restore the original policy even if inference fails.

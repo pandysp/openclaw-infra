@@ -54,50 +54,70 @@
   ansible.builtin.command: docker image inspect openclaw-sandbox-custom:latest
   changed_when: false
 
-- name: Remove running sandbox containers after image rebuild
+- name: Give agents with Mac access SSH in their sandbox
+  ansible.builtin.include_tasks: mac-access.yml
+
+# Running sandboxes keep the image and settings they were created with. Remove them
+# when either changed; OpenClaw creates fresh ones from the current config on next use.
+- name: Fingerprint the sandbox image and settings
   ansible.builtin.shell: |
     set -euo pipefail
-    containers=$(docker ps -q --filter "name=openclaw-sbx-")
-    if [ -n "$containers" ]; then
-      echo "$containers" | xargs docker rm -f
-    fi
+    {
+        docker image inspect --format '{{ '{{' }}.Id{{ '}}' }}' openclaw-sandbox-custom:latest
+        jq -cS '{defaults: .agents.defaults.sandbox, agents: (.agents.entries // {} | map_values(.sandbox))}' /home/ubuntu/.openclaw/openclaw.json
+        # The env holds ${NAME} references; a rotated skill key changes only this file.
+        sha256sum /home/ubuntu/.config/openclaw/claude-skills.env
+    } | sha256sum | cut -d' ' -f1
   args:
     executable: /bin/bash
-  register: container_removal
-  changed_when: container_removal.stdout | length > 0
-  when: custom_image_build is changed
-
-- name: Verify no sandbox containers are running
-  ansible.builtin.shell: |
-    set -euo pipefail
-    count=$(docker ps -q --filter "name=openclaw-sbx-" | wc -l)
-    if [ "$count" -ne 0 ]; then
-      echo "ERROR: $count sandbox containers still running after removal"
-      exit 1
-    fi
-  args:
-    executable: /bin/bash
+  register: sandbox_fingerprint
   changed_when: false
-  when: container_removal is changed
+  check_mode: false
 
-- name: Restart gateway to pick up new sandbox image
-  ansible.builtin.systemd:
-    name: openclaw-gateway
-    state: restarted
-    scope: user
-  become: false
-  environment:
-    XDG_RUNTIME_DIR: /run/user/1000
-  when: custom_image_build is changed
-  register: gateway_restart
+- name: Read the fingerprint of the running sandboxes
+  ansible.builtin.slurp:
+    src: /home/ubuntu/.openclaw/.ansible-hashes/sandbox-runtime
+  register: sandbox_running_fingerprint
+  failed_when: false
+  check_mode: false
 
-- name: Wait for gateway to be healthy after restart
-  ansible.builtin.command: systemctl --user is-active openclaw-gateway
-  environment:
-    XDG_RUNTIME_DIR: /run/user/1000
-  register: health_check
-  retries: 8
-  delay: 5
-  until: health_check.rc == 0
-  changed_when: false
-  when: gateway_restart is changed
+- name: Recreate sandboxes with the current image and settings
+  when: >-
+    custom_image_build is changed
+    or (sandbox_running_fingerprint.content | default('') | b64decode | trim) != sandbox_fingerprint.stdout
+  block:
+    - name: Remove sandbox containers
+      ansible.builtin.shell: |
+        set -euo pipefail
+        containers=$(docker ps -aq --filter "name=openclaw-sbx-")
+        if [ -n "$containers" ]; then
+          echo "$containers" | xargs docker rm -f
+        fi
+      args:
+        executable: /bin/bash
+      register: container_removal
+      changed_when: container_removal.stdout | length > 0
+
+    - name: Verify no sandbox containers remain
+      ansible.builtin.shell: |
+        set -euo pipefail
+        count=$(docker ps -aq --filter "name=openclaw-sbx-" | wc -l)
+        if [ "$count" -ne 0 ]; then
+          echo "ERROR: $count sandbox containers remain after removal"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Create the provisioning hash folder
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/.ansible-hashes
+        state: directory
+        mode: "0700"
+
+    - name: Record the fingerprint of the sandboxes to come
+      ansible.builtin.copy:
+        content: "{{ sandbox_fingerprint.stdout }}\n"
+        dest: /home/ubuntu/.openclaw/.ansible-hashes/sandbox-runtime
+        mode: "0600"

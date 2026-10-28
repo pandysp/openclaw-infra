@@ -77,7 +77,7 @@ class WebPluginReadinessTests(unittest.TestCase):
                         task['delay'] = 0
                         task['ansible.builtin.uri']['timeout'] = 1
                 play = [{'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
-                         'vars': {'web_plugin': 'exa', 'openclaw_version': '2026.9.9'}, 'tasks': tasks}]
+                         'vars': {'web_plugin': {'id': 'exa', 'package': '@openclaw/exa-plugin'}, 'openclaw_version': '2026.9.9'}, 'tasks': tasks}]
                 (root / 'play.json').write_text(json.dumps(play))
                 (root / 'bin').mkdir()
                 cli = root / 'bin/openclaw'
