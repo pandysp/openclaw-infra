@@ -105,6 +105,50 @@
   changed_when: false
   check_mode: false
 
+# --- Per-agent MCP tool scoping (sole writer; the plugins role only checks) ---
+# Written right after agents exist and before any later role restarts the gateway,
+# so no agent ever runs without them, even when a later role fails. Denying a
+# server that is not registered yet is harmless.
+# Each agent denies all MCP server tool prefixes except its own.
+# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
+# Safe because toolPrefix uses "_" while server names use "-" as separator,
+# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
+# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
+
+- name: Set per-agent tool deny rules for MCP tools
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    # A missing agent would run without its deny rules: stop instead.
+    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
+        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
+        exit 1
+    }
+    DESIRED='{{ deny_list | to_json }}'
+    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
+    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
+    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
+        echo "OK"
+    else
+        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
+        echo "UPDATED"
+    fi
+  args:
+    executable: /bin/bash
+  vars:
+    deny_list: >-
+      {{ _openclaw_mcp_servers
+         | rejectattr('agent_id', 'equalto', item.id)
+         | map(attribute='name')
+         | map('regex_replace', '$', '_*')
+         | list }}
+  loop: "{{ openclaw_agents }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: deny_result
+  changed_when: "'UPDATED' in deny_result.stdout"
+  notify: restart openclaw-gateway
+
 # The agents role is the only heartbeat writer. A safe 0m global default means
 # omission can never opt an agent into OpenClaw's upstream 30m default.
 - name: Set safe global heartbeat defaults

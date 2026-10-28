@@ -7,7 +7,9 @@ Speaks MCP (streamable HTTP) like the gateway's adapter does, then:
   1. loads an IP echo page: the address must differ from this server's own,
   2. loads a private address: the home proxy itself must refuse it (HTTP 403 and
      squid's access-denied page, not a device's own 403),
-  3. closes the browser so the check leaves no Chromium running.
+  3. loads a site signed by the compromised emSign chain (eMudhra incident): Chromium
+     must reject its certificate, which proves the distrust policy is loaded,
+  4. closes the browser so the check leaves no Chromium running.
 Exits non-zero with the reason on any failure.
 """
 import json
@@ -17,6 +19,8 @@ import urllib.request
 
 ECHO = 'https://api.ipify.org'
 PRIVATE = 'http://192.168.0.1/'
+# eMudhra's published test site for the compromised G3B chain; see files/distrust/.
+DISTRUSTED = 'https://dv-g3b-emudhra.we-have-a-problem.com/'
 IPV4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
 # Playwright MCP reports the navigation's response status in its page summary.
 STATUS = re.compile(r'^- HTTP status: (\d{3})\b', re.MULTILINE)
@@ -48,10 +52,15 @@ class Client:
             sys.exit(f'ERROR: {method} failed: {message["error"]}')
         return message['result']
 
-    def tool(self, name, arguments=None):
+    def attempt(self, name, arguments=None):
+        """Run a tool; return (failed, text) instead of stopping on a tool error."""
         result = self.call('tools/call', {'name': name, 'arguments': arguments or {}})
         text = '\n'.join(part.get('text', '') for part in result.get('content', []) if part.get('type') == 'text')
-        if result.get('isError'):
+        return bool(result.get('isError')), text
+
+    def tool(self, name, arguments=None):
+        failed, text = self.attempt(name, arguments)
+        if failed:
             sys.exit(f'ERROR: {name} failed: {text[:500]}')
         return text
 
@@ -75,9 +84,13 @@ def main(url):
         if not status or status.group(1) != '403' or not all(mark in page for mark in SQUID_DENIED):
             sys.exit(f'ERROR: the home proxy did not refuse {PRIVATE} (HTTP status: '
                      f'{status.group(1) if status else "none"}); check its policy on the Mac')
+        failed, text = client.attempt('browser_navigate', {'url': DISTRUSTED})
+        if not (failed and 'net::ERR_CERT_' in text):
+            sys.exit(f'ERROR: Chromium accepted {DISTRUSTED}; the emSign distrust policy is not loaded')
     finally:
         client.tool('browser_close')
-    print(json.dumps({'server_ip': server_ip, 'browser_ip': found[0], 'private_refused': True}))
+    print(json.dumps({'server_ip': server_ip, 'browser_ip': found[0], 'private_refused': True,
+                      'emsign_rejected': True}))
 
 
 if __name__ == '__main__':

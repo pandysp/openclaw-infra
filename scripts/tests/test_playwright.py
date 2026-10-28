@@ -103,16 +103,19 @@ class DerivationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(facts['browsers'][1], expected_browser('cama', slot=7))
 
-    def test_deny_rules_are_written_before_any_server_is_registered(self):
-        # Otherwise the restart after registration briefly offers a new agent's or new
-        # server type's tools to every agent (round-3 review).
+    def test_deny_rules_are_written_with_the_agents_and_checked_before_registration(self):
+        # A new agent must never run without its deny rules, not even when a later
+        # role fails (round-5 review); registration must not proceed without them.
         python = shlex.split(Path(self.ansible).read_text().splitlines()[0].removeprefix('#!'))
-        tasks = json.loads(subprocess.check_output([*python, '-c',
-            'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))',
-            str(ROOT / 'ansible/roles/plugins/tasks/main.yml')], text=True))
-        names = [task.get('name') for task in tasks]
-        self.assertLess(names.index('Set per-agent tool deny rules for MCP tools'),
-                        names.index('Configure mcp-adapter plugin'))
+        load = lambda path: json.loads(subprocess.check_output([*python, '-c',
+            'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', str(path)], text=True))
+        roles = ROOT / 'ansible/roles'
+        agents = [t.get('name') for t in load(roles / 'agents/tasks/main.yml')]
+        plugins = [t.get('name') for t in load(roles / 'plugins/tasks/main.yml')]
+        writer, check = 'Set per-agent tool deny rules for MCP tools', "Require every agent's MCP deny rules before registering servers"
+        self.assertLess(agents.index('Refresh agent list for config targeting'), agents.index(writer))
+        self.assertNotIn(writer, plugins)
+        self.assertLess(plugins.index(check), plugins.index('Configure mcp-adapter plugin'))
 
     def test_disabled_registers_nothing(self):
         result, facts = self.derive(openclaw_playwright_enabled=False, openclaw_playwright_proxy={'host': '', 'port': 3128, 'client': ''})
@@ -179,7 +182,8 @@ class HomeProxyPolicyTest(unittest.TestCase):
 
 
 class FakeBrowser(BaseHTTPRequestHandler):
-    """Answers the MCP calls playwright-check.py makes; `pages` maps URL to page text."""
+    """Answers the MCP calls playwright-check.py makes; `pages` maps URL to page text.
+    A page starting with "!" is a tool error (e.g. a certificate rejection)."""
     pages, calls = {}, []
     current = None
 
@@ -202,8 +206,10 @@ class FakeBrowser(BaseHTTPRequestHandler):
             FakeBrowser.current = params['arguments']['url']
             text = FakeBrowser.pages.get(FakeBrowser.current, '')
         elif params.get('name') == 'browser_snapshot':
-            text = FakeBrowser.pages.get(FakeBrowser.current, '')
-        body = {'jsonrpc': '2.0', 'id': message['id'], 'result': {'content': [{'type': 'text', 'text': text}]}}
+            text = FakeBrowser.pages.get(FakeBrowser.current, '').lstrip('!')
+        failed = text.startswith('!')
+        body = {'jsonrpc': '2.0', 'id': message['id'],
+                'result': {'content': [{'type': 'text', 'text': text.lstrip('!')}], 'isError': failed}}
         self.reply(('event: message\ndata: ' + json.dumps(body) + '\n\n').encode(), 'text/event-stream')
 
     def reply(self, body, kind):
@@ -228,9 +234,12 @@ class DeployCheckTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
 
-    def run_check(self, echo_page, private_page):
+    CERT_REJECTED = '!Error: net::ERR_CERT_AUTHORITY_INVALID at https://dv-g3b-emudhra.we-have-a-problem.com/'
+
+    def run_check(self, echo_page, private_page, distrusted_page=CERT_REJECTED):
         FakeBrowser.calls = []
-        FakeBrowser.pages = {self.base + '/echo': echo_page, self.check.PRIVATE: private_page}
+        FakeBrowser.pages = {self.base + '/echo': echo_page, self.check.PRIVATE: private_page,
+                             self.check.DISTRUSTED: distrusted_page}
         with mock.patch.object(self.check, 'ECHO', self.base + '/echo'):
             self.check.main(self.base + '/mcp')
 
@@ -256,6 +265,28 @@ class DeployCheckTest(unittest.TestCase):
             with self.subTest(private=private), self.assertRaises(SystemExit) as failure:
                 self.run_check('- generic [ref=e1]: 92.0.2.1', private)
             self.assertIn('did not refuse', str(failure.exception))
+
+    def test_fails_when_chromium_still_trusts_the_compromised_chain(self):
+        for distrusted in ('- Page Title: eMudhra test site', '!Error: net::ERR_PROXY_CONNECTION_FAILED'):
+            with self.subTest(distrusted=distrusted), self.assertRaises(SystemExit) as failure:
+                self.run_check('- generic [ref=e1]: 92.0.2.1', self.SQUID_REFUSAL, distrusted)
+            self.assertIn('distrust policy is not loaded', str(failure.exception))
+
+
+class DistrustPolicyTest(unittest.TestCase):
+    def test_policy_lists_exactly_the_distrusted_roots(self):
+        files = ROOT / 'ansible/roles/playwright/files'
+        pems = sorted((files / 'distrust').glob('*.pem'))
+        self.assertEqual(len(pems), 2)
+        expected = [__import__('base64').b64encode(subprocess.check_output(
+            ['openssl', 'x509', '-in', str(pem), '-outform', 'DER'])).decode() for pem in pems]
+        policy = json.loads((files / 'chromium-policy.json').read_text())
+        self.assertEqual(policy, {'CADistrustedCertificates': expected})
+
+    def test_policy_lands_where_playwrights_chrome_for_testing_reads_it(self):
+        # Measured in the pinned image: the binary only knows /etc/opt/chrome_for_testing/policies.
+        dockerfile = (ROOT / 'ansible/roles/playwright/templates/Dockerfile.browser.j2').read_text()
+        self.assertIn('/etc/opt/chrome_for_testing/policies/managed/', dockerfile)
 
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3

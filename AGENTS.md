@@ -70,13 +70,13 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall the OpenClaw binary; version bumps need a full provision ([Update OpenClaw](#update-openclaw)) |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
-| `agents` | agents | Add/remove non-default agents, update Telegram bindings |
+| `agents` | agents | Add/remove non-default agents, update Telegram bindings, per-agent MCP tool deny rules (sole writer) |
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
 | `whatsapp` | whatsapp | Configure WhatsApp channel for agents using `deliver_channel: whatsapp` |
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
 | `obsidian-headless` | obsidian-headless | Update Obsidian Sync daemon config |
 | `qmd` | qmd | Reinstall qmd, update watchers, force reindex |
-| `playwright` | playwright | Per-agent Playwright browsers and their relay to the home proxy; run with `plugins` to register them |
+| `playwright` | playwright | Per-agent Playwright browsers and their relay to the home proxy; run as `--tags agents,playwright,plugins` (deny rules, browsers, registration) |
 | `plugins` | plugins | MCP adapter, GitHub/qmd servers, GitHub token proxy for sandbox git, deny rules |
 | `sandbox` | sandbox | Rebuild custom Docker image |
 | `workspace` | workspace | Deploy key rotation, sync changes |

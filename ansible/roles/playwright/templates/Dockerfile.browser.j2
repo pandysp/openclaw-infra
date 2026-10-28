@@ -1,0 +1,8 @@
+# Playwright MCP with a Chromium policy that distrusts the compromised emSign
+# roots (eMudhra incident, Oct 2026). Playwright's bundled Chrome for Testing
+# gets no CRLSet updates, so without this it still trusts those chains.
+# The policy is generated from files/distrust/*.pem (test_playwright checks it).
+FROM {{ openclaw_playwright_image }}
+USER root
+COPY chromium-policy.json /etc/opt/chrome_for_testing/policies/managed/openclaw.json
+USER node

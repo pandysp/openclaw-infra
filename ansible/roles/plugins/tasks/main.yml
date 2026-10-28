@@ -145,32 +145,17 @@
     label: "{{ item.name }}"
 
 # --- Per-agent MCP tool scoping ---
-# Written before the adapter registers any server: when a server type or agent is
-# added, the gateway restart below must not briefly offer one agent's tools to
-# another. Denying a server that is not registered yet is harmless.
-# Each agent denies all MCP server tool prefixes except its own.
-# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
-# Safe because toolPrefix uses "_" while server names use "-" as separator,
-# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
-
-- name: Set per-agent tool deny rules for MCP tools
+# The agents role writes each agent's deny rules. Registering servers while they
+# are incomplete would offer one agent's tools to another, so stop instead (e.g.
+# `--tags plugins` alone after adding a server type).
+- name: Require every agent's MCP deny rules before registering servers
   ansible.builtin.shell: |
     set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    # A missing agent would run without its deny rules: stop instead.
-    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
-        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
+    CURRENT=$(jq -cS --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // [] | sort' /home/ubuntu/.openclaw/openclaw.json)
+    DESIRED=$(printf '%s' '{{ deny_list | to_json }}' | jq -cS 'sort')
+    if [ "$CURRENT" != "$DESIRED" ]; then
+        echo "ERROR: agent {{ item.id }} lacks its MCP deny rules; provision with the agents tag too (e.g. --tags agents,playwright,plugins)" >&2
         exit 1
-    }
-    DESIRED='{{ deny_list | to_json }}'
-    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
-    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
-        echo "OK"
-    else
-        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
-        echo "UPDATED"
     fi
   args:
     executable: /bin/bash
@@ -184,9 +169,9 @@
   loop: "{{ openclaw_agents }}"
   loop_control:
     label: "{{ item.id }}"
-  register: deny_result
-  changed_when: "'UPDATED' in deny_result.stdout"
-  notify: restart openclaw-gateway
+  changed_when: false
+  # A dry run of the agents role writes nothing, so there is nothing to compare yet.
+  when: not ansible_check_mode
 
 - name: Configure mcp-adapter plugin
   vars:

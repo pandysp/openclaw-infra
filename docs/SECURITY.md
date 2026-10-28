@@ -231,7 +231,8 @@ Plugins run in-process — they have the same access as the gateway itself (conf
 - Provisioning loads a private address through every browser and fails unless the proxy refuses it.
 - The MCP server accepts only the adapter's Host header, so a page cannot call it through localhost. Containers drop all capabilities and set no-new-privileges.
 - Profiles live in memory: no cookies or logins survive a restart.
-- One agent never reaches another's browser: the per-agent deny rules are written before any browser is registered; each agent's address comes from its ID; provisioning refuses an address that another agent's network holds or that the gateway still routes for another agent.
+- Chromium distrusts the compromised emSign roots by policy (its bundled build gets no CRLSet updates); provisioning fails if their test site loads.
+- One agent never reaches another's browser: the agents role writes the per-agent deny rules as it creates agents, and the plugins role refuses to register servers without them; each agent's address comes from its ID; provisioning refuses an address that another agent's network holds or that the gateway still routes for another agent.
 
 **Residual risk**: Sites see and can log the home connection's address. A page can still reach public IPv6 addresses at home if the provider changes the prefix while the proxy runs (it reads the ranges at start). The proxy is a home-connection relay for anything the agents browse, so an agent misusing it acts from your home address.
 

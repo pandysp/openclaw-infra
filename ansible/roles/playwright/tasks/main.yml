@@ -38,19 +38,49 @@
           then provision again.
         quiet: true
 
-    - name: Inspect the current Playwright image
-      ansible.builtin.command:
-        argv: [docker, image, inspect, "{{ openclaw_playwright_image }}", --format, "{% raw %}{{.Id}}{% endraw %}"]
-      register: playwright_image_before
-      changed_when: false
-      failed_when: false
-      check_mode: false
+    - name: Ensure browser image build directory exists
+      ansible.builtin.file:
+        path: /home/ubuntu/.openclaw/playwright-browser-build
+        state: directory
+        mode: "0755"
 
-    - name: Pull the pinned Playwright image
+    - name: Write browser image Dockerfile
+      ansible.builtin.template:
+        src: Dockerfile.browser.j2
+        dest: /home/ubuntu/.openclaw/playwright-browser-build/Dockerfile
+        mode: "0644"
+
+    - name: Copy the Chromium policy
+      ansible.builtin.copy:
+        src: chromium-policy.json
+        dest: /home/ubuntu/.openclaw/playwright-browser-build/chromium-policy.json
+        mode: "0644"
+
+    - name: Inspect the existing browser image
       ansible.builtin.command:
-        argv: [docker, pull, --quiet, "{{ openclaw_playwright_image }}"]
-      when: playwright_image_before.rc != 0
-      changed_when: true
+        argv: [docker, image, inspect, openclaw-playwright-browser:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
+      register: playwright_browser_before
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        playwright_browser_before.rc != 0 and not (playwright_browser_before.rc == 1
+        and 'No such image: openclaw-playwright-browser:latest' in playwright_browser_before.stderr)
+
+    # The base is pinned by digest, so a rebuild only changes the image when the
+    # pin or the policy changes.
+    - name: Build browser image
+      ansible.builtin.command:
+        argv: [docker, build, --provenance=false, --tag, openclaw-playwright-browser:latest,
+               /home/ubuntu/.openclaw/playwright-browser-build]
+      changed_when: false
+
+    - name: Inspect the built browser image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, openclaw-playwright-browser:latest, --format, "{% raw %}{{.Id}}{% endraw %}"]
+      register: playwright_browser_after
+      changed_when: playwright_browser_before.rc != 0 or playwright_browser_before.stdout != playwright_browser_after.stdout
+      failed_when: playwright_browser_after.rc != 0 and not ansible_check_mode
+      check_mode: false
       notify: restart playwright browsers
 
     - name: Ensure relay build directory exists

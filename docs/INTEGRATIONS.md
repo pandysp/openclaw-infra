@@ -242,6 +242,7 @@ agent turn → MCP adapter → Playwright container (one per agent, internal net
 - **No way out except the proxy:** each browser sits on its own internal Docker network. Docker gives it no route to the internet, to this server's services or to the tailnet. The only other member of that network is the relay, which forwards every connection to the proxy and nowhere else.
 - **Proxy on the Mac** (`scripts/deploy-mac-browser-proxy.sh`): squid, listening only on the Mac's tailnet address, serving only the server's tailnet address, ports 80 and 443 only. It refuses private, loopback, link-local and tailnet addresses and the home network's own IPv6 ranges, so a page cannot reach devices at home.
 - **Nothing persists:** profiles are in memory (`--isolated`). Logins and cookies are gone after a container restart, and agents cannot use your accounts.
+- **Certificate trust:** Playwright's bundled Chrome for Testing gets no CRLSet updates, so it still trusted the compromised emSign chains (eMudhra incident, Oct 2026). The role builds `openclaw-playwright-browser` from the pinned image plus a Chromium policy (`CADistrustedCertificates`, from `ansible/roles/playwright/files/distrust/`). After bumping `openclaw_playwright_image`, the deploy check proves the policy still loads.
 - **Why not OpenClaw's own browser plugin:** turns on the Claude Code runtime get no OpenClaw sandbox ([openclaw#84942](https://github.com/openclaw/openclaw/issues/84942)), so the plugin would give all agents one shared browser on the host. Its sandbox browser image has no proxy setting either.
 
 ### Setup
@@ -259,11 +260,11 @@ agent turn → MCP adapter → Playwright container (one per agent, internal net
    ```bash
    ./scripts/deploy-mac-browser-proxy.sh
    ```
-4. **Provision** the browsers and register them with the adapter:
+4. **Provision** the per-agent deny rules, the browsers and their registration with the adapter:
    ```bash
-   ./scripts/provision.sh --tags playwright,plugins
+   ./scripts/provision.sh --tags agents,playwright,plugins
    ```
-   Provisioning ends by loading a page through every agent's browser: it fails if a browser leaves from the server's own address or the proxy stops refusing private addresses.
+   The role then loads pages through every agent's browser. It fails if a browser leaves from the server's own address, the proxy stops refusing private addresses, or Chromium accepts the compromised emSign chain.
 
 ### Verify
 

@@ -18,7 +18,7 @@
 
 # Playwright browser for every agent, loading pages through a proxy on a Mac at
 # home (docs/INTEGRATIONS.md#playwright-browser). Deploy the Mac side first with
-# scripts/deploy-mac-browser-proxy.sh, then `./scripts/provision.sh --tags playwright,plugins`.
+# scripts/deploy-mac-browser-proxy.sh, then `./scripts/provision.sh --tags agents,playwright,plugins`.
 # openclaw_playwright_enabled: true
 # openclaw_playwright_proxy:
 #   host: 100.x.y.z      # the Mac's tailnet IPv4 (tailscale ip -4 on the Mac)

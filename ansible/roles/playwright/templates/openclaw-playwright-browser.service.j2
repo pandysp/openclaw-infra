@@ -18,7 +18,7 @@ ExecStart=/usr/bin/docker run --rm --name openclaw-playwright-browser-{{ item.ag
     --network {{ item.network }} --ip {{ item.browser_ip }} \
     --cap-drop ALL --security-opt no-new-privileges \
     --memory {{ openclaw_playwright_memory }} --shm-size 256m --pids-limit 1024 \
-    {{ openclaw_playwright_image }} \
+    openclaw-playwright-browser:latest \
     --headless --browser chromium --no-sandbox --isolated --image-responses omit \
     --host 0.0.0.0 --port 8931 --allowed-hosts {{ item.browser_ip }}:8931 \
     --proxy-server http://{{ item.relay_ip }}:3128
