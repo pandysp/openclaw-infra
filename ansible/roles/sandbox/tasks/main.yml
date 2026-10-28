@@ -127,6 +127,14 @@
   when: not ansible_check_mode
 
 # The withdrawn 2026.10.8 pin (#65) copied the Mac private key here for OpenClaw sandboxes.
+- name: Refuse sandbox mounts left by the 2026.10 pin
+  ansible.builtin.command:
+    argv: [jq, -e, '[.agents.entries // {} | .[] | .sandbox.docker.binds // [] | .[] | select(contains("/sandbox-ssh/"))] | length == 0', /home/ubuntu/.openclaw/openclaw.json]
+  changed_when: false
+  check_mode: false
+  register: sandbox_leftover_binds
+  failed_when: sandbox_leftover_binds.rc != 0
+
 - name: Remove the sandbox Mac key copies of the 2026.10 pin
   ansible.builtin.file:
     path: /home/ubuntu/.openclaw/sandbox-ssh

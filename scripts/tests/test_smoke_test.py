@@ -101,6 +101,7 @@ if sys.argv[1:]==['--user','start','openclaw-memory-sources.service']:
   if not (notes/copy.name[:-3]).exists():copy.unlink()
  raise SystemExit(0)
 if sys.argv[1:3]==['--user','list-units']:
+ if sys.argv[-1]=='workspace-git-sync-*.service':raise SystemExit(0)
  assert sys.argv[-1]=='workspace-git-sync-*.timer';print('workspace-git-sync-main.timer loaded active waiting Hourly');raise SystemExit(0)
 if sys.argv[1:3] in (['--user','stop'],['--user','start']) and sys.argv[3:]==['workspace-git-sync-main.timer']:
  with (root/'sync-timers').open('a') as f: f.write(sys.argv[2]+'\\n')

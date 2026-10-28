@@ -100,7 +100,7 @@ jobs:
 
           # Real-note credentials are usable only through read-only MCP tools.
           # Native Claude tools stay disabled for every session, including heartbeats,
-          # except the smoke test's one shell turn (Bash only, backups paused, checked).
+          # except the smoke test's one shell turn (Bash only, fixed prompt, backups paused, checked after).
           openclaw_tools_allow:
             - github_get_file_contents
             - github-test_get_file_contents

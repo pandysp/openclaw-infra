@@ -252,8 +252,9 @@ try {
     // OpenClaw 2026.10.8 failed both (openclaw#84942): no exec, and file tools on the host.
     // OpenClaw tools stay denied, so no private read is reachable. For this one turn the
     // launcher gives Claude its Bash tool (staging otherwise launches with --tools ""). The
-    // switch is gateway-wide, so backups pause, exactly this one launch must happen, and no
-    // workspace may change; otherwise backups stay paused and teardown destroys the server.
+    // switch is gateway-wide and the turn could still push or upload: the fixed prompt is what
+    // keeps it harmless. Backups pause so nothing it writes is pushed by them; an extra launch
+    // or a changed workspace fails the run, backups stay paused and teardown destroys the server.
     step = 'agent turn runs a shell command inside its container';
     const shellRun = randomUUID();
     const shellMarker = `PHOENIX_EXEC_${shellRun}`;
@@ -273,9 +274,18 @@ try {
       const stat = fs.lstatSync(path.join(root, name));
       return `${root}/${name}:${stat.size}:${stat.mtimeMs}`;
     }));
-    const syncTimers = systemctl(['list-units', '--state=active', '--plain', '--no-legend', 'workspace-git-sync-*.timer'])
+    const units = pattern => systemctl(['list-units', '--state=active,activating', '--plain', '--no-legend', pattern])
       .split('\n').map(line => line.trim().split(/\s+/)[0]).filter(Boolean);
-    if (syncTimers.length > 0) systemctl(['stop', ...syncTimers]);
+    const syncTimers = units('workspace-git-sync-*.timer');
+    step = 'pausing workspace backups for the shell window';
+    assert(syncTimers.length > 0);
+    systemctl(['stop', ...syncTimers]);
+    // Stopping a timer does not stop a sync already running; wait for it to finish.
+    for (const deadline = Date.now() + 300000; units('workspace-git-sync-*.service').length > 0;) {
+      assert(Date.now() < deadline);
+      execFileSync('sleep', ['2']);
+    }
+    step = 'agent turn runs a shell command inside its container';
     fs.writeFileSync(canaryPath, canary, {mode: 0o600});
     const workspacesBefore = snapshot();
     const shellLaunches = launchCount();
