@@ -170,7 +170,15 @@
   # A dry run of the agents role writes nothing, so there is nothing to compare yet.
   when: not ansible_check_mode
 
+# A dry run cannot evaluate registration: the desired config is a private temp
+# file the build step writes, and the adapter state comes from live commands.
+- name: Note that a dry run skips MCP adapter registration
+  ansible.builtin.debug:
+    msg: "Dry run: MCP adapter registration and maintenance are not evaluated (see AGENTS.md, check mode is partial)."
+  when: ansible_check_mode
+
 - name: Configure mcp-adapter plugin
+  when: not ansible_check_mode
   vars:
     # One comparison for the maintenance decision and for the write after a reinstall.
     _mcp_adapter_config_state: >-
