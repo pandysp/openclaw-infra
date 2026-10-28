@@ -195,6 +195,28 @@
           update manual openclaw_mcp_servers overrides before provisioning.
       tags: [always]
 
+    # Per-agent MCP tool scoping: each agent denies every other agent's servers.
+    # Glob patterns use server name + "_*" (e.g. "github-manon_*", "qmd-tl_*").
+    # Safe because toolPrefix uses "_" while server names use "-" as separator,
+    # so "github_*" cannot match "github-manon_*". Server names must never contain "_".
+    # The agents role writes these (adding servers still registered), the plugins
+    # role refuses to register servers while an agent lacks them.
+    - name: Initialize per-agent MCP deny lists
+      ansible.builtin.set_fact:
+        _openclaw_mcp_denies: {}
+      tags: [always]
+
+    - name: Derive per-agent MCP deny lists
+      ansible.builtin.set_fact:
+        _openclaw_mcp_denies: >-
+          {{ _openclaw_mcp_denies | combine({item.id: _openclaw_mcp_servers
+             | rejectattr('agent_id', 'equalto', item.id) | map(attribute='name')
+             | map('regex_replace', '$', '_*') | list}) }}
+      loop: "{{ openclaw_agents }}"
+      loop_control:
+        label: "{{ item.id }}"
+      tags: [always]
+
     # Workspaces: one per agent with mechanical naming
     - name: Initialize workspace metadata
       ansible.builtin.set_fact:

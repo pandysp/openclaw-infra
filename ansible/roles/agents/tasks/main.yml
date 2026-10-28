@@ -16,6 +16,18 @@
   changed_when: false
   check_mode: false
 
+- name: Ensure the OpenClaw helper directory exists
+  ansible.builtin.file:
+    path: "{{ openclaw_mcp_deny_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Install the MCP deny-rule writer
+  ansible.builtin.copy:
+    src: openclaw-mcp-deny.sh
+    dest: "{{ openclaw_mcp_deny_script }}"
+    mode: "0755"
+
 - name: Get existing agents
   ansible.builtin.shell: |
     set -euo pipefail
@@ -62,6 +74,8 @@
             echo "Agent {{ item.id }} already exists"
         elif [ "$JQ_RC" -eq 1 ]; then
             openclaw agents add {{ item.id | quote }} --non-interactive --workspace "/home/ubuntu/.openclaw/workspace-{{ item.id }}"
+            # Restrict it before anything else can fail: config changes hot-reload.
+            {{ openclaw_mcp_deny_script | quote }} /home/ubuntu/.openclaw/openclaw.json {{ item.id | quote }} {{ _openclaw_mcp_denies[item.id] | to_json | quote }}
         else
             echo "ERROR: could not query validated agents JSON for {{ item.id }} (jq exit $JQ_RC)" >&2
             exit 1
@@ -106,42 +120,16 @@
   check_mode: false
 
 # --- Per-agent MCP tool scoping (sole writer; the plugins role only checks) ---
-# Written right after agents exist and before any later role restarts the gateway,
-# so no agent ever runs without them, even when a later role fails. Denying a
-# server that is not registered yet is harmless.
-# Each agent denies all MCP server tool prefixes except its own.
-# Glob patterns use server name + "_*" suffix (e.g. "github-manon_*", "qmd-tl_*").
-# Safe because toolPrefix uses "_" while server names use "-" as separator,
-# so "github_*" cannot match "github-manon_*". Server names must never contain "_".
-# e.g. agent "main" gets deny: ["github-manon_*", "github-tl_*", "qmd-manon_*", "qmd-tl_*", ...]
-
+# Runs after agents exist and before any later role restarts the gateway. New
+# agents get theirs in the creation task itself, so a later creation failing
+# cannot leave an earlier new agent unrestricted.
 - name: Set per-agent tool deny rules for MCP tools
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR=/run/user/1000
-    # A missing agent would run without its deny rules: stop instead.
-    CURRENT=$(jq -ce --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // []' /home/ubuntu/.openclaw/openclaw.json) || {
-        echo "ERROR: agent {{ item.id }} is missing from agents.entries" >&2
-        exit 1
-    }
-    DESIRED='{{ deny_list | to_json }}'
-    C_NORM=$(echo "$CURRENT" | jq -cS 'sort' 2>/dev/null || echo "PARSE_FAIL")
-    D_NORM=$(echo "$DESIRED" | jq -cS 'sort')
-    if [ "$C_NORM" != "PARSE_FAIL" ] && [ "$C_NORM" = "$D_NORM" ]; then
-        echo "OK"
-    else
-        openclaw config set "agents.entries.{{ item.id }}.tools.deny" --json "$DESIRED"
-        echo "UPDATED"
-    fi
-  args:
-    executable: /bin/bash
-  vars:
-    deny_list: >-
-      {{ _openclaw_mcp_servers
-         | rejectattr('agent_id', 'equalto', item.id)
-         | map(attribute='name')
-         | map('regex_replace', '$', '_*')
-         | list }}
+  ansible.builtin.command:
+    argv:
+      - "{{ openclaw_mcp_deny_script }}"
+      - /home/ubuntu/.openclaw/openclaw.json
+      - "{{ item.id }}"
+      - "{{ _openclaw_mcp_denies[item.id] | to_json }}"
   loop: "{{ openclaw_agents }}"
   loop_control:
     label: "{{ item.id }}"

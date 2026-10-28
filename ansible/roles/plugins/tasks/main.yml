@@ -147,29 +147,26 @@
 # --- Per-agent MCP tool scoping ---
 # The agents role writes each agent's deny rules. Registering servers while they
 # are incomplete would offer one agent's tools to another, so stop instead (e.g.
-# `--tags plugins` alone after adding a server type).
+# `--tags plugins` alone after adding a server type: rerun with the agents tag).
 - name: Require every agent's MCP deny rules before registering servers
-  ansible.builtin.shell: |
-    set -euo pipefail
-    CURRENT=$(jq -cS --arg id {{ item.id | quote }} '.agents.entries[$id] | select(. != null) | .tools.deny // [] | sort' /home/ubuntu/.openclaw/openclaw.json)
-    DESIRED=$(printf '%s' '{{ deny_list | to_json }}' | jq -cS 'sort')
-    if [ "$CURRENT" != "$DESIRED" ]; then
-        echo "ERROR: agent {{ item.id }} lacks its MCP deny rules; provision with the agents tag too (e.g. --tags agents,playwright,plugins)" >&2
-        exit 1
-    fi
-  args:
-    executable: /bin/bash
-  vars:
-    deny_list: >-
-      {{ _openclaw_mcp_servers
-         | rejectattr('agent_id', 'equalto', item.id)
-         | map(attribute='name')
-         | map('regex_replace', '$', '_*')
-         | list }}
+  ansible.builtin.command:
+    argv:
+      - jq
+      - -e
+      - --arg
+      - id
+      - "{{ item.id }}"
+      - --argjson
+      - desired
+      - "{{ _openclaw_mcp_denies[item.id] | to_json }}"
+      - '($desired - (.agents.entries[$id].tools.deny // [])) == []'
+      - /home/ubuntu/.openclaw/openclaw.json
   loop: "{{ openclaw_agents }}"
   loop_control:
     label: "{{ item.id }}"
+  register: deny_check
   changed_when: false
+  failed_when: deny_check.rc != 0
   # A dry run of the agents role writes nothing, so there is nothing to compare yet.
   when: not ansible_check_mode
 

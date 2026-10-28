@@ -53,9 +53,14 @@ class AgentCreationTests(unittest.TestCase):
             fake = root / 'bin/openclaw'
             fake.write_text(FAKE_OPENCLAW)
             fake.chmod(0o700)
+            deny = root / 'bin/deny'
+            deny.write_text('#!/bin/sh\nprintf \'%s\\n\' "deny $*" >> "$FIXTURE_ROOT/added"\n')
+            deny.chmod(0o700)
             play = [{'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
                      'vars': {'openclaw_agents': [{'id': 'main', 'is_default': True},
-                                                  {'id': 'test', 'is_default': False}]},
+                                                  {'id': 'test', 'is_default': False}],
+                              'openclaw_mcp_deny_script': str(deny),
+                              '_openclaw_mcp_denies': {'main': ['github-test_*'], 'test': ['github_*']}},
                      'tasks': self.tasks,
                      'handlers': [{'name': 'restart openclaw-gateway',
                                    'ansible.builtin.debug': {'msg': 'restart requested'}}]}]
@@ -73,7 +78,9 @@ class AgentCreationTests(unittest.TestCase):
     def test_a_fresh_server_creates_the_missing_agent(self):
         result, added = self.run_role('[{"id": "main"}]')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(added, ['agents add test --non-interactive --workspace /home/ubuntu/.openclaw/workspace-test'])
+        # Restricted in the same step it was created in, before anything else can fail.
+        self.assertEqual(added, ['agents add test --non-interactive --workspace /home/ubuntu/.openclaw/workspace-test',
+                                 'deny /home/ubuntu/.openclaw/openclaw.json test ["github_*"]'])
         self.assertRegex(result.stdout, r'localhost\s+: ok=\d+\s+changed=1 ')
 
     def test_an_existing_agent_is_left_alone(self):

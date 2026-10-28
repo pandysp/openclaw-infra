@@ -273,6 +273,42 @@ class DeployCheckTest(unittest.TestCase):
             self.assertIn('distrust policy is not loaded', str(failure.exception))
 
 
+class DenyWriterTest(unittest.TestCase):
+    SCRIPT = ROOT / 'ansible/roles/agents/files/openclaw-mcp-deny.sh'
+
+    def write(self, agent, desired, registered, current):
+        with tempfile.TemporaryDirectory(prefix='mcp-deny-') as directory:
+            root = Path(directory)
+            config = root / 'openclaw.json'
+            config.write_text(json.dumps({
+                'agents': {'entries': {agent: {'tools': {'deny': current}}}},
+                'plugins': {'entries': {'openclaw-mcp-adapter': {'config': {'servers': [{'name': n} for n in registered]}}}}}))
+            (root / 'openclaw').write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" > "$FAKE_ROOT/set"\n')
+            (root / 'openclaw').chmod(0o755)
+            env = {**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'FAKE_ROOT': str(root)}
+            result = subprocess.run(['bash', str(self.SCRIPT), str(config), agent, json.dumps(desired)],
+                                    env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            written = (root / 'set').read_text().split(' --json ', 1)[1].strip() if (root / 'set').exists() else None
+            return result.stdout.strip(), json.loads(written) if written else None
+
+    def test_still_registered_servers_of_others_stay_denied(self):
+        # Browsers switched off in config but still registered: keep denying bob's.
+        out, written = self.write('main', ['github-bob_*'], ['github', 'github-bob', 'playwright', 'playwright-bob'],
+                                  ['github-bob_*', 'playwright-bob_*'])
+        self.assertEqual(out, 'OK')
+        self.assertIsNone(written)
+
+    def test_new_server_types_are_denied_before_registration_and_own_servers_never(self):
+        out, written = self.write('cama', ['github_*', 'playwright_*'], ['github', 'github-cama'], [])
+        self.assertEqual(out, 'UPDATED')
+        self.assertEqual(written, ['github_*', 'playwright_*'])
+
+    def test_agent_ids_with_dashes_own_their_servers(self):
+        out, written = self.write('team-a', [], ['github', 'github-team-a', 'qmd-team-b'], [])
+        self.assertEqual(written, ['github_*', 'qmd-team-b_*'])
+
+
 class DistrustPolicyTest(unittest.TestCase):
     def test_policy_lists_exactly_the_distrusted_roots(self):
         files = ROOT / 'ansible/roles/playwright/files'
