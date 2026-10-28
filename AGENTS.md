@@ -163,7 +163,7 @@ pulumi up    # Creates server + auto-triggers Ansible provisioning
 ./scripts/provision.sh --check --diff
 ```
 
-Check mode is partial: the config role's authored-config comparison and CLI patch are skipped, so a dry run cannot show settings such as the default model or model allowlist. Read the `UPDATED:` lines of a real run instead. Changed settings are applied in one validated patch while the gateway is stopped; Ansible starts it and waits for startup even if the patch fails. A failed patch is not a rollback guarantee. An already-converged config does not trigger this stop/start. Heartbeat changes (agents role) do show up in a dry run.
+Check mode is partial: the config role's authored-config comparison and CLI patch are skipped, so a dry run cannot show settings such as the default model or model allowlist. The plugins role likewise skips MCP adapter registration and maintenance, and says so. Read the `UPDATED:` lines of a real run instead. Changed settings are applied in one validated patch while the gateway is stopped; Ansible starts it and waits for startup even if the patch fails. A failed patch is not a rollback guarantee. An already-converged config does not trigger this stop/start. Heartbeat changes (agents role) do show up in a dry run.
 
 ### Check Server Status
 
