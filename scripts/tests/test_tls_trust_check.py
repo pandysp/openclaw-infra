@@ -5,13 +5,18 @@ The fake docker answers probe runs with chosen outcomes and reports containers t
 the real CLI does, including a bare image ID in `docker ps` once a tag has moved.
 Real probes against the incident's test sites run in Phoenix (verify-tls-trust.sh).
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+
+from test_restart_replaced_programs import SYSTEMCTL
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT/'scripts/lib/tls-trust-check.py'
@@ -52,19 +57,26 @@ IMAGES = {'openclaw-sandbox:trixie': 'sha256:base', 'openclaw-sandbox-custom:lat
 
 
 class TlsTrustCheckTest(unittest.TestCase):
-    def check(self, *sections, **state):
+    def check(self, *sections, features=False, **state):
+        """`features` leaves the markers of a server with Claude CLI containers and backups."""
         with tempfile.TemporaryDirectory(prefix='tls-trust-') as directory:
             bin_dir = Path(directory)/'bin'
             bin_dir.mkdir()
             (bin_dir/'docker').write_text(DOCKER)
             (bin_dir/'docker').chmod(0o755)
             (Path(directory)/'state.json').write_text(json.dumps({'images': IMAGES, 'containers': [], **state}))
-            env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'FAKE_DOCKER': f'{directory}/state.json'}
+            if features:
+                units = Path(directory)/'.config/systemd/user'
+                units.mkdir(parents=True)
+                (units/'workspace-git-sync-main.timer').write_text('')
+                (Path(directory)/'claude').write_text('')
+            env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'FAKE_DOCKER': f'{directory}/state.json',
+                   'HOME': directory, 'CLAUDE_LAUNCHER': f'{directory}/claude'}
             return subprocess.run([sys.executable, str(CHECK), '26.12.1', *(sections or ['images'])],
                                   capture_output=True, text=True, env=env, timeout=60)
 
     def test_current_images_and_containers_pass(self):
-        result = self.check(containers=[{'id': 'c1', 'name': 'openclaw-sbx-main', 'config_image': 'openclaw-sandbox-custom:latest',
+        result = self.check(features=True, containers=[{'id': 'c1', 'name': 'openclaw-sbx-main', 'config_image': 'openclaw-sandbox-custom:latest',
                                          'image_id': 'sha256:custom'}])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS image openclaw-sandbox-custom:latest uv: unsafe rejected 12/12, healthy 4/4', result.stdout)
@@ -92,18 +104,89 @@ class TlsTrustCheckTest(unittest.TestCase):
         self.assertIn('FAIL containers on an older image build (restart the gateway to recreate them): '
                       'openclaw-claude-1a2b (openclaw-claude-cli:latest)', result.stdout)
 
-    def test_optional_images_are_reported_as_skipped_but_the_sandbox_is_required(self):
+    def test_images_of_features_that_are_off_are_skipped_but_the_sandbox_is_required(self):
         images = {k: v for k, v in IMAGES.items() if k == 'openclaw-sandbox-custom:latest'}
         result = self.check(images=images)
         self.assertEqual(result.returncode, 1)
-        self.assertIn('SKIP image openclaw-claude-cli:latest: not built on this server', result.stdout)
+        self.assertIn('SKIP image openclaw-claude-cli:latest: its feature is off on this server', result.stdout)
+        self.assertIn('SKIP image openclaw-workspace-sync:latest: its feature is off on this server', result.stdout)
         self.assertIn('FAIL image openclaw-sandbox:trixie: Error response from daemon: No such image', result.stdout)
+
+    def test_a_missing_image_of_a_feature_that_is_on_fails(self):
+        images = {k: v for k, v in IMAGES.items() if k.startswith('openclaw-sandbox')}
+        result = self.check(images=images, features=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('FAIL image openclaw-claude-cli:latest: Error response from daemon: No such image', result.stdout)
+        self.assertIn('FAIL image openclaw-workspace-sync:latest: Error response from daemon: No such image', result.stdout)
 
     def test_an_unknown_section_fails_instead_of_checking_nothing(self):
         result = self.check('imagse')
         self.assertEqual(result.returncode, 1)
         self.assertIn('unknown section(s) imagse', result.stderr)
         self.assertNotIn('passed', result.stdout)
+
+
+@unittest.skipUnless(sys.platform.startswith('linux'), 'Needs Linux /proc/<pid>/exe')
+class NodeProcessDiscoveryTest(unittest.TestCase):
+    """Real processes named node in a fixture cgroup tree, found the way check_host finds them."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='tls-node-'))
+        self.processes = []
+        self.addCleanup(self.cleanup)
+        (self.tmp/'bin').mkdir()
+        (self.tmp/'bin/systemctl').write_text(SYSTEMCTL)
+        (self.tmp/'bin/systemctl').chmod(0o755)
+        self.env = {'PATH': f'{self.tmp}/bin:{os.environ["PATH"]}', 'FIXTURE': str(self.tmp),
+                    'CGROUP_ROOT': str(self.tmp/'cgroup'), 'HOME': str(self.tmp)}
+
+    def cleanup(self):
+        for process in self.processes:
+            process.kill()
+            process.wait()
+        shutil.rmtree(self.tmp)
+
+    def node(self, name, **env):
+        program = self.tmp/name
+        if not program.exists():
+            shutil.copy2(shutil.which('sleep'), program)
+        process = subprocess.Popen([str(program), '300'], env={'PATH': '/usr/bin:/bin', **env})
+        self.processes.append(process)
+        while os.readlink(f'/proc/{process.pid}/exe') != str(program):
+            pass
+        return process.pid
+
+    def discover(self, units):
+        for unit in units.values():
+            for child, pids in unit.pop('procs').items():
+                (self.tmp/'cgroup'/unit['cgroup'].lstrip('/')/child).mkdir(parents=True, exist_ok=True)
+                (self.tmp/'cgroup'/unit['cgroup'].lstrip('/')/child/'cgroup.procs').write_text(''.join(f'{p}\n' for p in pids))
+        (self.tmp/'units.json').write_text(json.dumps(units))
+        with mock.patch.dict(os.environ, self.env):
+            spec = importlib.util.spec_from_file_location('tls_trust_check', CHECK)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return [(unit, pid, Path(exe).name, trust) for unit, pid, exe, trust in module.node_processes()]
+
+    def unit(self, procs, **extra):
+        name = f'unit-{len(list(self.tmp.glob("cgroup/user.slice/*")))}-{len(procs)}'
+        return {'fragment': f'{self.tmp}/.config/systemd/user/{name}.service', 'type': 'simple',
+                'cgroup': f'/user.slice/{name}.service', 'procs': procs, **extra}
+
+    def test_every_distinct_node_process_in_a_service_is_probed(self):
+        parent, twin = self.node('node'), self.node('node')
+        child = self.node('node', NODE_TLS_REJECT_UNAUTHORIZED='0')
+        other = self.node('node-other')
+        self.node('not-a-runtime')
+        found = self.discover({'gateway.service': self.unit({'.': [parent, twin, self.processes[-1].pid], 'worker': [child, other]})})
+        self.assertEqual(found, [('gateway.service', parent, 'node', {}),
+                                 ('gateway.service', child, 'node', {'NODE_TLS_REJECT_UNAUTHORIZED': '0'}),
+                                 ('gateway.service', other, 'node-other', {})])
+
+    def test_a_service_that_cannot_be_inspected_stops_the_check(self):
+        units = {'gateway.service': self.unit({'.': [self.node('node')]}, broken=['FragmentPath'])}
+        with self.assertRaisesRegex(SystemExit, 'systemctl --user show -P FragmentPath gateway.service failed'):
+            self.discover(units)
 
 
 if __name__ == '__main__':

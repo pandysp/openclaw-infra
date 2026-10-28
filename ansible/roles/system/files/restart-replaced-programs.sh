@@ -13,35 +13,42 @@
 # would run their job again.
 #
 # Prints "RESTARTED <unit> <program>" per restart. Exits 1 if any service still runs
-# a replaced program afterwards.
+# a replaced program afterwards, or if a running service cannot be inspected.
 #
 # Usage: restart-replaced-programs.sh   (as the service user, XDG_RUNTIME_DIR set)
 # CGROUP_ROOT and UNIT_DIR exist for the regression test only.
 
 set -euo pipefail
+# A failed systemctl query inside $(...) must stop the script, not read as "not ours".
+shopt -s inherit_errexit
 
 CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 UNIT_DIR="${UNIT_DIR:-$HOME/.config/systemd/user}"
 
 # Prints "<unit> <replaced program>" for every provisioned service running one.
 stale_services() {
-    local unit cgroup pid exe
-    systemctl --user list-units --type=service --state=running --no-legend --plain |
-        awk '{print $1}' |
-        while read -r unit; do
-            [[ $(systemctl --user show -P FragmentPath "$unit") == "$UNIT_DIR"/* ]] || continue
-            [[ $(systemctl --user show -P Type "$unit") != oneshot ]] || continue
-            cgroup=$(systemctl --user show -P ControlGroup "$unit")
-            [[ -n $cgroup && -d $CGROUP_ROOT$cgroup ]] || continue
-            while read -r pid; do
-                # A process can exit between listing and reading; that is not staleness.
-                exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
-                if [[ $exe == *" (deleted)" ]]; then
-                    echo "$unit ${exe% (deleted)}"
-                    break
-                fi
-            done < <(find "$CGROUP_ROOT$cgroup" -name cgroup.procs -exec cat {} +)
+    local units unit fragment type cgroup procs pid exe
+    units=$(systemctl --user list-units --type=service --state=running --no-legend --plain)
+    for unit in $(awk '{print $1}' <<< "$units"); do
+        fragment=$(systemctl --user show -P FragmentPath "$unit")
+        [[ $fragment == "$UNIT_DIR"/* ]] || continue
+        type=$(systemctl --user show -P Type "$unit")
+        [[ $type != oneshot ]] || continue
+        cgroup=$(systemctl --user show -P ControlGroup "$unit")
+        if [[ -z $cgroup || ! -d $CGROUP_ROOT$cgroup ]]; then
+            echo "ERROR: cannot find the control group of running $unit" >&2
+            return 1
+        fi
+        procs=$(find "$CGROUP_ROOT$cgroup" -name cgroup.procs -exec cat {} +)
+        for pid in $procs; do
+            # A process can exit between listing and reading; that is not staleness.
+            exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+            if [[ $exe == *" (deleted)" ]]; then
+                echo "$unit ${exe% (deleted)}"
+                break
+            fi
         done
+    done
 }
 
 stale=$(stale_services)
