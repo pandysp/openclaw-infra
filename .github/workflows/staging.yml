@@ -261,7 +261,7 @@ jobs:
           printf '%s' "$HCLOUD_TOKEN" | pulumi config set hcloud:token --secret --stack staging --non-interactive
           printf '%s' "$RUN_AUTHKEY" | pulumi config set tailscaleAuthKey --secret --stack staging --non-interactive
           printf '%s' "$CLAUDE_SETUP_TOKEN" | pulumi config set claudeSetupToken --secret --stack staging --non-interactive
-          pulumi config set claudeSetupTokenExpires "$CLAUDE_SETUP_TOKEN_EXPIRES" --stack staging
+          pulumi config set claudeSetupTokenExpires --plaintext "$CLAUDE_SETUP_TOKEN_EXPIRES" --stack staging
 
           # Telegram
           printf '%s' "$TELEGRAM_BOT_TOKEN" | pulumi config set telegramBotToken --secret --stack staging --non-interactive

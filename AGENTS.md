@@ -288,7 +288,7 @@ Default server type is **CX43** (8 vCPU, 16 GB RAM, ~€9.49/mo). Change with `p
 
 ### Key Rotation
 
-Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude login: every agent turn uses one login, `~/.claude/shared/auth/.credentials.json`, and provisioning always writes it from `claudeSetupToken` (replacing anything else there). Use a setup token, not `claude auth login`: a signed-in login renews itself only until it is 30 days old, then every agent stops (2026-11-03). A setup token lasts one year and cannot be renewed, so record its end in `claudeSetupTokenExpires`; the `claude-login-expiry` timer messages the owner daily from 21 days before it. To renew: run `claude setup-token` (with the agents' Claude account; `code#state` from the browser goes into the waiting prompt), `pulumi config set claudeSetupToken --secret` (token via stdin), `pulumi config set claudeSetupTokenExpires <today + 1 year>`, then `./scripts/provision.sh --tags openclaw`. Phoenix reads its own token's end from the repository variable `CLAUDE_SETUP_TOKEN_EXPIRES`. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
+Update secret via `pulumi config set <key> --secret`, then `pulumi up`. Tailscale key: `tailscaleAuthKey`. Claude login: every agent turn uses one login, `~/.claude/shared/auth/.credentials.json`, and provisioning always writes it from `claudeSetupToken` (replacing anything else there). Use a setup token, not `claude auth login`: a signed-in login renews itself only until it is 30 days old, then every agent stops (2026-11-03). A setup token lasts one year and cannot be renewed, so record its end in `claudeSetupTokenExpires`; the `claude-login-expiry` timer messages the owner daily from 21 days before it. To renew: run `claude setup-token` (with the agents' Claude account; `code#state` from the browser goes into the waiting prompt), `pulumi config set claudeSetupToken --secret` (token via stdin), `pulumi config set claudeSetupTokenExpires --plaintext <today + 1 year>`, then `./scripts/provision.sh --tags openclaw`. Phoenix reads its own token's end from the repository variable `CLAUDE_SETUP_TOKEN_EXPIRES`. Gateway token: redeploy + re-pair devices. Telegram bot: revoke via @BotFather, update `telegramBotToken`, redeploy.
 
 ## First-Time Setup
 
@@ -301,7 +301,7 @@ pulumi stack init prod
 pulumi config set hcloud:token --secret
 pulumi config set tailscaleAuthKey --secret
 pulumi config set claudeSetupToken --secret
-pulumi config set claudeSetupTokenExpires YYYY-MM-DD   # one year after `claude setup-token`
+pulumi config set claudeSetupTokenExpires --plaintext YYYY-MM-DD   # one year after `claude setup-token`
 
 # Optional features
 pulumi config set exaApiKey --secret               # web search via Exa

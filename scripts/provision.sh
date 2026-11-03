@@ -206,7 +206,7 @@ import datetime, sys
 end = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
 sys.exit(0 if end > datetime.datetime.now(datetime.timezone.utc).date() else 1)
 ' "$claude_setup_token_expires" 2>/dev/null; then
-    echo "ERROR: claudeSetupTokenExpires must be a future date (YYYY-MM-DD): the day claudeSetupToken was created, one year later. Set it with 'pulumi config set claudeSetupTokenExpires <date>'; renew an ended token with 'claude setup-token'."
+    echo "ERROR: claudeSetupTokenExpires must be a future date (YYYY-MM-DD): the day claudeSetupToken was created, one year later. Set it with 'pulumi config set claudeSetupTokenExpires --plaintext <date>'; renew an ended token with 'claude setup-token'."
     exit 1
 fi
 

@@ -30,7 +30,7 @@ else:
 
 message = (f'The Claude login on the OpenClaw server {problem}. All agents stop answering then. '
            'Renew it: run `claude setup-token` with the agents\' Claude account, store the token with '
-           '`pulumi config set claudeSetupToken --secret`, set `claudeSetupTokenExpires` to one year from today, '
+           '`pulumi config set claudeSetupToken --secret`, set `claudeSetupTokenExpires` (--plaintext) to one year from today, '
            'then run ./scripts/provision.sh --tags openclaw (see AGENTS.md, Key Rotation).')
 print(f'WARN: the shared Claude login {problem}; telling the owner')
 subprocess.run([os.environ['OPENCLAW_BIN'], 'message', 'send',
