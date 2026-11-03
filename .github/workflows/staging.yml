@@ -166,6 +166,7 @@ jobs:
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
           CLAUDE_SETUP_TOKEN: ${{ secrets.CLAUDE_SETUP_TOKEN }}
+          CLAUDE_SETUP_TOKEN_EXPIRES: ${{ vars.CLAUDE_SETUP_TOKEN_EXPIRES }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.STAGING_TELEGRAM_BOT_TOKEN }}
           TELEGRAM_USER_ID: ${{ secrets.TELEGRAM_USER_ID }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
@@ -178,7 +179,7 @@ jobs:
           [[ "$PHOENIX_RESOURCE_NAME" =~ ^openclaw-staging-[0-9]+-[0-9]+$ ]]
           for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY PULUMI_BACKEND_URL \
             PULUMI_CONFIG_PASSPHRASE HCLOUD_TOKEN GH_TOKEN TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET \
-            CLAUDE_SETUP_TOKEN TELEGRAM_BOT_TOKEN TELEGRAM_USER_ID XAI_API_KEY EXA_API_KEY FIRECRAWL_API_KEY DEEPINFRA_API_KEY GITHUB_TOKEN_PAT \
+            CLAUDE_SETUP_TOKEN CLAUDE_SETUP_TOKEN_EXPIRES TELEGRAM_BOT_TOKEN TELEGRAM_USER_ID XAI_API_KEY EXA_API_KEY FIRECRAWL_API_KEY DEEPINFRA_API_KEY GITHUB_TOKEN_PAT \
             STAGING_PRIVATE_REPOSITORY; do
             if [[ -z "${!key:-}" ]]; then
               echo "::error::Required Phoenix input $key is missing or empty"
@@ -260,6 +261,7 @@ jobs:
           printf '%s' "$HCLOUD_TOKEN" | pulumi config set hcloud:token --secret --stack staging --non-interactive
           printf '%s' "$RUN_AUTHKEY" | pulumi config set tailscaleAuthKey --secret --stack staging --non-interactive
           printf '%s' "$CLAUDE_SETUP_TOKEN" | pulumi config set claudeSetupToken --secret --stack staging --non-interactive
+          pulumi config set claudeSetupTokenExpires "$CLAUDE_SETUP_TOKEN_EXPIRES" --stack staging
 
           # Telegram
           printf '%s' "$TELEGRAM_BOT_TOKEN" | pulumi config set telegramBotToken --secret --stack staging --non-interactive

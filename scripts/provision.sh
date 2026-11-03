@@ -114,6 +114,7 @@ else
         exit 1
     }
     PROVISION_CLAUDE_SETUP_TOKEN=$(config_value claudeSetupToken)
+    PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES=$(config_value claudeSetupTokenExpires)
     PROVISION_TELEGRAM_BOT_TOKEN=$(config_value telegramBotToken)
     PROVISION_TELEGRAM_USER_ID=$(config_value telegramUserId)
     PROVISION_TELEGRAM_GROUP_ID=$(config_value telegramGroupId)
@@ -133,7 +134,7 @@ else
     PROVISION_DISCORD_USER_ID=$(config_value discordUserId)
     PROVISION_WORKSPACE_DEPLOY_KEY=$(workspace_key main workspaceDeployPrivateKey)
     export PROVISION_GATEWAY_TOKEN PROVISION_TAILSCALE_HOSTNAME \
-        PROVISION_CLAUDE_SETUP_TOKEN \
+        PROVISION_CLAUDE_SETUP_TOKEN PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES \
         PROVISION_TELEGRAM_BOT_TOKEN PROVISION_TELEGRAM_USER_ID PROVISION_TELEGRAM_GROUP_ID \
         PROVISION_WORKSPACE_REPO_URL PROVISION_WORKSPACE_DEPLOY_KEY \
         PROVISION_XAI_API_KEY PROVISION_EXA_API_KEY PROVISION_FIRECRAWL_API_KEY PROVISION_DEEPINFRA_API_KEY PROVISION_GROQ_API_KEY PROVISION_ELEVENLABS_API_KEY PROVISION_GEMINI_API_KEY PROVISION_GITHUB_TOKEN \
@@ -198,6 +199,16 @@ if [ -z "$claude_setup_token" ]; then
     echo "ERROR: claudeSetupToken is empty. Create one with 'claude setup-token' and set it with 'pulumi config set claudeSetupToken --secret'."
     exit 1
 fi
+# A setup token lasts one year from the day 'claude setup-token' printed it.
+claude_setup_token_expires=$(read_env PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES)
+if ! python3 -c '
+import datetime, sys
+end = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+sys.exit(0 if end > datetime.datetime.now(datetime.timezone.utc).date() else 1)
+' "$claude_setup_token_expires" 2>/dev/null; then
+    echo "ERROR: claudeSetupTokenExpires must be a future date (YYYY-MM-DD): the day claudeSetupToken was created, one year later. Set it with 'pulumi config set claudeSetupTokenExpires <date>'; renew an ended token with 'claude setup-token'."
+    exit 1
+fi
 
 # Validate deploy keys: if repo URL is set, deploy key must exist and be valid
 validate_deploy_key() {
@@ -232,7 +243,7 @@ fi
 
 # Status summary
 echo "  gateway_token: set"
-echo "  claude_setup_token: set"
+echo "  claude_setup_token: set, ends $claude_setup_token_expires"
 echo "  telegram: $([ -n "$(read_env PROVISION_TELEGRAM_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  discord: $([ -n "$(read_env PROVISION_DISCORD_BOT_TOKEN)" ] && echo "configured" || echo "skipped")"
 echo "  workspace_sync (main): $([ -n "$(read_env PROVISION_WORKSPACE_REPO_URL)" ] && echo "configured" || echo "skipped")"
@@ -267,6 +278,7 @@ import json, sys, os
 static = [
     ('gateway_token', 'PROVISION_GATEWAY_TOKEN'),
     ('claude_setup_token', 'PROVISION_CLAUDE_SETUP_TOKEN'),
+    ('claude_setup_token_expires', 'PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES'),
     ('telegram_bot_token', 'PROVISION_TELEGRAM_BOT_TOKEN'),
     ('telegram_user_id', 'PROVISION_TELEGRAM_USER_ID'),
     ('telegram_group_id', 'PROVISION_TELEGRAM_GROUP_ID'),

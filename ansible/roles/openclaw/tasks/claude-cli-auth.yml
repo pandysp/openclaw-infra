@@ -57,21 +57,21 @@
     - /home/ubuntu/.claude/shared
     - /home/ubuntu/.claude/shared/auth
 
-# The setup token only bootstraps a server without a login; provisioning never
-# replaces an existing login. A setup token cannot renew itself: sign in once
-# (`claude auth login`) for a login that does, or to replace any login.
-- name: Install the setup-token login only when none exists
+# Pulumi's 1-year setup token is the only login. A `claude auth login` would
+# renew itself only until its sign-in is 30 days old (refreshTokenExpiresAt),
+# then every turn fails; provisioning replaces any such login with the token.
+# expiresAt is the token's real end, so Claude Code and the expiry check agree.
+- name: Install the setup-token login
   ansible.builtin.copy:
     content: "{{ _claude_setup_login | to_nice_json }}\n"
     dest: /home/ubuntu/.claude/shared/auth/.credentials.json
     mode: "0600"
-    force: false
   vars:
     _claude_setup_login:
       claudeAiOauth:
         accessToken: "{{ claude_setup_token }}"
         refreshToken: ""
-        expiresAt: 1813499823032
+        expiresAt: "{{ ((claude_setup_token_expires | to_datetime('%Y-%m-%d')) - ('1970-01-01' | to_datetime('%Y-%m-%d'))).total_seconds() | int * 1000 }}"
         scopes: [user:file_upload, user:inference, user:mcp_servers, user:profile, user:sessions:claude_code]
         subscriptionType: max
   no_log: true
@@ -118,3 +118,78 @@
   register: claude_auth_check
   failed_when: claude_auth_check.rc != 0 or not (claude_auth_check.stdout | from_json).loggedIn
   no_log: true
+
+# The login's end stops every agent at once, and nobody sees Claude Code's own
+# warning on a server: tell the owner weeks ahead instead.
+- name: Create the folder for user scripts
+  ansible.builtin.file:
+    path: /home/ubuntu/.local/bin
+    state: directory
+    mode: "0755"
+
+- name: Install the Claude login expiry check
+  ansible.builtin.copy:
+    src: claude-login-expiry.py
+    dest: /home/ubuntu/.local/bin/claude-login-expiry
+    mode: "0755"
+
+- name: Install the Claude login expiry units
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "/home/ubuntu/.config/systemd/user/{{ item.name }}"
+    mode: "0644"
+  loop:
+    - name: claude-login-expiry.service
+      content: |
+        [Unit]
+        Description=Tell the owner when the shared Claude login is about to end
+
+        [Service]
+        Type=oneshot
+        Environment=CLAUDE_LOGIN_CREDENTIALS=/home/ubuntu/.claude/shared/auth/.credentials.json
+        Environment=CLAUDE_LOGIN_WARN_DAYS={{ claude_login_warn_days }}
+        Environment=OPENCLAW_BIN=/home/ubuntu/.npm-global/bin/openclaw
+        Environment=OWNER_CHANNEL={{ _owner.deliver_channel }}
+        Environment=OWNER_TARGET={{ _owner.deliver_to }}
+        ExecStart=/home/ubuntu/.local/bin/claude-login-expiry
+    - name: claude-login-expiry.timer
+      content: |
+        [Unit]
+        Description=Check daily how long the shared Claude login lasts
+
+        [Timer]
+        OnCalendar=*-*-* 08:00:00 UTC
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+  register: claude_login_expiry_units
+
+- name: Reload systemd after the expiry units changed
+  ansible.builtin.systemd:
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: claude_login_expiry_units.changed
+
+- name: Enable the daily Claude login expiry check
+  ansible.builtin.systemd:
+    name: claude-login-expiry.timer
+    state: started
+    enabled: true
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+
+# Fails the run if the check itself breaks; a near end also messages the owner now.
+- name: Check how long the Claude login lasts
+  ansible.builtin.command: systemctl --user start claude-login-expiry.service
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  changed_when: false
+  when: not ansible_check_mode

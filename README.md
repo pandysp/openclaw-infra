@@ -90,6 +90,7 @@ pulumi stack init prod
 pulumi config set hcloud:token --secret       # Hetzner API token
 pulumi config set tailscaleAuthKey --secret    # Tailscale auth key
 pulumi config set claudeSetupToken --secret    # From `claude setup-token`
+pulumi config set claudeSetupTokenExpires YYYY-MM-DD  # One year after creating it
 
 # Optional: Telegram chat and scheduled jobs (daily standup, night shift)
 pulumi config set telegramBotToken --secret    # From @BotFather
