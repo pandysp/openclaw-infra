@@ -32,7 +32,7 @@ openclaw_agent_models:
 # CLI backend: OpenClaw shells out to the `claude` CLI binary which manages its own
 # OAuth auth (Claude Max subscription). No direct Anthropic API calls for the primary model.
 # The claude CLI is installed via npm (@anthropic-ai/claude-code) and reads its login from
-# ~/.claude/shared/auth (the Pulumi setup token on a fresh server; see AGENTS.md Key Rotation).
+# ~/.claude/shared/auth (always Pulumi's 1-year setup token; see AGENTS.md Key Rotation).
 # Claude Code compacts claude-cli sessions itself (OpenClaw skips its own compaction
 # and memory flush for CLI turns); see claude_code_auto_compact_window below.
 #
@@ -73,6 +73,9 @@ claude_code_version: "2.1.293"  # Opus 5.5 needs >= 2.1.280
 # minus its own 33k buffer (check with `claude -p /context`): 305000 compacts at
 # ~272k. Unset, Opus 5.5 runs until ~967k of its 1M window.
 claude_code_auto_compact_window: 305000
+# The owner gets a daily message while the shared Claude login has fewer days left
+# (claude-login-expiry timer; a setup token lasts one year).
+claude_login_warn_days: 21
 
 # true runs every agent turn in its own container (apply with --tags config,claude-cli);
 # false runs turns natively (apply with --tags config). Container files stay installed when off.

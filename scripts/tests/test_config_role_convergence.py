@@ -115,7 +115,6 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         cls.configure = find_task(gateway_tasks, CONFIGURE)
         cls.report = find_task(gateway_tasks, REPORT)
         cls.migrate = find_task(tasks, MIGRATE)
-        cls.auth_profiles = find_task(tasks, 'Enforce agent auth-profiles — setup token present, api-key profile absent')
         cls.migrate_report = find_task(tasks, MIGRATE_REPORT)
         assert cls.temp_files and cls.configure and cls.report and cls.migrate and cls.migrate_report, 'Config role tasks moved'
 
@@ -587,18 +586,6 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
             result = self.run_task([self.migrate, self.migrate_report], root)
             self.assertRegex(result.stdout, r'localhost\s+: ok=1\s+changed=0 ')
             self.assertFalse((root / 'systemctl').exists(), 'gateway touched with nothing to migrate')
-
-    def test_unreadable_auth_profiles_are_not_replaced_with_empty_data(self):
-        with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
-            root = Path(tmp)
-            profiles = root / '.openclaw/agents/main/agent/auth-profiles.json'
-            profiles.parent.mkdir(parents=True)
-            original = '{"profiles": {"valuable": "truncated'
-            profiles.write_text(original)
-            failed = self.run_task([self.auth_profiles], root, {'claude_setup_token': 'fixture-private-key'})
-            self.assertNotEqual(failed.returncode, 0)
-            self.assertEqual(profiles.read_text(), original)
-            self.assertNotIn('fixture-private-key', failed.stdout + failed.stderr)
 
     def test_an_unreadable_session_store_fails_before_the_gateway_stops(self):
         with tempfile.TemporaryDirectory(prefix='config-role-') as tmp:

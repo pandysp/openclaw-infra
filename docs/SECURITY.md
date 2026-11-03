@@ -274,9 +274,9 @@ Sensitive files on the server (all under `~/.openclaw/` unless noted):
 | `devices/paired.json` | Paired device tokens |
 | `devices/pending.json` | Pending pairing requests |
 | `credentials/` | Channel tokens, OAuth tokens |
-| `agents/<id>/auth-profiles.json` | Model provider auth (Claude setup token) |
+| `state/openclaw.sqlite` | Model provider auth profiles (the setup token from onboarding; agent turns use the Claude CLI login below) |
 | `github-tokens/<agent>` | Per-agent GitHub PATs, used by the GitHub MCP servers and `mcp-auth-proxy` |
-| `~/.claude/shared/auth/.credentials.json` | Claude CLI login, used for every agent turn (the setup token after a fresh install; a self-renewing login once someone signs in) |
+| `~/.claude/shared/auth/.credentials.json` | Claude CLI login, used for every agent turn (always Pulumi's 1-year setup token) |
 | `agents/<id>/sessions/*.jsonl` | Session transcripts (full conversation history) |
 | `cron/jobs.json` | Cron job definitions |
 | `~/.ssh/workspace-deploy-key` | GitHub deploy key (if workspace sync enabled) |

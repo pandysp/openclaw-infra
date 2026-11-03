@@ -28,7 +28,7 @@ BACKEND_ENV = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'PULUMI_BACKEND_URL
 # the real vault. Keep this list equal to the workflow's required-input loop.
 REQUIRED_INPUTS = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'PULUMI_BACKEND_URL',
                    'PULUMI_CONFIG_PASSPHRASE', 'HCLOUD_TOKEN', 'GH_TOKEN', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET',
-                   'CLAUDE_SETUP_TOKEN', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_USER_ID',
+                   'CLAUDE_SETUP_TOKEN', 'CLAUDE_SETUP_TOKEN_EXPIRES', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_USER_ID',
                    'XAI_API_KEY', 'EXA_API_KEY', 'FIRECRAWL_API_KEY', 'DEEPINFRA_API_KEY', 'GITHUB_TOKEN_PAT', 'STAGING_PRIVATE_REPOSITORY')
 SECRET_CONFIG_KEYS = ('hcloud:token', 'tailscaleAuthKey', 'claudeSetupToken', 'telegramBotToken',
                       'xaiApiKey', 'exaApiKey', 'firecrawlApiKey', 'deepinfraApiKey', 'githubToken', 'githubTokenTest')
@@ -64,7 +64,8 @@ if cmd == 'pulumi':
         sys.exit(opts.get('config_read_exit', 0) if args[2] == 'claudeSetupToken' else 0)
     if args[:2] == ['config', '--json']:
         config = {'openclaw-infra:agentIds': {'value': 'test'},
-                  'openclaw-infra:claudeSetupToken': {'value': 'fixture-claude', 'secret': True}}
+                  'openclaw-infra:claudeSetupToken': {'value': 'fixture-claude', 'secret': True},
+                  'openclaw-infra:claudeSetupTokenExpires': {'value': '2099-01-01'}}
         config.update(opts.get('config_values', {}))
         print(opts.get('raw_config_output', json.dumps(config)))
         sys.exit(opts.get('config_read_exit', 0))
@@ -321,6 +322,8 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         for name in REQUIRED_INPUTS:
             if name not in ('TELEGRAM_USER_ID', 'STAGING_PRIVATE_REPOSITORY', 'TS_OAUTH_CLIENT_ID', 'TS_OAUTH_SECRET'):
                 self.env[name] = 'fixture-' + name.lower()
+        # A public date, not a secret: it goes into a plain Pulumi config value.
+        self.env['CLAUDE_SETUP_TOKEN_EXPIRES'] = '2099-01-01'
         self.env['STAGING_PRIVATE_REPOSITORY'] = 'pandysp/private-phoenix-probe'
         # The workflow's own token (${{ github.token }}), which the hcloud step uses.
         self.env['GH_TOKEN'] = 'fixture-github-token'
@@ -771,6 +774,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         (self.root / 'ansible').mkdir()
         self.env.update({'PROVISION_GATEWAY_TOKEN': 'fixture-gateway',
                          'PROVISION_CLAUDE_SETUP_TOKEN': 'fixture-claude',
+                         'PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES': '2099-01-01',
                          'PROVISION_TAILSCALE_HOSTNAME': NAME,
                          'PROVISION_AGENT_IDS': 'test'})
         clean = CLEAN_RECAP.replace('changed=18', 'changed=0').replace('=== Provisioning complete ===\n', '')
@@ -927,6 +931,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         self.env['PROVISION_GITHUB_TOKEN'] = 'fixture-inherited-must-clear'
         values = {
             'claudeSetupToken': ('PROVISION_CLAUDE_SETUP_TOKEN', 'fixture-claude'),
+            'claudeSetupTokenExpires': ('PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES', '2099-01-01'),
             'telegramBotToken': ('PROVISION_TELEGRAM_BOT_TOKEN', 'fixture-telegram'),
             'telegramUserId': ('PROVISION_TELEGRAM_USER_ID', '12345'),
             'telegramGroupId': ('PROVISION_TELEGRAM_GROUP_ID', '-12345'),
@@ -1015,6 +1020,7 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
         (self.root / 'ansible').mkdir()
         self.env.update({'PROVISION_GATEWAY_TOKEN': 'fixture-gateway',
                          'PROVISION_CLAUDE_SETUP_TOKEN': 'fixture-claude',
+                         'PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES': '2099-01-01',
                          'PROVISION_AGENT_IDS': 'test'})
         for supplied in ('', 'openclaw-vps', NAME + '-other'):
             with self.subTest(supplied=supplied):

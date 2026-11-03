@@ -32,6 +32,8 @@ function toPascal(id: string): string {
 
 const tailscaleAuthKey = config.requireSecret("tailscaleAuthKey");
 const claudeSetupToken = config.requireSecret("claudeSetupToken");
+// The day claudeSetupToken stops working (YYYY-MM-DD): one year after `claude setup-token`.
+const claudeSetupTokenExpires = config.require("claudeSetupTokenExpires");
 
 // ============================================
 // Global optional config
@@ -159,6 +161,7 @@ const provisionEnv: Record<string, pulumi.Input<string>> = {
     PROVISION_AGENT_IDS: agentIds.join(","),
     PROVISION_GATEWAY_TOKEN: gatewayToken.result,
     PROVISION_CLAUDE_SETUP_TOKEN: claudeSetupToken,
+    PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES: claudeSetupTokenExpires,
     PROVISION_TELEGRAM_BOT_TOKEN: telegramBotToken || "",
     PROVISION_TELEGRAM_USER_ID: telegramUserId || "",
     PROVISION_TELEGRAM_GROUP_ID: telegramGroupId || "",

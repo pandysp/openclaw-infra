@@ -83,11 +83,13 @@ class ProvisionTransportTests(unittest.TestCase):
                     'WORKSPACE_TASKS':str(ROOT/'ansible/roles/workspace/tasks/main.yml'),
                     'TAILSCALE_FIXTURE':json.dumps({'MagicDNSSuffix':'example.ts.net','Peer':{'one':PEER}}),
                     'PROVISION_GATEWAY_TOKEN':'fixture-gateway', 'PROVISION_CLAUDE_SETUP_TOKEN':'fixture-claude',
+                    'PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES':'2099-01-01',
                     'PROVISION_TAILSCALE_HOSTNAME':'openclaw-vps', 'PROVISION_AGENT_IDS':'test',
                     'PROVISION_WORKSPACE_DEPLOY_KEY':self.key, 'PROVISION_WORKSPACE_TEST_DEPLOY_KEY':self.key,
                     'PROVISION_OBSIDIAN_VAULT_PASSWORD':'fixture-quote"\\slash\nline: true\nü',
                     'EXPECTED_SECRETS':json.dumps({'gateway_token':'fixture-gateway','workspace_deploy_key':self.key,
                         'workspace_test_deploy_key':self.key,'github_token':'',
+                        'claude_setup_token_expires':'2099-01-01',
                         'telegram_test_user_id':'','obsidian_vault_password':'fixture-quote"\\slash\nline: true\nü'})}
 
     def run_provisioner(self):
@@ -155,6 +157,19 @@ class ProvisionTransportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('claudeSetupToken is empty', result.stdout)
         self.assertFalse((self.root/'ansible-ran').exists())
+
+    def test_missing_or_ended_token_expiry_stops_before_ansible(self):
+        # The expiry is what warns the owner before every agent stops.
+        for value in (None, '', 'next year', '2026-02-30', '2020-01-01'):
+            with self.subTest(value=value):
+                if value is None:
+                    self.env.pop('PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES', None)
+                else:
+                    self.env['PROVISION_CLAUDE_SETUP_TOKEN_EXPIRES'] = value
+                result = self.run_provisioner()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('claudeSetupTokenExpires must be a future date', result.stdout)
+                self.assertFalse((self.root/'ansible-ran').exists())
 
     def test_missing_hostname_never_uses_default(self):
         del self.env['PROVISION_TAILSCALE_HOSTNAME']
