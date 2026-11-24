@@ -400,6 +400,24 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
                 self.assertEqual(store.get('channels', {}).get('whatsapp'), expected)
                 self.assertEqual('whatsapp' in store['plugins']['allow'], bool(agents))
 
+    def test_discord_is_removed_with_its_token(self):
+        # 2026-11-24: Discord was removed; a left-over channel would keep its token and
+        # guild list and answer through the system agent.
+        live = {'channels': {'discord': {'enabled': True, 'groupPolicy': 'allowlist', 'token': 'fixture-old-token',
+                                         'guilds': {'1': {'users': ['2'], 'requireMention': False}}}},
+                'tools': {'elevated': {'allowFrom': {'discord': ['2']}}}}
+        for token in ('', 'fixture-discord-token'):
+            with self.subTest(discord=bool(token)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+                root = Path(tmp)
+                (root / 'store.json').write_text(json.dumps(live))
+                result = self.run_task([self.temp_files, self.configure], root,
+                                       {'discord_bot_token': token, 'discord_user_id': '2'})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                store = json.loads((root / 'store.json').read_text())
+                self.assertEqual('discord' in store.get('channels', {}), bool(token))
+                self.assertEqual('discord' in store['tools']['elevated'].get('allowFrom', {}), bool(token))
+                self.assertEqual('discord' in store['plugins']['allow'], bool(token))
+
     def test_elevenlabs_plugin_is_allowed_only_with_an_elevenlabs_key(self):
         for key in ('', 'fixture-elevenlabs-key'):
             with self.subTest(elevenlabs=bool(key)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
