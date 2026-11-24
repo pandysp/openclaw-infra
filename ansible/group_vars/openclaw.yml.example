@@ -100,19 +100,9 @@
 #       - 987654321               # user ID 2
 #     group_require_mention: true # require @-mention in group (default: false)
 #
-# is_default is optional per fleet: at most one agent may have it. That agent owns
-# each channel's default account and receives the owner alerts (failed workspace
-# sync, failed memory copies, Claude login about to end). With none, no account
-# binding and no alert is installed, and existing alerts are removed.
-#
-# The system agent owns background work and gets chats no binding matches. It must
-# be in openclaw_agents (all.yml default: "main"):
-# openclaw_system_agent: "second-agent"
-#
-# Removing an agent: drop it from openclaw_agents (and its cron jobs) and name it
-# here. Provisioning stops its Obsidian and git sync, then runs `openclaw agents
-# delete`, which moves its workspace to the server's Trash. An agent on the server
-# that is in neither list stops the run.
+# is_default (at most one), the system agent and removing agents: AGENTS.md,
+# "Default Agent, System Agent and Owner" and "Removing an Agent".
+# openclaw_system_agent: "second-agent"   # all.yml default: "main"
 # openclaw_retired_agents: ["old-agent"]
 
 # --- Discord (Option A: single agent, multi-channel sessions) ---
@@ -121,8 +111,7 @@
 #   pulumi config set discordGuildId "YOUR_GUILD_ID"
 #   pulumi config set discordUserId "YOUR_USER_ID"
 #   ./scripts/provision.sh --tags discord
-# To remove Discord: `pulumi config rm discordBotToken`, then a full provision
-# (the config role removes channels.discord and the plugin from the allowlist).
+# To remove Discord: AGENTS.md, "Discord Integration".
 # To deliver cron/heartbeat via Discord instead of Telegram, override main agent:
 #   - id: "main"
 #     is_default: true

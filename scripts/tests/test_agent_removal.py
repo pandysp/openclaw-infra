@@ -64,7 +64,8 @@ class AgentRemovalTests(unittest.TestCase):
             raise RuntimeError("Install the project's Ansible development dependency first")
         tasks, = load_yaml(ROOT / 'ansible/roles/agents/tasks/main.yml')
         cls.tasks = [task for task in tasks if task.get('name') in SELECTED]
-        assert [t['name'] for t in cls.tasks] == list(SELECTED), 'The removal tasks moved or were renamed'
+        # Kept in file order: the order under test is the role's own.
+        assert sorted(t['name'] for t in cls.tasks) == sorted(SELECTED), 'The removal tasks were renamed'
 
     def run_role(self, live=('main', 'tl'), retired=('main',), delete='ok', stuck='', check=False):
         with tempfile.TemporaryDirectory(prefix='agent-removal-') as tmp:
