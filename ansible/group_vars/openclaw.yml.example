@@ -99,6 +99,11 @@
 #       - 123456789               # user ID 1
 #       - 987654321               # user ID 2
 #     group_require_mention: true # require @-mention in group (default: false)
+#
+# is_default (at most one), the system agent and removing agents: AGENTS.md,
+# "Default Agent, System Agent and Owner" and "Removing an Agent".
+# openclaw_system_agent: "second-agent"   # all.yml default: "main"
+# openclaw_retired_agents: ["old-agent"]
 
 # --- Discord (Option A: single agent, multi-channel sessions) ---
 # Discord channels get isolated sessions automatically. Configure at channel level:
@@ -106,6 +111,7 @@
 #   pulumi config set discordGuildId "YOUR_GUILD_ID"
 #   pulumi config set discordUserId "YOUR_USER_ID"
 #   ./scripts/provision.sh --tags discord
+# To remove Discord: AGENTS.md, "Discord Integration".
 # To deliver cron/heartbeat via Discord instead of Telegram, override main agent:
 #   - id: "main"
 #     is_default: true

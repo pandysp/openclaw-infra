@@ -216,10 +216,10 @@ Near-real-time two-way sync between agent workspaces and Obsidian Sync, enabling
 
 ```bash
 # Check daemon status (one service per agent)
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-main'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-<agent>'
 
 # View sync logs
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u obsidian-headless-main -f'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u obsidian-headless-<agent> -f'
 ```
 
 ### Token Expiry

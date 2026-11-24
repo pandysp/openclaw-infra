@@ -25,6 +25,12 @@ def load_yaml(*paths):
                                      capture_output=True, text=True, check=True).stdout)
 
 
+def derived_vars():
+    """all.yml's derived variables that role tasks read, as the real expressions."""
+    all_vars, = load_yaml(ROOT / 'ansible/group_vars/all.yml')
+    return {'_openclaw_has_owner': all_vars['_openclaw_has_owner']}
+
+
 class PlaybookOrderTest(unittest.TestCase):
     def test_cron_jobs_are_reconciled_after_every_channel_exists(self):
         # Since 2026.9.8 a job's delivery channel must be loaded when the job is added.

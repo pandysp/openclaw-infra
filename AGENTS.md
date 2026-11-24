@@ -70,7 +70,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall the OpenClaw binary; version bumps need a full provision ([Update OpenClaw](#update-openclaw)) |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
-| `agents` | agents | Add/remove non-default agents, update Telegram bindings, per-agent MCP tool deny rules (sole writer) |
+| `agents` | agents | Add agents, delete agents listed in `openclaw_retired_agents`, set the system agent, per-agent MCP tool deny rules (sole writer). Run removals as a full provision ([Removing an Agent](#removing-an-agent)) |
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
 | `whatsapp` | whatsapp | Configure WhatsApp channel for agents using `deliver_channel: whatsapp` |
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
@@ -126,7 +126,7 @@ openclaw status              # Session health
 
 - `STAGING_PRIVATE_REPOSITORY` names a dedicated private fixture (`pandysp/openclaw-staging-vault`: one README, no notes, no secrets) readable by the staging PAT. Real notes never enter staging. Direct MCP checks are read-only; inference disables gateway and native Claude tools; write tests belong in the staging workspace repositories. One exception, the smoke test's shell check: for a single turn with all OpenClaw tools denied, the launcher gives Claude only its Bash tool. The fixed, harmless prompt is what keeps that turn safe (it could still use the Git proxy or the internet). Workspace backups pause for the window; an extra launch or a changed workspace is detected afterwards and fails the run, the backups stay paused and teardown destroys the server. Public reads do not prove private access.
 - Staging agents are permanently read-only: `openclaw_tools_allow` limits every session (heartbeats included) to the two `*_get_file_contents` MCP reads, `tools.alsoAllow` is cleared, and because that allowlist does not reach Claude's own tools, `openclaw_claude_cli_extra_args` makes the container launcher add `--tools ""` (OpenClaw already passes `--strict-mcp-config`) so no native tool can write private content into the publicly backed-up staging workspaces. The smoke test verifies this policy before any MCP read. Apart from the smoke test's one-turn shell check above.
-- Obsidian Sync is out of Phoenix scope (decided 2026-09-25). The role picks the cloud vault by agent ID (`<agent>-workspace`), so a staging run would attach the public staging backup to the real vault; staging therefore never runs it and receives no Obsidian credentials. Check it read-only on production instead: `systemctl --user status obsidian-headless-main`, `ob sync-status --path ~/.openclaw/workspace`.
+- Obsidian Sync is out of Phoenix scope (decided 2026-09-25). The role picks the cloud vault by agent ID (`<agent>-workspace`), so a staging run would attach the public staging backup to the real vault; staging therefore never runs it and receives no Obsidian credentials. Check it read-only on production instead: `systemctl --user status obsidian-headless-<agent>`, `ob sync-status --path ~/.openclaw/workspace-<agent>`.
 - Phoenix runs `scripts/test-workspace-isolation.sh` on the staging VPS: a controlled Git hook in the public staging workspace proves the sync unit executes hooks as UID 1000 with no capabilities, no host config or Docker socket, and no route to the credential proxy (an unrestricted control container proves the proxy is reachable), then confirms the push by anonymous readback and removes its fixture.
 - The staging server joins the tailnet as `tag:openclaw-staging` with a key minted per run by the CI OAuth client (`TS_OAUTH_CLIENT_ID`/`TS_OAUTH_SECRET`, tag `tag:ci`): single use, ephemeral, pre-authorized, one hour. No stored auth key exists to expire.
 - The tailnet policy (Tailscale admin console, not this repo) makes `tag:ci` the owner of `tag:openclaw-staging` and isolates that tag both ways: it has **no source rights** (a one-hour agent host with real credentials must not reach your devices, production or other servers), and only `tag:ci` may reach it (SSH as `ubuntu`), so it never even sees your devices; there is no owner SSH into a running Phoenix server. `tag:ci` itself reaches only `tag:server` and `tag:openclaw-staging`, never personal devices or the untagged production server. Policy tests pin all of this, and `Resolve staging host` fails if the staging server sees any peer other than a CI runner. `tag:server` stays the other project's tag.
@@ -352,10 +352,10 @@ A per-agent hourly systemd timer (`workspace-git-sync-<agent-id>`) runs Git in a
 ### Verify Workspace Sync
 
 ```bash
-# Requires SSH (systemd timer management). Replace `main` with the agent ID.
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.timer'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-main.service'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-main.service -n 20 --no-pager'
+# Requires SSH (systemd timer management). Replace <agent> with the agent ID.
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-<agent>.timer'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-<agent>.service'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-<agent>.service -n 20 --no-pager'
 ```
 
 Do not run host-side Git inside an agent workspace: the agent can write `.git/config` and hooks, so even `git log` on the host executes agent-controlled code outside the sandbox. Inspect history on GitHub or in a fresh clone instead.
@@ -392,11 +392,11 @@ cd ..
 Check the provider, not just gateway health. These calls do not create a chat:
 
 ```bash
-openclaw gateway call webSearch.status --params '{"agentId":"main"}' --json
-openclaw gateway call webSearch.test --params '{"agentId":"main","providerId":"exa","query":"OpenClaw documentation"}' --json
+openclaw gateway call webSearch.status --params '{"agentId":"<agent>"}' --json
+openclaw gateway call webSearch.test --params '{"agentId":"<agent>","providerId":"exa","query":"OpenClaw documentation"}' --json
 ```
 
-Select a configured agent explicitly (`main` above); multi-agent deployments
+Select a configured agent explicitly (`<agent>` above); multi-agent deployments
 otherwise reject the test because model authentication has no single owner.
 A provider test proves Exa works, not that an agent completed a search turn.
 Firecrawl applies to OpenClaw's `web_fetch`; Claude's native WebFetch is not
@@ -447,6 +447,8 @@ pulumi config set discordBotToken --secret && pulumi config set discordGuildId "
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels status'
 ```
 
+To remove Discord, `pulumi config rm discordBotToken` and run a full provision: the config role removes `channels.discord` and drops the plugin from the allowlist. Without that, a left-over channel keeps answering, routed to the system agent.
+
 **Read [docs/INTEGRATIONS.md#discord-integration](./docs/INTEGRATIONS.md#discord-integration) in full when:** first-time Discord setup (bot creation, required intents, invite scopes) or troubleshooting Discord connection.
 
 ## Obsidian Headless Sync (Optional)
@@ -458,7 +460,7 @@ ob login   # locally, creates ~/.obsidian-headless/auth_token
 pulumi config set obsidianAuthToken --secret && pulumi config set obsidianVaultPassword --secret
 # Enable in openclaw.yml: obsidian_headless_enabled: true, obsidian_headless_agents: [main]
 ./scripts/provision.sh --tags obsidian-headless
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-main'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-<agent>'
 ```
 
 **Read [docs/INTEGRATIONS.md#obsidian-headless-sync](./docs/INTEGRATIONS.md#obsidian-headless-sync) in full when:** first-time Obsidian setup or diagnosing token expiry.
@@ -500,6 +502,18 @@ even while its agent is enabled.
 3. Run `./scripts/provision.sh`
 
 MCP servers, workspaces, deny rules, and token mappings are generated automatically. Cron jobs remain manual (personal config — add to `openclaw.yml`).
+
+### Default Agent, System Agent and Owner
+
+- **`is_default: true`** (at most one agent, optional): that agent owns each channel's default account and is the **owner** who receives the alerts for a failed workspace sync, failed memory copies and the Claude login's end. With no default agent, no account binding and no alert is installed, and existing alerts are removed.
+- **`openclaw_system_agent`** (required, all.yml default `main`): written to `agents.defaults.systemAgent.agentId`. OpenClaw needs it in a multi-agent fleet for background work and `openclaw message send`, and routes every chat that no binding matches to it. The allowlists decide which chats are admitted at all.
+
+### Removing an Agent
+
+1. Remove the agent and its cron jobs from `openclaw.yml` (and from `obsidian_headless_agents` and `mac.agents`), and add its ID to `openclaw_retired_agents`. If it was the system agent, point `openclaw_system_agent` at another agent.
+2. Run the **full** `./scripts/provision.sh`. The agents role stops and disables the agent's `obsidian-headless-<id>` and `workspace-git-sync-<id>` units, sets the system agent, then runs `openclaw agents delete <id> --force`, which moves the workspace, agent state and transcripts to the server's Trash. A refused or partial delete fails the run. The telegram role then rewrites bindings and allowlists; until it runs, the retired agent's chats fall to the system agent, so do not stop at `--tags agents`.
+
+An agent on the server that is in neither `openclaw_agents` nor `openclaw_retired_agents` stops the run before anything changes: a run without the personal `openclaw.yml` falls back to all.yml's single `main` and would otherwise delete every other agent. A full provision also removes its Playwright browser, unit and network (playwright role). Not removed: the agent's sync unit files (disabled), its GitHub token file for the proxy, its `memory-sources/<id>` copies, its workspace deploy key file, and Mac daemons (`deploy-mac-daemons.sh` neither installs nor removes daemons of agents outside `openclaw_agents`).
 
 ### Role Ordering
 
@@ -565,10 +579,10 @@ Each agent searches its own notes and private chats with OpenClaw's built-in mem
 
 ```bash
 # Check the provider, model and a live embedding call (on the VPS)
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory status --agent main --deep'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory status --agent <agent> --deep'
 
 # Rebuild one agent's index
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory index --agent main --force'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory index --agent <agent> --force'
 
 # Last copy run: counts and any unreadable files
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-memory-sources -n 30 --no-pager'

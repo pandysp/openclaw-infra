@@ -132,6 +132,7 @@
     src: claude-login-expiry.py
     dest: /home/ubuntu/.local/bin/claude-login-expiry
     mode: "0755"
+  when: _openclaw_has_owner
 
 - name: Install the Claude login expiry units
   ansible.builtin.copy:
@@ -167,6 +168,7 @@
     label: "{{ item.name }}"
   vars:
     _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+  when: _openclaw_has_owner
   register: claude_login_expiry_units
 
 - name: Reload systemd after the expiry units changed
@@ -185,6 +187,7 @@
     scope: user
   environment:
     XDG_RUNTIME_DIR: /run/user/1000
+  when: _openclaw_has_owner
 
 # Fails the run if the check itself breaks; a near end also messages the owner now.
 - name: Check how long the Claude login lasts
@@ -192,4 +195,44 @@
   environment:
     XDG_RUNTIME_DIR: /run/user/1000
   changed_when: false
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - _openclaw_has_owner
+
+# The owner is the is_default agent. Without one the check has nobody to tell.
+- name: Check for the Claude login expiry timer
+  ansible.builtin.stat:
+    path: /home/ubuntu/.config/systemd/user/claude-login-expiry.timer
+  register: claude_login_expiry_timer
+  when: not _openclaw_has_owner
+
+- name: Stop the Claude login expiry check when there is no owner
+  ansible.builtin.systemd:
+    name: claude-login-expiry.timer
+    state: stopped
+    enabled: false
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when:
+    - not _openclaw_has_owner
+    - claude_login_expiry_timer.stat.exists
+
+- name: Remove the Claude login expiry check when there is no owner
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /home/ubuntu/.config/systemd/user/claude-login-expiry.timer
+    - /home/ubuntu/.config/systemd/user/claude-login-expiry.service
+    - /home/ubuntu/.local/bin/claude-login-expiry
+  register: claude_login_expiry_removed
+  when: not _openclaw_has_owner
+
+- name: Reload systemd after the expiry check was removed
+  ansible.builtin.systemd:
+    scope: user
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: /run/user/1000
+  when: claude_login_expiry_removed is changed

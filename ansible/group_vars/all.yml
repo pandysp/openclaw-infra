@@ -195,6 +195,23 @@ openclaw_agents:
     deliver_type: "dm"
     deliver_channel: "telegram"
 
+# Derived, do not set: the is_default agent owns the channel default accounts and
+# receives the owner alerts. A fleet without one gets neither.
+_openclaw_has_owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | list | length > 0 }}"
+
+# The agent that owns background work (agents.defaults.systemAgent.agentId). OpenClaw
+# needs one in a multi-agent fleet: `openclaw message send` and other ambient
+# operations stop without it, and a chat no binding matches is routed to it.
+# Separate from is_default, which only decides the channel default accounts and
+# the owner alerts; a fleet may have no is_default agent at all.
+openclaw_system_agent: "main"
+
+# Agents to delete from the server. An agent on the server that is neither in
+# openclaw_agents nor listed here stops the run, so a missing openclaw.yml can
+# never delete agents. Deleting stops the agent's Obsidian and git sync first,
+# then moves its workspace, state and transcripts to the server's Trash.
+openclaw_retired_agents: []
+
 # Legacy cron job names (removed during migration to per-agent jobs)
 openclaw_legacy_cron_names:
   - "Morning Digest"

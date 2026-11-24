@@ -92,6 +92,122 @@
       changed_when: false
       check_mode: false
 
+# --- Retired agents: on the server but no longer in openclaw_agents ---
+# `agents delete` moves the workspace to Trash. A running Obsidian daemon would
+# sync every vanished file into the cloud vault and from there to every device,
+# so the agent's sync services stop first. The system agent is written before the
+# delete because deleting the current one clears it (2026-11-24, agent main).
+- name: Find retired agents
+  ansible.builtin.set_fact:
+    _openclaw_retired_agents: >-
+      {{ existing_agents.stdout | from_json | map(attribute='id')
+         | reject('in', openclaw_agents | map(attribute='id') | list) | list }}
+
+# A run without the personal openclaw.yml falls back to all.yml's single `main`
+# and would delete every other agent. Only agents named for removal go.
+- name: Refuse to delete agents not named in openclaw_retired_agents
+  ansible.builtin.assert:
+    that: _unnamed | length == 0
+    fail_msg: >-
+      These agents are on the server but not in openclaw_agents: {{ _unnamed | join(', ') }}.
+      Nothing was changed. Add them back to openclaw_agents (is the personal
+      group_vars/openclaw.yml missing?), or list them in openclaw_retired_agents
+      to delete them.
+  vars:
+    _unnamed: "{{ _openclaw_retired_agents | reject('in', openclaw_retired_agents) | list }}"
+
+- name: Stop the sync services of retired agents
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    for UNIT in obsidian-headless-{{ item }}.service workspace-git-sync-{{ item }}.timer workspace-git-sync-{{ item }}.service; do
+        LOAD=$(systemctl --user show --property=LoadState --value "$UNIT")
+        if [ "$LOAD" = not-found ]; then continue; fi
+        if [ "$LOAD" != loaded ]; then echo "ERROR: $UNIT has load state '$LOAD'" >&2; exit 1; fi
+        ACTIVE=$(systemctl --user is-active "$UNIT" || true)
+        ENABLED=$(systemctl --user is-enabled "$UNIT" || true)
+        if [ "$ENABLED" = enabled ] || [ "$ACTIVE" = active ] || [ "$ACTIVE" = activating ]; then
+            {% if ansible_check_mode %}
+            echo "UPDATED: would stop and disable $UNIT"
+            continue
+            {% else %}
+            systemctl --user stop "$UNIT"
+            if [ "$ENABLED" = enabled ]; then systemctl --user disable "$UNIT"; fi
+            echo "UPDATED: stopped and disabled $UNIT"
+            {% endif %}
+        fi
+        ACTIVE=$(systemctl --user is-active "$UNIT" || true)
+        case "$ACTIVE" in
+            inactive|failed) ;;
+            *) echo "ERROR: $UNIT is still $ACTIVE; refusing to delete agent {{ item }}" >&2; exit 1 ;;
+        esac
+    done
+  args:
+    executable: /bin/bash
+  loop: "{{ _openclaw_retired_agents }}"
+  register: retired_units
+  changed_when: "'UPDATED' in retired_units.stdout"
+  check_mode: false
+
+- name: Set the system agent
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    CURRENT=$(openclaw config get agents.defaults.systemAgent.agentId 2>&1 | sed -E '/^\[[A-Za-z][^]]*\]/d') || {
+        if echo "$CURRENT" | grep -qE '^Config path is valid but unset:'; then
+            CURRENT=""
+        else
+            echo "ERROR: could not read agents.defaults.systemAgent.agentId" >&2
+            exit 1
+        fi
+    }
+    if [ "$CURRENT" = {{ openclaw_system_agent | quote }} ]; then
+        echo "OK"
+    else
+        {% if not ansible_check_mode %}
+        openclaw config set agents.defaults.systemAgent.agentId {{ openclaw_system_agent | quote }}
+        {% endif %}
+        echo "UPDATED: system agent ${CURRENT:-(none)} → {{ openclaw_system_agent }}"
+    fi
+  args:
+    executable: /bin/bash
+  register: system_agent_result
+  changed_when: "'UPDATED' in system_agent_result.stdout"
+  check_mode: false
+
+- name: Delete retired agents
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR=/run/user/1000
+    {% if ansible_check_mode %}
+    echo "UPDATED: would delete agent {{ item }} (its workspace moves to Trash)"
+    {% else %}
+    RAW=$(openclaw agents delete {{ item | quote }} --force --json)
+    RESULT=$(printf '%s\n' "$RAW" | sed -E '/^\[[A-Za-z][^]]*\]/d')
+    if ! jq -e '.purgeFailed != true and ((.failed // []) | length == 0)' >/dev/null <<< "$RESULT"; then
+        echo "ERROR: agent {{ item }} left files or session data behind:" >&2
+        printf '%s\n' "$RESULT" >&2
+        exit 1
+    fi
+    echo "UPDATED: deleted agent {{ item }}"
+    printf '%s\n' "$RESULT"
+    {% endif %}
+  args:
+    executable: /bin/bash
+  loop: "{{ _openclaw_retired_agents }}"
+  register: retired_delete
+  changed_when: "'UPDATED' in retired_delete.stdout"
+  check_mode: false
+
+- name: Show retired agent and system agent changes
+  ansible.builtin.debug:
+    msg: >-
+      {{ (retired_units.results | map(attribute='stdout_lines') | flatten)
+         + system_agent_result.stdout_lines
+         + (retired_delete.results | map(attribute='stdout_lines') | flatten)
+         | select('match', 'UPDATED') | list }}
+  when: retired_units is changed or system_agent_result is changed or retired_delete is changed
+
 - name: Refresh agent list for config targeting
   ansible.builtin.shell: |
     set -euo pipefail
@@ -194,7 +310,9 @@
     executable: /bin/bash
   vars:
     _default_agent: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
-  when: _default_agent.sandbox_mode is defined
+  when:
+    - _openclaw_has_owner
+    - _default_agent.sandbox_mode is defined
   register: default_sandbox_result
   changed_when: "'UPDATED' in (default_sandbox_result.stdout | default(''))"
   notify: restart openclaw-gateway
