@@ -50,7 +50,7 @@
       ansible.builtin.assert:
         that: >-
           (telegram_bot_token | default('') | length > 0) or
-          (_openclaw_discord | bool) or
+          (discord_bot_token | default('') | length > 0) or
           (openclaw_agents | selectattr('deliver_channel', 'defined')
             | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0)
         fail_msg: >-
@@ -423,7 +423,7 @@
         openclaw_agents | selectattr('deliver_channel', 'defined')
           | selectattr('deliver_channel', 'equalto', 'whatsapp') | list | length > 0
     # discord after whatsapp — configures Discord channel (bot token, guild allowlist).
-    - { role: discord, tags: [discord], when: _openclaw_discord | bool }
+    - { role: discord, tags: [discord], when: discord_bot_token is defined and discord_bot_token | length > 0 }
     # obsidian-headless syncs workspaces to Obsidian Sync cloud for phone access.
     - role: obsidian-headless
       tags: [obsidian-headless]
@@ -457,7 +457,7 @@
                 value: "{{ xai_api_key | default('') }}"
                 hash_name: "xai-api-key"
               - path: ["channels", "discord", "token"]
-                value: "{{ discord_bot_token | default('') if _openclaw_discord | bool else '' }}"
+                value: "{{ discord_bot_token | default('') }}"
                 hash_name: "discord-bot-token"
           no_log: true
           changed_when: false

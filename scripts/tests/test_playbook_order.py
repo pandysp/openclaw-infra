@@ -28,7 +28,7 @@ def load_yaml(*paths):
 def derived_vars():
     """all.yml's derived variables that role tasks read, as the real expressions."""
     all_vars, = load_yaml(ROOT / 'ansible/group_vars/all.yml')
-    return {name: all_vars[name] for name in ('_openclaw_has_owner', 'openclaw_discord_enabled', '_openclaw_discord')}
+    return {'_openclaw_has_owner': all_vars['_openclaw_has_owner']}
 
 
 class PlaybookOrderTest(unittest.TestCase):
@@ -169,7 +169,7 @@ class PlaybookOrderTest(unittest.TestCase):
         check = next((t for t in provision['pre_tasks'] if t.get('name') == 'Require at least one chat channel'), None)
         self.assertIsNotNone(check, 'provisioning must stop when no chat channel is configured')
         self.assertIn('always', check['tags'])
-        for channel in ('telegram_bot_token', '_openclaw_discord', "'whatsapp'"):
+        for channel in ('telegram_bot_token', 'discord_bot_token', "'whatsapp'"):
             self.assertIn(channel, check['ansible.builtin.assert']['that'])
 
     def test_a_failed_workspace_sync_alerts_the_owner(self):

@@ -206,12 +206,6 @@ _openclaw_has_owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', t
 # the owner alerts; a fleet may have no is_default agent at all.
 openclaw_system_agent: "main"
 
-# Discord runs only with a bot token (Pulumi discordBotToken) and this switch on. Switching
-# it off removes channels.discord, its token included, and the plugin allowance, while the
-# token may still be in Pulumi; revoke and remove it after that provision.
-openclaw_discord_enabled: true
-_openclaw_discord: "{{ openclaw_discord_enabled | bool and discord_bot_token | default('') | length > 0 }}"
-
 # Agents to delete from the server. An agent on the server that is neither in
 # openclaw_agents nor listed here stops the run, so a missing openclaw.yml can
 # never delete agents. Deleting stops the agent's Obsidian and git sync first,

@@ -119,11 +119,11 @@
 {% else %}
 {%   set _ = unset.append('channels.whatsapp') %}
 {% endif %}
-{% if _openclaw_discord | bool %}
+{% if discord_bot_token | default('') | length > 0 %}
 {%   set _ = plugin_allow.append('discord') %}
 {% else %}
-{#   Off or without a token, the channel would keep its old token and guild list and
-     keep answering, routed to the system agent. Remove it with the plugin. #}
+{#   Without a token the channel would keep its old token and guild list and keep
+     answering, routed to the system agent. Remove it with the plugin. #}
 {%   set _ = unset.extend(['channels.discord', 'tools.elevated.allowFrom.discord']) %}
 {% endif %}
 {% set _ = settings.update({'plugins.allow': plugin_allow, 'tools.sandbox.tools.allow': tool_allow}) %}
@@ -139,7 +139,7 @@
 {% if whatsapp_elevated | length > 0 %}
 {%   set _ = settings.update({'tools.elevated.allowFrom.whatsapp': whatsapp_elevated}) %}
 {% endif %}
-{% if _openclaw_discord | bool and discord_user_id | default('') | length > 0 %}
+{% if discord_bot_token | default('') | length > 0 and discord_user_id | default('') | length > 0 %}
 {%   set _ = settings.update({'tools.elevated.allowFrom.discord': [discord_user_id]}) %}
 {% endif %}
 {{ {'set': settings, 'unset': unset} | to_json }}

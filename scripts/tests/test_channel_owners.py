@@ -43,7 +43,6 @@ class ChannelOwnerTest(unittest.TestCase):
     def test_unconfigured_channels_get_no_owner(self):
         self.assertEqual(self.owned(), ['telegram'])
         self.assertEqual(self.owned(openclaw_whatsapp_used=True, discord_bot_token=''), ['telegram', 'whatsapp'])
-        self.assertEqual(self.owned(discord_bot_token='fixture', openclaw_discord_enabled=False), ['telegram'])
 
     def test_without_a_default_agent_no_account_gets_an_owner(self):
         # 2026-11-24: main was removed and tl must not inherit Andy's default accounts;
