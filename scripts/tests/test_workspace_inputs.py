@@ -76,6 +76,18 @@ class WorkspaceInputTests(unittest.TestCase):
             'henning': 'git@github-workspace-henning:pandysp/openclaw-workspace-henning.git',
             'cama': 'git@github-workspace-cama:pandysp/openclaw-workspace-cama.git'})
 
+    def test_the_failure_alert_is_wired_only_while_an_owner_exists(self):
+        # 2026-11-24: with no is_default agent the alert unit is removed, so no sync
+        # unit may still name it.
+        url = 'git@github.com:pandysp/openclaw-workspace-henning.git'
+        for agents, expected in (({'main': 'git@github.com:pandysp/openclaw-workspace.git', 'henning': url},
+                                  'OnFailure=workspace-sync-failed@henning.service'), ({'henning': url}, None)):
+            with self.subTest(agents=sorted(agents)):
+                result, units = self.run_play(agents)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                on_failure = re.findall(r'^OnFailure=.*$', units['henning'], re.M)
+                self.assertEqual(on_failure, [expected] if expected else [])
+
     def test_another_agents_alias_or_host_is_rejected(self):
         for url in ('git@github-workspace-main:pandysp/openclaw-workspace-henning.git',
                     'git@gitlab.com:pandysp/openclaw-workspace-henning.git',

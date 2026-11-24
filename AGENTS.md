@@ -126,7 +126,7 @@ openclaw status              # Session health
 
 - `STAGING_PRIVATE_REPOSITORY` names a dedicated private fixture (`pandysp/openclaw-staging-vault`: one README, no notes, no secrets) readable by the staging PAT. Real notes never enter staging. Direct MCP checks are read-only; inference disables gateway and native Claude tools; write tests belong in the staging workspace repositories. One exception, the smoke test's shell check: for a single turn with all OpenClaw tools denied, the launcher gives Claude only its Bash tool. The fixed, harmless prompt is what keeps that turn safe (it could still use the Git proxy or the internet). Workspace backups pause for the window; an extra launch or a changed workspace is detected afterwards and fails the run, the backups stay paused and teardown destroys the server. Public reads do not prove private access.
 - Staging agents are permanently read-only: `openclaw_tools_allow` limits every session (heartbeats included) to the two `*_get_file_contents` MCP reads, `tools.alsoAllow` is cleared, and because that allowlist does not reach Claude's own tools, `openclaw_claude_cli_extra_args` makes the container launcher add `--tools ""` (OpenClaw already passes `--strict-mcp-config`) so no native tool can write private content into the publicly backed-up staging workspaces. The smoke test verifies this policy before any MCP read. Apart from the smoke test's one-turn shell check above.
-- Obsidian Sync is out of Phoenix scope (decided 2026-09-25). The role picks the cloud vault by agent ID (`<agent>-workspace`), so a staging run would attach the public staging backup to the real vault; staging therefore never runs it and receives no Obsidian credentials. Check it read-only on production instead: `systemctl --user status obsidian-headless-main`, `ob sync-status --path ~/.openclaw/workspace`.
+- Obsidian Sync is out of Phoenix scope (decided 2026-09-25). The role picks the cloud vault by agent ID (`<agent>-workspace`), so a staging run would attach the public staging backup to the real vault; staging therefore never runs it and receives no Obsidian credentials. Check it read-only on production instead: `systemctl --user status obsidian-headless-<agent>`, `ob sync-status --path ~/.openclaw/workspace-<agent>`.
 - Phoenix runs `scripts/test-workspace-isolation.sh` on the staging VPS: a controlled Git hook in the public staging workspace proves the sync unit executes hooks as UID 1000 with no capabilities, no host config or Docker socket, and no route to the credential proxy (an unrestricted control container proves the proxy is reachable), then confirms the push by anonymous readback and removes its fixture.
 - The staging server joins the tailnet as `tag:openclaw-staging` with a key minted per run by the CI OAuth client (`TS_OAUTH_CLIENT_ID`/`TS_OAUTH_SECRET`, tag `tag:ci`): single use, ephemeral, pre-authorized, one hour. No stored auth key exists to expire.
 - The tailnet policy (Tailscale admin console, not this repo) makes `tag:ci` the owner of `tag:openclaw-staging` and isolates that tag both ways: it has **no source rights** (a one-hour agent host with real credentials must not reach your devices, production or other servers), and only `tag:ci` may reach it (SSH as `ubuntu`), so it never even sees your devices; there is no owner SSH into a running Phoenix server. `tag:ci` itself reaches only `tag:server` and `tag:openclaw-staging`, never personal devices or the untagged production server. Policy tests pin all of this, and `Resolve staging host` fails if the staging server sees any peer other than a CI runner. `tag:server` stays the other project's tag.
@@ -352,10 +352,10 @@ A per-agent hourly systemd timer (`workspace-git-sync-<agent-id>`) runs Git in a
 ### Verify Workspace Sync
 
 ```bash
-# Requires SSH (systemd timer management). Replace `main` with the agent ID.
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.timer'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-main.service'
-ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-main.service -n 20 --no-pager'
+# Requires SSH (systemd timer management). Replace <agent> with the agent ID.
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-<agent>.timer'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-<agent>.service'
+ssh ubuntu@openclaw-vps.<tailnet>.ts.net 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-<agent>.service -n 20 --no-pager'
 ```
 
 Do not run host-side Git inside an agent workspace: the agent can write `.git/config` and hooks, so even `git log` on the host executes agent-controlled code outside the sandbox. Inspect history on GitHub or in a fresh clone instead.
@@ -392,11 +392,11 @@ cd ..
 Check the provider, not just gateway health. These calls do not create a chat:
 
 ```bash
-openclaw gateway call webSearch.status --params '{"agentId":"main"}' --json
-openclaw gateway call webSearch.test --params '{"agentId":"main","providerId":"exa","query":"OpenClaw documentation"}' --json
+openclaw gateway call webSearch.status --params '{"agentId":"<agent>"}' --json
+openclaw gateway call webSearch.test --params '{"agentId":"<agent>","providerId":"exa","query":"OpenClaw documentation"}' --json
 ```
 
-Select a configured agent explicitly (`main` above); multi-agent deployments
+Select a configured agent explicitly (`<agent>` above); multi-agent deployments
 otherwise reject the test because model authentication has no single owner.
 A provider test proves Exa works, not that an agent completed a search turn.
 Firecrawl applies to OpenClaw's `web_fetch`; Claude's native WebFetch is not
@@ -460,7 +460,7 @@ ob login   # locally, creates ~/.obsidian-headless/auth_token
 pulumi config set obsidianAuthToken --secret && pulumi config set obsidianVaultPassword --secret
 # Enable in openclaw.yml: obsidian_headless_enabled: true, obsidian_headless_agents: [main]
 ./scripts/provision.sh --tags obsidian-headless
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-main'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status obsidian-headless-<agent>'
 ```
 
 **Read [docs/INTEGRATIONS.md#obsidian-headless-sync](./docs/INTEGRATIONS.md#obsidian-headless-sync) in full when:** first-time Obsidian setup or diagnosing token expiry.
@@ -579,10 +579,10 @@ Each agent searches its own notes and private chats with OpenClaw's built-in mem
 
 ```bash
 # Check the provider, model and a live embedding call (on the VPS)
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory status --agent main --deep'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory status --agent <agent> --deep'
 
 # Rebuild one agent's index
-ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory index --agent main --force'
+ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw memory index --agent <agent> --force'
 
 # Last copy run: counts and any unreadable files
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u openclaw-memory-sources -n 30 --no-pager'
