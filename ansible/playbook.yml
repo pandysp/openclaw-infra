@@ -75,9 +75,14 @@
         that:
           - openclaw_agents | length > 0
           - (openclaw_agents | map(attribute='id') | list | unique | length) == (openclaw_agents | length)
-          - openclaw_agents | selectattr('is_default', 'defined') | selectattr('is_default', 'equalto', true) | list | length == 1
+          - openclaw_agents | selectattr('is_default', 'defined') | selectattr('is_default', 'equalto', true) | list | length <= 1
+          - openclaw_system_agent in (openclaw_agents | map(attribute='id') | list)
+          - (openclaw_retired_agents | type_debug) == 'list'
+          - openclaw_retired_agents | intersect(openclaw_agents | map(attribute='id') | list) | length == 0
         fail_msg: >-
-          openclaw_agents must contain unique IDs and exactly one is_default=true agent.
+          openclaw_agents must contain unique IDs and at most one is_default=true agent,
+          openclaw_system_agent must name one of them, and openclaw_retired_agents
+          must be a list that names none of them.
       tags: [always]
 
     - name: Validate scheduled automation agent fields

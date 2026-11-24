@@ -1,6 +1,8 @@
 [Unit]
 Description=Refresh Markdown copies of workspace files for OpenClaw memory search
+{% if _openclaw_has_owner %}
 OnFailure=openclaw-memory-sources-failed.service
+{% endif %}
 
 [Service]
 Type=oneshot

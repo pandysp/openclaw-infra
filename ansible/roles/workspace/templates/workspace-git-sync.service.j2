@@ -1,6 +1,8 @@
 [Unit]
 Description=Sync OpenClaw workspace ({{ item.agent_id }}) to git
+{% if _openclaw_has_owner %}
 OnFailure=workspace-sync-failed@{{ item.agent_id }}.service
+{% endif %}
 
 [Service]
 Type=oneshot

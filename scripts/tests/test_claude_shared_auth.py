@@ -14,6 +14,8 @@ import tempfile
 import time
 import unittest
 
+from test_playbook_order import derived_vars
+
 ROOT = Path(__file__).resolve().parents[2]
 TASKS = ROOT / 'ansible/roles/openclaw/tasks/claude-cli-auth.yml'
 FIRST = 'Create the shared Claude login folder'
@@ -22,6 +24,7 @@ EXPIRES = '2027-11-03'
 EXPIRES_MS = 1825200000000  # 2027-11-03T00:00:00Z
 CHECK = ROOT / 'ansible/roles/openclaw/files/claude-login-expiry.py'
 EXPORT = 'export CLAUDE_SECURESTORAGE_CONFIG_DIR=/home/ubuntu/.claude/shared/auth'
+OWNER = [{'id': 'main', 'is_default': True, 'deliver_channel': 'telegram', 'deliver_to': '12345'}]
 
 
 class SharedLoginTest(unittest.TestCase):
@@ -36,7 +39,7 @@ class SharedLoginTest(unittest.TestCase):
         names = [task['name'] for task in tasks]
         cls.tasks = tasks[names.index(FIRST):]
 
-    def run_tasks(self, home, logged_in=True):
+    def run_tasks(self, home, logged_in=True, agents=OWNER):
         bin_dir = home / '.npm-global/bin'
         bin_dir.mkdir(parents=True, exist_ok=True)
         claude = bin_dir / 'claude'
@@ -59,9 +62,8 @@ class SharedLoginTest(unittest.TestCase):
         play.write_text(json.dumps([{
             'hosts': 'localhost', 'connection': 'local', 'gather_facts': True,
             'vars': {'claude_setup_token': TOKEN, 'claude_setup_token_expires': EXPIRES,
-                     'claude_login_warn_days': 21,
-                     'openclaw_agents': [{'id': 'main', 'is_default': True,
-                                          'deliver_channel': 'telegram', 'deliver_to': '12345'}]},
+                     'claude_login_warn_days': 21, **derived_vars(),
+                     'openclaw_agents': agents},
             'tasks': tasks,
             'handlers': [{'name': 'restart openclaw-gateway', 'ansible.builtin.debug': {'msg': 'RESTART-HANDLER'}}]}]))
         env = {**os.environ, 'ANSIBLE_NOCOLOR': '1', 'ANSIBLE_LOCAL_TEMP': str(home / 'local'),
@@ -123,6 +125,20 @@ class SharedLoginTest(unittest.TestCase):
         self.assertNotIn('refreshTokenExpiresAt', oauth)
         self.assertIn('RESTART-HANDLER', result.stdout)
         self.assert_converged(home)
+
+    def test_without_an_owner_the_expiry_check_is_stopped_and_removed(self):
+        # 2026-11-24: main, the is_default agent, was removed; its alerts must stop,
+        # not keep messaging a target nobody owns.
+        home = self.home()
+        self.assertEqual(self.run_tasks(home).returncode, 0)
+        files = [home / '.config/systemd/user/claude-login-expiry.timer',
+                 home / '.config/systemd/user/claude-login-expiry.service',
+                 home / '.local/bin/claude-login-expiry']
+        self.assertTrue(all(path.exists() for path in files))
+        result = self.run_tasks(home, agents=[{'id': 'tl', 'is_default': False,
+                                               'deliver_channel': 'telegram', 'deliver_to': '-100'}])
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        self.assertEqual([path for path in files if path.exists()], [])
 
     def test_unreadable_login_fails_the_run(self):
         result = self.run_tasks(self.home(), logged_in=False)

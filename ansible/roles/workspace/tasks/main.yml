@@ -85,6 +85,7 @@
         - { path: /home/ubuntu/.local/share/workspace-sync-build, mode: "0755" }
 
     # A failed sync otherwise goes unnoticed (main's sync failed hourly for 39 hours).
+    # The owner is the is_default agent; without one there is no alert.
     - name: Install the owner alert for failed workspace syncs
       ansible.builtin.template:
         src: workspace-sync-failed@.service.j2
@@ -92,6 +93,13 @@
         mode: "0644"
       vars:
         _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+      when: _openclaw_has_owner
+
+    - name: Remove the owner alert for failed workspace syncs when there is no owner
+      ansible.builtin.file:
+        path: /home/ubuntu/.config/systemd/user/workspace-sync-failed@.service
+        state: absent
+      when: not _openclaw_has_owner
 
     - name: Install deploy keys
       ansible.builtin.copy:

@@ -70,7 +70,7 @@ Use `./scripts/provision.sh --tags <tag>` to run specific roles:
 | `ufw` | ufw | Firewall rule changes |
 | `openclaw` | openclaw | Reinstall the OpenClaw binary; version bumps need a full provision ([Update OpenClaw](#update-openclaw)) |
 | `config` | config | Change model, sandbox mode, tool allowlist, elevated tools, auth settings |
-| `agents` | agents | Add/remove non-default agents, update Telegram bindings, per-agent MCP tool deny rules (sole writer) |
+| `agents` | agents | Add agents, delete agents listed in `openclaw_retired_agents`, set the system agent, per-agent MCP tool deny rules (sole writer). Run removals as a full provision ([Removing an Agent](#removing-an-agent)) |
 | `telegram` | telegram | Update cron prompts or Telegram channel config |
 | `whatsapp` | whatsapp | Configure WhatsApp channel for agents using `deliver_channel: whatsapp` |
 | `discord` | discord | Configure Discord channel (bot token, guild allowlist) |
@@ -447,6 +447,8 @@ pulumi config set discordBotToken --secret && pulumi config set discordGuildId "
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels status'
 ```
 
+To remove Discord, `pulumi config rm discordBotToken` and run a full provision: the config role removes `channels.discord` and drops the plugin from the allowlist. Without that, a left-over channel keeps answering, routed to the system agent.
+
 **Read [docs/INTEGRATIONS.md#discord-integration](./docs/INTEGRATIONS.md#discord-integration) in full when:** first-time Discord setup (bot creation, required intents, invite scopes) or troubleshooting Discord connection.
 
 ## Obsidian Headless Sync (Optional)
@@ -500,6 +502,18 @@ even while its agent is enabled.
 3. Run `./scripts/provision.sh`
 
 MCP servers, workspaces, deny rules, and token mappings are generated automatically. Cron jobs remain manual (personal config — add to `openclaw.yml`).
+
+### Default Agent, System Agent and Owner
+
+- **`is_default: true`** (at most one agent, optional): that agent owns each channel's default account and is the **owner** who receives the alerts for a failed workspace sync, failed memory copies and the Claude login's end. With no default agent, no account binding and no alert is installed, and existing alerts are removed.
+- **`openclaw_system_agent`** (required, all.yml default `main`): written to `agents.defaults.systemAgent.agentId`. OpenClaw needs it in a multi-agent fleet for background work and `openclaw message send`, and routes every chat that no binding matches to it. The allowlists decide which chats are admitted at all.
+
+### Removing an Agent
+
+1. Remove the agent and its cron jobs from `openclaw.yml` (and from `obsidian_headless_agents` and `mac.agents`), and add its ID to `openclaw_retired_agents`. If it was the system agent, point `openclaw_system_agent` at another agent.
+2. Run the **full** `./scripts/provision.sh`. The agents role stops and disables the agent's `obsidian-headless-<id>` and `workspace-git-sync-<id>` units, sets the system agent, then runs `openclaw agents delete <id> --force`, which moves the workspace, agent state and transcripts to the server's Trash. A refused or partial delete fails the run. The telegram role then rewrites bindings and allowlists; until it runs, the retired agent's chats fall to the system agent, so do not stop at `--tags agents`.
+
+An agent on the server that is in neither `openclaw_agents` nor `openclaw_retired_agents` stops the run before anything changes: a run without the personal `openclaw.yml` falls back to all.yml's single `main` and would otherwise delete every other agent. Not removed: the agent's unit files (disabled), Playwright container and network, GitHub token file, memory-source copies and deploy key file, and Mac daemons (`deploy-mac-daemons.sh` neither installs nor removes daemons of agents outside `openclaw_agents`).
 
 ### Role Ordering
 

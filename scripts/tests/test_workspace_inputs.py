@@ -16,6 +16,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_playbook_order import derived_vars
+
 ROOT = Path(__file__).resolve().parents[2]
 DERIVE = 'Auto-generate workspaces from agents'
 VALIDATE = 'Validate workspace service inputs'
@@ -46,8 +48,8 @@ class WorkspaceInputTests(unittest.TestCase):
     def run_play(self, urls):
         with tempfile.TemporaryDirectory(prefix='workspace-inputs-') as tmp:
             root = Path(tmp)
-            variables = {'openclaw_agents': [{'id': agent} for agent in urls], '_openclaw_workspaces': [],
-                         'render_dir': tmp,
+            variables = {'openclaw_agents': [{'id': agent, 'is_default': agent == 'main'} for agent in urls], '_openclaw_workspaces': [],
+                         'render_dir': tmp, **derived_vars(),
                          **{('workspace_repo_url' if agent == 'main' else f'workspace_{agent}_repo_url'): url
                             for agent, url in urls.items()}}
             play = [{'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,

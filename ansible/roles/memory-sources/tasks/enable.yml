@@ -59,17 +59,29 @@
     mode: "0755"
   vars:
     _owner: "{{ openclaw_agents | selectattr('is_default', 'equalto', true) | first }}"
+  when: _openclaw_has_owner
 
-# A failed run (a container error, or a file that newly cannot be read) alerts the owner.
+# A failed run (a container error, or a file that newly cannot be read) alerts the
+# owner, the is_default agent. Without one there is no alert.
 - name: Install memory search copy units
   ansible.builtin.template:
     src: "{{ item }}.j2"
     dest: "/home/ubuntu/.config/systemd/user/{{ item }}"
     mode: "0644"
+  loop: >-
+    {{ ['openclaw-memory-sources.service', 'openclaw-memory-sources.timer']
+       + (['openclaw-memory-sources-failed.service']
+          if _openclaw_has_owner else []) }}
+  notify: reload memory-sources units
+
+- name: Remove the owner alert for failed copy runs when there is no owner
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
   loop:
-    - openclaw-memory-sources.service
-    - openclaw-memory-sources.timer
-    - openclaw-memory-sources-failed.service
+    - /home/ubuntu/.config/systemd/user/openclaw-memory-sources-failed.service
+    - /home/ubuntu/.local/bin/openclaw-memory-sources-alert
+  when: not _openclaw_has_owner
   notify: reload memory-sources units
 
 - name: Load changed memory search copy units
