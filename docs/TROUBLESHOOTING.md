@@ -269,16 +269,16 @@ Always use the Tailscale DNS name (`https://openclaw-vps.<tailnet>.ts.net/`), no
 ssh ubuntu@openclaw-vps.<tailnet>.ts.net
 
 # Check timer
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.timer
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-<agent>.timer
 
 # Check last sync result
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-main.service
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status workspace-git-sync-<agent>.service
 
 # Trigger a manual sync
-XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-main.service
+XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start workspace-git-sync-<agent>.service
 
 # Check git log
-XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-main.service -n 50 --no-pager
+XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u workspace-git-sync-<agent>.service -n 50 --no-pager
 ```
 
 Replace `main` with the agent ID when checking another workspace. Do not run host-side Git against agent-writable repositories; the service runs Git in its isolated container.
