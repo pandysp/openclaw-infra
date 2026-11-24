@@ -406,17 +406,20 @@ class ConfigRoleConvergenceTests(unittest.TestCase):
         live = {'channels': {'discord': {'enabled': True, 'groupPolicy': 'allowlist', 'token': 'fixture-old-token',
                                          'guilds': {'1': {'users': ['2'], 'requireMention': False}}}},
                 'tools': {'elevated': {'allowFrom': {'discord': ['2']}}}}
-        for token in ('', 'fixture-discord-token'):
-            with self.subTest(discord=bool(token)), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
+        # Switched off while the token is still in Pulumi: it is revoked only afterwards.
+        for token, enabled in (('', True), ('fixture-discord-token', False), ('fixture-discord-token', True)):
+            kept = bool(token) and enabled
+            with self.subTest(token=bool(token), enabled=enabled), tempfile.TemporaryDirectory(prefix='config-role-') as tmp:
                 root = Path(tmp)
                 (root / 'store.json').write_text(json.dumps(live))
                 result = self.run_task([self.temp_files, self.configure], root,
-                                       {'discord_bot_token': token, 'discord_user_id': '2'})
+                                       {'discord_bot_token': token, 'discord_user_id': '2',
+                                        'openclaw_discord_enabled': enabled})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 store = json.loads((root / 'store.json').read_text())
-                self.assertEqual('discord' in store.get('channels', {}), bool(token))
-                self.assertEqual('discord' in store['tools']['elevated'].get('allowFrom', {}), bool(token))
-                self.assertEqual('discord' in store['plugins']['allow'], bool(token))
+                self.assertEqual('discord' in store.get('channels', {}), kept)
+                self.assertEqual('discord' in store['tools']['elevated'].get('allowFrom', {}), kept)
+                self.assertEqual('discord' in store['plugins']['allow'], kept)
 
     def test_elevenlabs_plugin_is_allowed_only_with_an_elevenlabs_key(self):
         for key in ('', 'fixture-elevenlabs-key'):

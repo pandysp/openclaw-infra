@@ -447,7 +447,7 @@ pulumi config set discordBotToken --secret && pulumi config set discordGuildId "
 ssh ubuntu@openclaw-vps 'XDG_RUNTIME_DIR=/run/user/1000 openclaw channels status'
 ```
 
-To remove Discord, `pulumi config rm discordBotToken` and run a full provision: the config role removes `channels.discord` and drops the plugin from the allowlist. Without that, a left-over channel keeps answering, routed to the system agent.
+To remove Discord, set `openclaw_discord_enabled: false` in `openclaw.yml` and run a full provision: the config role removes `channels.discord` (its token included) and drops the plugin from the allowlist, and no binding or token injection is written. Only then revoke the bot token in the Discord developer portal and `pulumi config rm discordBotToken` (and `discordGuildId`, `discordUserId`). An empty token has the same effect. Without either, a left-over channel keeps answering, routed to the system agent.
 
 **Read [docs/INTEGRATIONS.md#discord-integration](./docs/INTEGRATIONS.md#discord-integration) in full when:** first-time Discord setup (bot creation, required intents, invite scopes) or troubleshooting Discord connection.
 

@@ -28,7 +28,7 @@
     _default_agent_id: "{{ (openclaw_agents | selectattr('is_default', 'equalto', true) | first).id }}"
   loop: >-
     {{ ['telegram'] + (['whatsapp'] if openclaw_whatsapp_used | bool else [])
-       + (['discord'] if discord_bot_token is defined and discord_bot_token | length > 0 else []) }}
+       + (['discord'] if _openclaw_discord | bool else []) }}
   when: _openclaw_has_owner
 
 - block:

@@ -111,7 +111,7 @@
 #   pulumi config set discordGuildId "YOUR_GUILD_ID"
 #   pulumi config set discordUserId "YOUR_USER_ID"
 #   ./scripts/provision.sh --tags discord
-# To remove Discord: AGENTS.md, "Discord Integration".
+# To remove Discord: openclaw_discord_enabled: false, then AGENTS.md, "Discord Integration".
 # To deliver cron/heartbeat via Discord instead of Telegram, override main agent:
 #   - id: "main"
 #     is_default: true
